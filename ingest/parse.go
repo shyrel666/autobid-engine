@@ -63,6 +63,17 @@ type Parsed struct {
 	Tables    []*Table
 	Text      string
 	Meta      ParseMeta
+	// TOC 是 DOCX 目录域（TOC）缓存结果中的条目；TOCFields 是文档中 TOC 域的个数（有域但没有条目表示目录未生成）。
+	TOC       []TOCEntry
+	TOCFields int
+}
+
+// TOCEntry 是一条目录条目：Title 为制表符前的文字，Page 为最后一个制表符后的页码文字。
+type TOCEntry struct {
+	Level int    `json:"level"`
+	Title string `json:"title"`
+	Page  string `json:"page"`
+	Text  string `json:"text"`
 }
 
 // Sections 把解析结果切分为段落。

@@ -1313,10 +1313,13 @@ CREATE TRIGGER trg_proposal_outline_compliance_stale AFTER UPDATE OF status ON p
     EXECUTE FUNCTION compliance_outline_superseded();
 
 -- ---------------------------------------------------------------------------
--- Phase 6B：标书图表（标书正文域）。
+-- Phase 6B：标书图表（标书正文域）与锁定版本导出（导出附件域）。
 --   proposal_charts   绑定到具体章节修订（section_rev_id + rev_no，复合外键）。章节产生新的有效修订后，绑定旧修订的图表
 --                     在查询时判定为过期（rev_no <> 章节 current_rev_no），导出快照只收录与锁定修订一致的图表。
--- 不写入 assets 或 explorations/findings。
+--   export_templates  上传的 .docx 套版模板（文件存导出目录，按租户隔离；内置默认模板不入库）。
+--   export_jobs       导出任务：门禁通过时在同一事务内固化 rev_snapshot（section_id -> rev_no）、图表快照与偏离表快照，
+--                     快照列不可修改；lease_token 是围栏令牌，过期的 running 任务被回收重试，旧执行者的完成写入一律被拒绝。
+-- 均不写入 assets 或 explorations/findings。
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS proposal_charts (
     id             BIGSERIAL PRIMARY KEY,
@@ -1358,3 +1361,90 @@ CREATE INDEX IF NOT EXISTS idx_proposal_charts_task ON proposal_charts(tenant_id
 DROP TRIGGER IF EXISTS trg_proposal_charts_upd ON proposal_charts;
 CREATE TRIGGER trg_proposal_charts_upd BEFORE UPDATE ON proposal_charts
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS export_templates (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   TEXT NOT NULL DEFAULT 'default',
+    name        TEXT NOT NULL CHECK (name <> ''),
+    file_name   TEXT NOT NULL DEFAULT '',
+    path        TEXT NOT NULL CHECK (path <> ''),
+    sha256      TEXT NOT NULL,
+    size        BIGINT NOT NULL CHECK (size > 0),
+    meta        JSONB NOT NULL DEFAULT '{}',
+    created_by  TEXT NOT NULL DEFAULT '',
+    updated_by  TEXT NOT NULL DEFAULT '',
+    approved_by TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_export_templates_hash UNIQUE (tenant_id, sha256),
+    CONSTRAINT uq_export_templates_tenant_id UNIQUE (tenant_id, id)
+);
+DROP TRIGGER IF EXISTS trg_export_templates_upd ON export_templates;
+CREATE TRIGGER trg_export_templates_upd BEFORE UPDATE ON export_templates
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS export_jobs (
+    id              BIGSERIAL PRIMARY KEY,
+    tenant_id       TEXT NOT NULL DEFAULT 'default',
+    task_id         BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    outline_id      BIGINT NOT NULL,
+    outline_version INT NOT NULL CHECK (outline_version > 0),
+    format          TEXT NOT NULL CHECK (format IN ('docx','pdf')),
+    status          TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','succeeded','failed')),
+    template_id     BIGINT,
+    template_key    TEXT NOT NULL DEFAULT 'default',
+    template_hash   TEXT NOT NULL DEFAULT '',
+    rev_snapshot    JSONB NOT NULL,
+    chart_snapshot  JSONB NOT NULL DEFAULT '[]',
+    matrix_snapshot JSONB NOT NULL DEFAULT '[]',
+    doc_snapshot    JSONB NOT NULL DEFAULT '{}',
+    gate            JSONB NOT NULL DEFAULT '{}',
+    artifact_path   TEXT NOT NULL DEFAULT '',
+    artifact_name   TEXT NOT NULL DEFAULT '',
+    artifact_hash   TEXT NOT NULL DEFAULT '',
+    artifact_size   BIGINT NOT NULL DEFAULT 0 CHECK (artifact_size >= 0),
+    toc_refreshed   BOOLEAN NOT NULL DEFAULT false,
+    warnings        JSONB NOT NULL DEFAULT '[]',
+    error           TEXT NOT NULL DEFAULT '',
+    attempts        INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    max_attempts    INT NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
+    lease_owner     TEXT NOT NULL DEFAULT '',
+    lease_token     BIGINT NOT NULL DEFAULT 0,
+    lease_until     TIMESTAMPTZ,
+    started_at      TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ,
+    created_by      TEXT NOT NULL DEFAULT '',
+    updated_by      TEXT NOT NULL DEFAULT '',
+    approved_by     TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_export_jobs_task_id UNIQUE (tenant_id, task_id, id),
+    CONSTRAINT ck_export_jobs_artifact CHECK (status <> 'succeeded' OR (artifact_path <> '' AND artifact_hash <> '')),
+    CONSTRAINT ck_export_jobs_lease CHECK (status <> 'running' OR lease_until IS NOT NULL),
+    CONSTRAINT fk_export_jobs_outline FOREIGN KEY (tenant_id, task_id, outline_id)
+        REFERENCES proposal_outlines(tenant_id, task_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_export_jobs_template FOREIGN KEY (tenant_id, template_id)
+        REFERENCES export_templates(tenant_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_export_jobs_task ON export_jobs(tenant_id, task_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_export_jobs_queue ON export_jobs(status, lease_until) WHERE status IN ('queued','running');
+DROP TRIGGER IF EXISTS trg_export_jobs_upd ON export_jobs;
+CREATE TRIGGER trg_export_jobs_upd BEFORE UPDATE ON export_jobs
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 导出快照不可篡改：导出后再编辑章节、重绘图表或重新核验矩阵都不影响已创建任务的快照。
+CREATE OR REPLACE FUNCTION export_jobs_immutable() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.tenant_id, NEW.task_id, NEW.outline_id, NEW.outline_version, NEW.format, NEW.template_id, NEW.template_key, NEW.template_hash,
+        NEW.rev_snapshot, NEW.chart_snapshot, NEW.matrix_snapshot, NEW.doc_snapshot, NEW.gate, NEW.created_by, NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.tenant_id, OLD.task_id, OLD.outline_id, OLD.outline_version, OLD.format, OLD.template_id, OLD.template_key, OLD.template_hash,
+        OLD.rev_snapshot, OLD.chart_snapshot, OLD.matrix_snapshot, OLD.doc_snapshot, OLD.gate, OLD.created_by, OLD.created_at) THEN
+        RAISE EXCEPTION 'export job % snapshot is immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_export_jobs_immutable ON export_jobs;
+CREATE TRIGGER trg_export_jobs_immutable BEFORE UPDATE ON export_jobs
+    FOR EACH ROW EXECUTE FUNCTION export_jobs_immutable();

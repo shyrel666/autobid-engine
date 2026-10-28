@@ -1,6 +1,6 @@
 package export
 
-// Service 组合导出目录与 mmdc 渲染器：图表生成、渲染与读取。
+// Service 组合导出目录、mmdc 渲染器与 LibreOffice；图表生成与渲染在本文件，导出执行见 exec.go / runner.go。
 
 import (
 	"bytes"
@@ -8,43 +8,66 @@ import (
 	"encoding/json"
 	"image"
 	"log/slog"
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/autobid/autobid-engine/db"
 )
 
-// Service 是图表的服务端依赖。Renderer 为 nil 表示 mmdc 不可用（原因见 RendererReason）。
+// Service 是图表与导出的服务端依赖。Renderer / Office 为 nil 表示对应外部依赖不可用（原因见 *Reason）。
 type Service struct {
 	DB             *db.DB
 	Store          *Store
 	Renderer       Renderer
 	RendererReason string
+	Office         *Office
+	OfficeReason   string
 }
 
 // Status 是外部依赖可用性（门禁明细与前端展示）。
 type Status struct {
+	Office         bool   `json:"office"`
+	OfficeVersion  string `json:"office_version,omitempty"`
+	OfficePath     string `json:"office_path,omitempty"`
+	OfficeReason   string `json:"office_reason,omitempty"`
 	Renderer       bool   `json:"renderer"`
 	RendererName   string `json:"renderer_name,omitempty"`
 	RendererReason string `json:"renderer_reason,omitempty"`
 }
 
 func (s *Service) Status() Status {
-	st := Status{RendererReason: s.RendererReason}
+	st := Status{OfficeReason: s.OfficeReason, RendererReason: s.RendererReason}
+	if s.Office != nil {
+		st.Office, st.OfficeVersion, st.OfficePath, st.OfficeReason = true, s.Office.Version, s.Office.Soffice, ""
+	}
 	if s.Renderer != nil {
 		st.Renderer, st.RendererName, st.RendererReason = true, s.Renderer.Name(), ""
 	}
 	return st
 }
 
-// NewServiceFromEnv 探测 mmdc（不可用时记录原因，不报错）。
+// NewServiceFromEnv 探测 LibreOffice 与 mmdc（不可用时记录原因，不报错）。
 func NewServiceFromEnv(pg *db.DB, dir string, logger *slog.Logger) *Service {
 	s := &Service{DB: pg, Store: &Store{Root: dir}}
+	if o, err := DetectOffice(OfficeOptions{Concurrency: envInt("AUTOBID_SOFFICE_CONCURRENCY", 2),
+		Timeout: time.Duration(envInt("AUTOBID_SOFFICE_TIMEOUT_SECONDS", 180)) * time.Second}); err != nil {
+		s.OfficeReason = err.Error()
+	} else {
+		s.Office = o
+	}
 	if m, err := DetectMMDC(); err != nil {
 		s.RendererReason = err.Error()
 	} else {
 		s.Renderer = m
 	}
 	if logger != nil {
+		if s.Office != nil {
+			logger.Info("LibreOffice available for export", "soffice", s.Office.Soffice, "version", s.Office.Version, "python", s.Office.Python)
+		} else {
+			logger.Warn("LibreOffice unavailable: PDF export jobs will fail and DOCX TOC page numbers will not be refreshed", "reason", s.OfficeReason)
+		}
 		if s.Renderer != nil {
 			logger.Info("mermaid-cli available for charts", "renderer", s.Renderer.Name())
 		} else {
@@ -52,6 +75,13 @@ func NewServiceFromEnv(pg *db.DB, dir string, logger *slog.Logger) *Service {
 		}
 	}
 	return s
+}
+
+func envInt(key string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key))); err == nil && v > 0 {
+		return v
+	}
+	return def
 }
 
 // ---------------------------------------------------------------------------

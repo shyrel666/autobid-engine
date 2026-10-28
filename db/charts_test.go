@@ -50,11 +50,24 @@ func TestChartsBindRevisionAndGoStale(t *testing.T) {
 	if c, err = f.d.SetChartRender(ctx, DefaultTenant, f.task.ID, c.ID, "h1", ChartRender{Status: ChartUnrendered, Error: "mmdc 不可用"}, "w"); err != nil || c.RenderStatus != ChartUnrendered {
 		t.Fatalf("SetChartRender = %+v %v", c, err)
 	}
-	// 章节新修订：图表过期（查询时判定）；重新绑定后恢复。
+	pre, err := f.d.ExportPreflight(ctx, DefaultTenant, f.task.ID)
+	if err != nil || !pre.Readiness.Ready || len(pre.Warnings) != 1 || pre.Warnings[0].Kind != WarnChartUnrendered || pre.Charts != 1 {
+		t.Fatalf("preflight = %+v %v", pre, err)
+	}
+	jobs, _, err := f.export(t, ExportDOCX)
+	if err != nil || len(jobs[0].Charts) != 1 || jobs[0].Charts[0].RenderStatus != ChartUnrendered {
+		t.Fatalf("chart snapshot = %+v %v", jobs, err)
+	}
+
+	// 章节新修订：图表过期（查询时判定），不再进入导出快照；重新绑定后恢复。
 	f.save(t, sid, 1, f.ver, RevHumanEdit, "本项目采用云边协同总体架构，总体架构合理、技术路线先进，我方承诺总工期 90 天，按计划交付。", 0)
 	c, _ = f.d.GetChart(ctx, DefaultTenant, f.task.ID, c.ID)
 	if !c.Stale || c.CurrentRevNo != 2 || !strings.Contains(c.StaleReason, "rev 2") {
 		t.Fatalf("chart after revision = %+v", c)
+	}
+	pre, _ = f.d.ExportPreflight(ctx, DefaultTenant, f.task.ID)
+	if pre.Charts != 0 || len(pre.Warnings) != 1 || pre.Warnings[0].Kind != WarnChartStale {
+		t.Fatalf("preflight with stale chart = %+v", pre.Warnings)
 	}
 	if c, err = f.d.RebindChart(ctx, DefaultTenant, f.task.ID, c.ID, "w"); err != nil || c.Stale || c.RevNo != 2 {
 		t.Fatalf("rebind = %+v %v", c, err)

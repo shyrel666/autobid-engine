@@ -51,6 +51,7 @@ type pdfImage struct {
 	data []byte
 	mime string
 	area float64
+	box  [4]float64 // 页面坐标中的外接矩形 x0, y0, x1, y1（单位正方形经 CTM 变换）
 }
 
 type pdfPageOut struct {
@@ -104,7 +105,13 @@ func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err
 			textPages++
 			continue
 		}
-		if len(out.images) == 0 {
+		var decodable []pdfImage
+		for _, im := range out.images {
+			if im.data != nil {
+				decodable = append(decodable, im)
+			}
+		}
+		if len(decodable) == 0 {
 			if out.unsupportedIm > 0 {
 				p.Meta.Warnings = append(p.Meta.Warnings, fmt.Sprintf("第 %d 页为扫描图像，但图像编码（CCITT/JBIG2 等）暂不支持送 OCR", out.num))
 			}
@@ -115,8 +122,8 @@ func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err
 			p.Meta.Warnings = append(p.Meta.Warnings, fmt.Sprintf("第 %d 页无文本层（疑似扫描件），未配置 OCR", out.num))
 			continue
 		}
-		img := out.images[0]
-		for _, im := range out.images[1:] {
+		img := decodable[0]
+		for _, im := range decodable[1:] {
 			if im.area > img.area {
 				img = im
 			}
@@ -439,19 +446,22 @@ func (in *pdfInterp) doXObject(res pdfDict, name pdfName, gs pdfGState, out *pdf
 		in.run(data, fr, sub, out, depth+1)
 	case pdfName("Image"):
 		area := math.Abs(gs.ctm[0]*gs.ctm[3] - gs.ctm[1]*gs.ctm[2])
+		box := imageBox(gs.ctm)
 		data, filter, err := in.d.decodeStreamUntilImage(st)
 		switch {
 		case errors.Is(err, errImageFilter) && (filter == "DCTDecode" || filter == "DCT"):
-			out.images = append(out.images, pdfImage{data: data, mime: "image/jpeg", area: area})
+			out.images = append(out.images, pdfImage{data: data, mime: "image/jpeg", area: area, box: box})
 		case errors.Is(err, errImageFilter) && filter == "JPXDecode":
-			out.images = append(out.images, pdfImage{data: data, mime: "image/jp2", area: area})
+			out.images = append(out.images, pdfImage{data: data, mime: "image/jp2", area: area, box: box})
 		case err == nil:
 			if png := in.rawImagePNG(st, data); png != nil {
-				out.images = append(out.images, pdfImage{data: png, mime: "image/png", area: area})
+				out.images = append(out.images, pdfImage{data: png, mime: "image/png", area: area, box: box})
 			} else {
+				out.images = append(out.images, pdfImage{area: area, box: box})
 				out.unsupportedIm++
 			}
 		default:
+			out.images = append(out.images, pdfImage{area: area, box: box})
 			out.unsupportedIm++
 		}
 	}

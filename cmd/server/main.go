@@ -8,7 +8,9 @@
 //	AUTOBID_WORKERS        每任务 Worker 槽数，默认 3
 //	AUTOBID_RECORD_BODIES  为 1/true 时录制 LLM 原始请求/响应正文（不含请求头）
 //	AUTOBID_WEB_DIR        前端工作台构建产物目录，默认 web/dist；目录内无 index.html 时不托管
-//	AUTOBID_EXPORT_DIR     图表渲染产物目录，默认 data/exports（按租户 / 任务隔离，已加入 .gitignore）
+//	AUTOBID_EXPORT_DIR     图表渲染产物、上传模板与导出成稿目录，默认 data/exports（按租户 / 任务隔离，已加入 .gitignore）
+//	AUTOBID_SOFFICE_PATH   LibreOffice soffice 路径；未设置时依次查 PATH 与 F:\LibreOffice\program\soffice.exe
+//	AUTOBID_SOFFICE_CONCURRENCY / AUTOBID_SOFFICE_TIMEOUT_SECONDS  LibreOffice 并发上限（默认 2）与单次超时（默认 180）
 //	AUTOBID_MMDC_PATH      mermaid-cli（mmdc）路径；未设置时查 PATH，均不可用时图表为 unrendered
 //	模型密钥按各 Profile 的 api_key_env 从环境变量读取。
 package main
@@ -44,6 +46,13 @@ func main() {
 		logger.Error("server exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+func envInt(key string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key))); err == nil && v > 0 {
+		return v
+	}
+	return def
 }
 
 func envBool(key string) bool {
@@ -104,7 +113,7 @@ func run(logger *slog.Logger) error {
 	if exportDir == "" {
 		exportDir = "data/exports"
 	}
-	// 启动时探测 mermaid-cli 并记日志；不可用时图表为 unrendered。
+	// 启动时探测 LibreOffice 与 mermaid-cli 并记日志；不可用时 PDF 任务明确失败、DOCX 标注目录页码未刷新。
 	exporter := export.NewServiceFromEnv(pg, exportDir, logger)
 	svc := server.NewLLMService(pg, server.LLMServiceConfig{
 		MultiRetrieval: envBool("AUTOBID_RETRIEVAL_MULTI_AGENT"),
@@ -159,8 +168,16 @@ func run(logger *slog.Logger) error {
 	// 4. HTTP/SSE 控制面。WriteTimeout 为 0：SSE 是长连接，单个处理器自行控制生命周期。
 	// 扫描件 OCR：AUTOBID_OCR_URL（HTTP 服务）→ PATH 中的 tesseract → 不可用（扫描件上传返回 422）。
 	ocr := ingest.DefaultOCR()
+	// 导出执行者：先回收租约已过期的 running 任务（上次进程中断），再轮询 queued 任务。
+	runner := &export.Runner{Service: exporter, Owner: fmt.Sprintf("%s/%d", hostname, os.Getpid()), Logger: logger,
+		Workers: envInt("AUTOBID_EXPORT_WORKERS", 2),
+		Lease:   time.Duration(envInt("AUTOBID_SOFFICE_TIMEOUT_SECONDS", 180)+60) * time.Second,
+		OnChange: func(j *db.ExportJob, summary string) {
+			hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "export", Kind: "state", At: time.Now(), Summary: summary})
+		}}
+	runner.Start(engineCtx)
 	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
-		Retrieval: retriever, Export: exporter})
+		Retrieval: retriever, Export: exporter, ExportRunner: runner})
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),

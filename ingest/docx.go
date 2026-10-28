@@ -33,6 +33,25 @@ type docxParser struct {
 	headings    int
 	title       string
 	warnings    []string
+	fields      []docxField // 复杂域栈（fldChar begin / separate / end，可嵌套、可跨段落）
+	inInstr     bool
+	toc         []TOCEntry
+	tocFields   int
+}
+
+type docxField struct {
+	instr  string
+	result bool // 已过 separate，后续文字是域的缓存结果
+}
+
+// inTOCResult 报告当前位置是否位于 TOC 域的缓存结果中。
+func (p *docxParser) inTOCResult() bool {
+	for _, f := range p.fields {
+		if f.result && strings.HasPrefix(strings.ToUpper(strings.TrimSpace(f.instr)), "TOC") {
+			return true
+		}
+	}
+	return false
 }
 
 func attr(se xml.StartElement, local string) (string, bool) {
@@ -101,7 +120,8 @@ func parseDOCX(data []byte) (*Parsed, error) {
 	} else {
 		p.warnings = append(p.warnings, "文档未记录 Word 渲染分页位置，页码仅按显式分页符/分节符估算")
 	}
-	return &Parsed{Title: p.title, Lines: p.lines, Meta: ParseMeta{Parser: parser, Headings: p.headings, Pages: p.page, Warnings: p.warnings}}, nil
+	return &Parsed{Title: p.title, Lines: p.lines, TOC: p.toc, TOCFields: p.tocFields,
+		Meta: ParseMeta{Parser: parser, Headings: p.headings, Pages: p.page, Warnings: p.warnings}}, nil
 }
 
 func (p *docxParser) parseBody(dec *xml.Decoder) error {
@@ -140,6 +160,7 @@ func (p *docxParser) parseBody(dec *xml.Decoder) error {
 
 type docxPara struct {
 	text      string
+	tocText   string // 位于 TOC 域缓存结果中的文字（制表符保留为 	）
 	style     string
 	outline   int
 	pageStart int
@@ -149,7 +170,7 @@ type docxPara struct {
 // parsePara 读取一个 w:p（已消费其开始标签）直到对应结束标签；文本框中的嵌套段落文本并入本段。
 func (p *docxParser) parsePara(dec *xml.Decoder) (docxPara, error) {
 	para := docxPara{outline: -1, pageStart: p.page}
-	var b strings.Builder
+	var b, tb strings.Builder
 	depth, inText, inPPr := 0, false, false
 	// brk 记录一次分页：段首分页时整段落在新页，段中分页时段落跨页。
 	brk := func() {
@@ -214,7 +235,28 @@ func (p *docxParser) parsePara(dec *xml.Decoder) (docxPara, error) {
 			case "tab":
 				if !inPPr {
 					b.WriteString(" ")
+					if p.inTOCResult() {
+						tb.WriteString("	")
+					}
 				}
+			case "fldChar":
+				switch v, _ := attr(t, "fldCharType"); v {
+				case "begin":
+					p.fields = append(p.fields, docxField{})
+				case "separate":
+					if n := len(p.fields); n > 0 {
+						p.fields[n-1].result = true
+						if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(p.fields[n-1].instr)), "TOC") {
+							p.tocFields++
+						}
+					}
+				case "end":
+					if n := len(p.fields); n > 0 {
+						p.fields = p.fields[:n-1]
+					}
+				}
+			case "instrText":
+				p.inInstr = true
 			case "noBreakHyphen":
 				b.WriteString("-")
 			case "t":
@@ -223,16 +265,27 @@ func (p *docxParser) parsePara(dec *xml.Decoder) (docxPara, error) {
 		case xml.CharData:
 			if inText {
 				b.Write(t)
+				if p.inTOCResult() {
+					tb.Write(t)
+				}
+			}
+			if p.inInstr {
+				if n := len(p.fields); n > 0 {
+					p.fields[n-1].instr += string(t)
+				}
 			}
 		case xml.EndElement:
 			switch t.Name.Local {
 			case "t":
 				inText = false
+			case "instrText":
+				p.inInstr = false
 			case "pPr":
 				inPPr = false
 			case "p":
 				if depth == 0 {
 					para.text = b.String()
+					para.tocText = tb.String()
 					para.pageEnd = p.page
 					if sectionBreak && !p.useRendered {
 						p.page++
@@ -278,6 +331,21 @@ func (p *docxParser) headingLevel(para docxPara) int {
 	return 0
 }
 
+var reTOCStyle = regexp.MustCompile(`(?i)^(?:toc|目录)\s*(\d)$`)
+
+// tocLevel 由目录段落样式（toc N / 目录 N）得到条目级别，未知时为 0。
+func (p *docxParser) tocLevel(id string) int {
+	name := id
+	if st, ok := p.styles[id]; ok && st.name != "" {
+		name = st.name
+	}
+	if m := reTOCStyle.FindStringSubmatch(strings.TrimSpace(name)); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	return 0
+}
+
 func (p *docxParser) isTitleStyle(id string) bool {
 	if strings.EqualFold(id, "Title") {
 		return true
@@ -287,6 +355,16 @@ func (p *docxParser) isTitleStyle(id string) bool {
 }
 
 func (p *docxParser) emitPara(para docxPara) {
+	if t := strings.TrimSpace(para.tocText); t != "" {
+		e := TOCEntry{Level: p.tocLevel(para.style), Text: strings.Join(strings.Fields(strings.ReplaceAll(t, "	", " ")), " ")}
+		if i := strings.LastIndex(t, "	"); i >= 0 {
+			e.Title = strings.Join(strings.Fields(t[:i]), " ")
+			e.Page = strings.TrimSpace(t[i+1:])
+		} else {
+			e.Title = e.Text
+		}
+		p.toc = append(p.toc, e)
+	}
 	level := p.headingLevel(para)
 	text := strings.TrimRight(para.text, " \t\n")
 	if p.isTitleStyle(para.style) && p.title == "" && strings.TrimSpace(text) != "" {

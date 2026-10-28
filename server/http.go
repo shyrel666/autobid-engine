@@ -42,8 +42,10 @@ type APIConfig struct {
 	SectionWriter SectionWriter
 	// ComplianceVerifier 是响应矩阵核验器；为 nil 时使用确定性 compliance.RuleVerifier（LLM 核验未接入生产）。
 	ComplianceVerifier compliance.Verifier
-	// Export 是图表渲染服务（导出目录、mmdc）；为 nil 时以系统临时目录下的 autobid-exports 探测创建。
+	// Export 是图表渲染与导出服务（导出目录、mmdc、LibreOffice）；为 nil 时以系统临时目录下的 autobid-exports 探测创建。
 	Export *export.Service
+	// ExportRunner 非空时创建导出任务后立即唤醒执行者（否则等待其轮询）。
+	ExportRunner *export.Runner
 }
 
 type API struct {
@@ -135,8 +137,9 @@ func (a *API) Handler() http.Handler {
 
 	// 双层响应核验矩阵、全文一致性核验与导出就绪度（Phase 6A）
 	a.registerComplianceRoutes(mux)
-	// Phase 6B：章节图表（server/charts.go）
+	// Phase 6B：章节图表（server/charts.go）与锁定版本导出（server/export.go）
 	a.registerChartRoutes(mux)
+	a.registerExportRoutes(mux)
 
 	// LLM 配置与配额链
 	mux.HandleFunc("GET /api/llm/profiles", a.listProfiles)

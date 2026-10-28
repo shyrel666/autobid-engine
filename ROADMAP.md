@@ -45,7 +45,7 @@
    - 职责：存储任务推演过程（`intent`/`fact`/`digest`）及核验审查结论（`findings`）。
    - Phase 4.2 ~ 4.4 规划：检索运行、子任务状态、证据引用集合与核验结果归此域；证据通过来源标识引用域 A/D 原文及企业资信，不把检索摘要当成新的知识原文。
 3. **域 C — 投标要求清单、标书正文与响应矩阵域（Phase 5 ~ 6 新增表）**
-   - 职责：存储经复核的完整投标要求清单（`requirement_items`）、技术标大纲（`proposal_outlines` / `proposal_sections`）、章节多版本正文（`section_revisions`）与点对点应答矩阵（`compliance_matrix`）。
+   - 职责：存储经复核的完整投标要求清单（`requirement_items`）、技术标大纲（`proposal_outlines` / `proposal_sections`）、章节多版本正文（`section_revisions`）、点对点应答矩阵（`compliance_matrix`）与全文一致性核验结论（`consistency_runs` / `consistency_findings`，Phase 6A；与域 B 的 `findings` 隔离）。
 4. **域 D — 企业知识库与成稿附件域（Phase 4 & Phase 6 新增表）**
    - 职责：存储企业历史方案/产品知识库（`knowledge_documents` / `knowledge_chunks`）、标书图表产物（`proposal_charts`）及排版导出记录（`export_jobs`）。
    - Phase 4.2 规划：知识库的版本化 embedding、索引构建记录及派生检索上下文归此域；LLM 生成的上下文必须与可引用原文分离。
@@ -66,7 +66,7 @@
 | **#3** | **根据项目需求编写技术方案章节** | 无章节写作工作流，无前置章节依赖门禁 | **Phase 5** | 后端写作派发入口与在途写回双端强制校验大纲已批准版本（`based_on_outline_version`）；实现章节依赖调度门禁；新增 `section_write_draft` / `section_read_context` 工具 |
 | **#5** | **管理章节草稿、修订、人工确认** | 无正文版本表、无并发写冲突保护与审批失效规则 | **Phase 5** | 新增 `section_revisions` 表；实现 `base_rev_no` + `based_on_outline_version` 联合并发校验、人工/AI 写冲突保护、绑定具体版本的章节批准及重写自动撤销批准规则 |
 | **#7** | **生成架构图、进度表及其他标书图表** | 未实现图表生成与章节挂载 | **Phase 6** | 新增 `proposal_charts` 表与 `chart_generate` 工具（生成 Mermaid/SVG 架构图、甘特图、组织架构图、设备选型表），绑定至具体章节版本 |
-| **#6** | **检查全文前后一致性与逐条响应** | 无点对点应答表，无跨章节一致性核验与失效重检机制 | **Phase 6** | 新增 `compliance_matrix` 表与 `fulltext_consistency_check` 工具；分别验收“大纲章节映射率”与“正文实质响应率”，条款或正文变更自动触发重检 |
+| **#6** | **检查全文前后一致性与逐条响应** | ✅ 工程实现（Phase 6A）：双层响应矩阵、规则一致性核验、DB 层失效与导出就绪度；规则召回/准确率未经人工标注评测 | **Phase 6A** | 新增 `compliance_matrix` 表与 `fulltext_consistency_check` 工具；分别验收“大纲章节映射率”与“正文实质响应率”，条款或正文变更自动触发重检 |
 | **#8** | **套模板、生成目录页码、导出 DOCX/PDF** | `GET /api/tasks/{id}/report` 仅返回审查 JSON | **Phase 6** | 新增 `export/` 模块与 `export_jobs` 表：锁定已批准章节版本快照，套用 `.docx` 模板，渲染图表、多级标题、TOC 目录域与页码，导出 `.docx`/`.pdf` |
 | **#10** | **多企业、多用户和角色权限** | 仅支持 `server/http.go` 可选单一 Bearer Token | **Phase 7** | 新增 `tenants`、`users`、`project_members` 表；启用全表 `tenant_id` 强制隔离与四大角色（投标经理/技术撰写人/商务专员/审核专家）RBAC 鉴权 |
 
@@ -268,7 +268,7 @@
 ---
 
 ### Phase 6：标书图表生成、双层覆盖率与一致性核验、锁定版本套版导出 — 对应缺口 #6、#7、#8
-- **状态**：`[ ] 待实施`
+- **状态**：`[ ] 部分交付（6A 完成，6B 待实施）`；6A = 双层响应核验矩阵与全文一致性核验（缺口 #6），6B = 图表生成与 DOCX/PDF 套版导出（缺口 #7、#8）。
 - **交付模块**：
   1. **标书专用图表生成（缺口 #7）**：
      - 新增 `proposal_charts` 表与 `chart_generate` 工具，支持生成技术架构图（Mermaid/SVG）、实施甘特图、组织架构图及设备选型表，关联至具体 `section_rev_id`。
@@ -291,6 +291,16 @@
     1. 验证导出的 `.docx` 与 `.pdf` 均能成功生成、文件结构合法且可正常打开解析；
     2. 验证渲染后的 `.pdf` / `.docx` 中自动目录（TOC）页码已实际刷新，且目录条目页码与各章节标题在成稿中的真实落位页码完全一致；
     3. 验证宽表格、系统架构图、甘特图及《点对点应答及偏离表》在页面版芯内自适应排版，无横向截断、元素重叠遮挡或异常空白分页。
+- **6A 交付记录（2026-10-28，工程验收）**：
+  - [x] **Schema（域 C，`db/schema.sql` 幂等 DDL）**：`compliance_matrix`（`requirement_item_id` × `section_id` 唯一、绑定 `section_rev_id` + `rev_no` + 段落锚点 `anchor`、响应摘要、`deviation`、`verify_status IN ('pending','verified','stale','failed')`、失败 / 失效原因、`evidence_ids`、规则检查明细 `checks`、`verifier IN ('rule','llm')`）；复合外键挂到 `proposal_section_requirements`（第一层映射不另建）、`section_revisions(tenant_id, section_id, id, rev_no)`、大纲与要求。`consistency_runs`（`section_id -> rev_no` 输入快照、矛盾 / 漏项计数）与 `consistency_findings`（矛盾双方章节、`rev_no`、取值与原文片段，漏项要求，`open/resolved/stale`、处理方式 / 说明 / 处理人，`version` 乐观锁），与 `explorations/findings` 推演域隔离。所有新表含 `tenant_id` 与 `created_by` / `updated_by` / `approved_by`。
+  - [x] **DB 层失效触发器**：要求实质变更 → 该要求矩阵行与漏项结论 stale；章节 `current_rev_no` 变化（候选稿不触发）→ 该章节矩阵行、快照不再一致的一致性运行及包含该章节的结论 stale；`retrieval_evidence` → stale → 引用它的矩阵行 stale；大纲 superseded → 该大纲下矩阵行、运行与结论 stale。另有写入守卫：修订号已非当前、大纲非 approved 或证据已失效的矩阵写入一律强制落为 stale。
+  - [x] **第一层（大纲映射）**：基于当前批准大纲的 `proposal_section_requirements` 计算覆盖率与未映射要求，按 ★ / ▲ / 评分项 / 必答项 / 格式项拆分（`db.ComplianceCoverage`）。
+  - [x] **第二层（正文实质响应）**：可替换 `compliance.Verifier` 接口；确定性 `RuleVerifier`（去掉章节名 / 要求标题 / 原文复述 / 「详见」类引用后的实质内容、关键词二元组覆盖、条款号、响应句式、数值门槛与单位归一、否定 / 负偏离表述、Phase 4.3 证据状态）；可选 `LLMVerifier` 只能把规则通过的结论降级（测试用替身 Judge）。核验在一个事务内按「批准大纲 FOR SHARE → 章节 FOR SHARE」加锁（与 `SaveSectionRevision` 同序），核验期间的写回等待提交后再由触发器置 stale。
+  - [x] **全文一致性核验 `fulltext_consistency_check`**：REPEATABLE READ 快照（同样先加锁）读取各章节有效修订；规则抽取总工期、质保期、SLA（响应 / 到场 / 修复时限、可用性）、团队人数、核心型号与数量（中文数字、天 / 日 / 周 / 月 / 年、分钟 / 小时、比较词、「7×24」排除、引述招标要求的句子跳过，3% 归一容差）；★/▲ 要求在当前修订上没有 verified 矩阵结论即记漏项。
+  - [x] **工具与 API**：`proposal-review` 技能解锁 `compliance_verify` / `fulltext_consistency_check`；`server/compliance.go` 8 个路由（矩阵核验 / 查询（状态、类型、章节过滤）/ 两层覆盖率、一致性运行 / 列表 / 结论查询 / 乐观锁处理、只读导出就绪度），由 `server/http.go` 注册；判定逻辑在 `db.ExportReadiness` / `exportReadinessTx`，供 6B 导出门禁直接复用。
+  - [x] **前端**：任务页「技术标大纲与写作」新增「④ 响应矩阵」（两层覆盖、逐行状态 / 偏离 / 锚点、stale / failed 高亮、按章节重检、规则明细）与「⑤ 一致性核验」（矛盾双方并排对照、漏项列表、带版本的处理对话框），以及只展示阻断原因的导出就绪度卡片（无导出按钮）。
+  - [x] **验证**：真实 PostgreSQL（`AUTOBID_TEST_DATABASE_URL`）上 `db/compliance_test.go` 覆盖：第一章 90 天 vs 第五章「工期 6 个月」/「180 日」矛盾与漏答 ★ 条款 100% 检出（合成样本）；只挂章节名 / 「详见附件」即使引用已核验证据也非 verified；新修订使矩阵行与一致性结论 stale 且导出就绪度给出阻断原因；证据 stale、要求变更、大纲 superseded 三条路径各一测试；核验进行中人工保存新修订，旧结论保持绑定 rev 1 并置 stale，未挂到新修订。`server/compliance_test.go` 覆盖主要路由与 400/404/409/422；`bidtools/review_integration_test.go` 覆盖工具；`compliance/` 单元测试覆盖数值解析、抽取、规则核验与 LLM 降级。`go vet ./...` 通过；`go test -race ./... -count=1`（w64devkit cgo）186 项通过（170 个顶层测试 + 16 个子测试）、0 失败、0 跳过；`cd web && npm run build` 零错误；本地服务 + 浏览器冒烟验证矩阵、一致性视图与结论处理。
+  - **未验收边界**：规则抽取与规则核验的召回率 / 准确率**未经人工标注评测**，上述「100% 检出」只针对构造的合成样本，不代表真实标书上的检出率；关键词覆盖门槛（45%）与 3% 容差为经验值。LLM 核验只有接口与测试替身，未接入生产、未在真实模型上评估。型号 / 数量抽取依赖「采用 / 选用 / 型号」等句式，产品名截取可能不准；一致性核验只比较同一指标的数值，不理解分阶段工期、不同子系统 SLA 等语境差异（需人工以「确认无误」处理）。核验器在持有章节共享锁的事务内运行，LLM 实现必须自带超时。导出就绪度只做判定，不执行导出；Phase 7 前租户仍固定为默认租户，`X-Autobid-User` 只是审计字段。
 
 ---
 

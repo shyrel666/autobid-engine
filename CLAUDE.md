@@ -16,12 +16,14 @@
   - **Phase 4 的完成边界**：上述为功能基线。默认 `HashEmbedder` 是 256 维词袋哈希，已提供 HTTP 语义 embedding 接口，但真实服务尚未部署；`ts_rank_cd` 不是 BM25。已实现 RRF/reranker 接口、版本化索引切换、持久化证据和预算/租约协调；多 Agent 默认关闭。现有引用字段与样例命中测试不能证明业务检索质量达标。
   - [x] **Phase 5**（2026-10-28 工程验收）：域 C 要求清单与大纲 / 章节状态机（对应缺口 #2、#3、#5）。`db/schema.sql` 新增 `requirement_manifests`、`requirement_items`、`proposal_outlines`、`proposal_sections`、`proposal_section_requirements`、`section_revisions` 及失效触发器；`db/requirements.go`（遍历原文分块 + 招标要素幂等提取、人工增删改、清单确认 epoch）与 `db/proposal.go`（大纲 draft→pending_approval→approved→superseded、`ClaimSectionWrite` 派发门禁、`SaveSectionRevision` 写回二次门禁、绑定版本批准 / 自动撤销 / 回滚）；`bidtools/proposal.go`（`proposal-writing` 技能解锁 `section_read_context` / `section_write_draft`）；`server/proposal.go`（`/api/tasks/{id}/requirements|outlines|sections/*`，派发异步 AI 撰写）；前端任务页「技术标大纲与写作」与 `/proposal` 入口。
   - **Phase 5 的完成边界**：状态机、门禁与证据失效联动经真实 PostgreSQL + `-race` 验证；`ccgp_2026-10-06/` 10 份真实招标文件（5 DOCX + 5 PDF）全链路无解析 / 状态机报错。要求提取是启发式规则（评分表按「分值列 / 得 N 分」识别，PDF 跨页表格存在行碎片与以类别列为标题的情况），召回与准确率未做人工标注评测，清单必须人工复核后确认。AI 派发为单次 LLM 调用，测试使用替身 Writer，未在真实模型上评估写作质量；知识库证据仍受 Phase 4.3 未验收边界约束，未核验证据只会被记为缺口。
+  - [x] **Phase 6A**（2026-10-28 工程验收）：双层响应核验矩阵与全文一致性核验（缺口 #6）。`db/schema.sql` 新增 `compliance_matrix`、`consistency_runs`、`consistency_findings` 及写入守卫与四条失效触发器；纯规则包 `compliance/`（`Verifier` 接口、`RuleVerifier`、可选 `LLMVerifier`、关键承诺抽取 `Extract` / `Compare`）；`db/compliance.go`（`VerifyComplianceMatrix`、矩阵查询、两层覆盖率）、`db/consistency.go`（`RunConsistencyCheck`、结论乐观锁处理）、`db/export_readiness.go`（`ExportReadiness` / `exportReadinessTx`，6B 导出门禁复用）；`bidtools/review.go`（`proposal-review` 技能：`compliance_verify`、`fulltext_consistency_check`）；`server/compliance.go`；前端「④ 响应矩阵」「⑤ 一致性核验」与导出就绪度卡片。
+  - **Phase 6A 的完成边界**：规则抽取 / 规则核验的召回率与准确率未经人工标注评测，验收样本是合成的；LLM 核验只有接口与测试替身，未接入生产；一致性只比较同一指标数值，不理解分阶段 / 分子系统语境；导出就绪度只判定、不导出。
 - **增强工程与待验收阶段（详见 [`ROADMAP.md`](./ROADMAP.md) 第四节）**：
   - **Phase 4.1**：真实业务评测集、可复现基线与冻结的质量/性能/成本门槛。
   - **Phase 4.2**：共享混合检索服务、语义 embedding、RRF、reranker、版本化索引与降级；按部署条件和实测选择 pgvector/HNSW。
   - **Phase 4.3**：结构化证据、原文/型号/版本/数值核验、证据失效传播与单 Agent 有界补查。
   - **Phase 4.4**：按独立证据范围派发多 Agent，补齐汇总门禁与全局预算，通过对比评测决定启用范围。
-  - **Phase 6**：标书图表生成、双层覆盖率与全文一致性核验、锁定版本集合的 DOCX/PDF 套版导出（对应缺口 #6、#7、#8）
+  - **Phase 6B**：标书图表生成、锁定版本集合的 DOCX/PDF 套版导出（对应缺口 #7、#8；导出门禁复用 `db.ExportReadiness`，偏离表读取 `compliance_matrix`）
   - **Phase 7**：多企业租户隔离与多角色权限控制 RBAC（对应缺口 #10）
 
 ---
@@ -36,15 +38,16 @@
     2. `explorations` + `exploration_nodes` + `findings`：存储任务推演过程节点与核验结论产出物；
     3. `tender_documents` + `document_chunks` + `company_credentials`：存储招标原文分块（含 `page_start`/`page_end`、`tables_json`、`bbox_meta` 与来源文件元数据）与企业资信档案；
     4. `knowledge_documents` + `knowledge_chunks`（域 D）：企业方案/产品知识库，按 `tenant_id` 隔离，`search_tsv` 为由 Go 层中文双字词元生成的 tsvector 列（PostgreSQL 内置分词不切中文，勿改为直接 `to_tsvector(content)`），`embedding` 只与同 `embedding_model` 向量比较；
-    5. 域 C（Phase 5 已建）：`requirement_manifests`（任务级清单 epoch / 确认）、`requirement_items`、`proposal_outlines`、`proposal_sections`、`proposal_section_requirements`（复合外键保证同租户同任务）、`section_revisions`（正文不可篡改触发器）。要求实质变更或原文分块变更 → 清单 epoch 递增并把 approved / pending_approval 大纲置为 superseded（Go 层随即派生 version+1 草案）；`retrieval_evidence` 变 `stale` → 引用它的修订 / 章节降级为 `stale_evidence` 并撤销批准。锁顺序统一为「大纲行 → 章节行」。后续图表与导出记录同样必须使用独立业务表，严禁混入 `assets` 表。
+    5. 域 C（Phase 5 已建）：`requirement_manifests`（任务级清单 epoch / 确认）、`requirement_items`、`proposal_outlines`、`proposal_sections`、`proposal_section_requirements`（复合外键保证同租户同任务）、`section_revisions`（正文不可篡改触发器）。要求实质变更或原文分块变更 → 清单 epoch 递增并把 approved / pending_approval 大纲置为 superseded（Go 层随即派生 version+1 草案）；`retrieval_evidence` 变 `stale` → 引用它的修订 / 章节降级为 `stale_evidence` 并撤销批准。锁顺序统一为「大纲行 → 章节行」。Phase 6A 的 `compliance_matrix`（绑定 `section_rev_id` + `rev_no` + 段落锚点，只能挂在已有要求映射上）与 `consistency_runs` / `consistency_findings`（与 `explorations/findings` 隔离）同属本域：要求变更、章节 `current_rev_no` 变化、证据 stale、大纲 superseded 由触发器置 stale，写入守卫拒绝把旧正文结论写到新修订；核验同样按「批准大纲 FOR SHARE → 章节 FOR SHARE」加锁。后续图表与导出记录同样必须使用独立业务表，严禁混入 `assets` 表。
   - **检索增强存储（已建表）**：域 D 的 `knowledge_indexes` / `knowledge_embeddings` 保存版本化索引与派生上下文；域 B 的 `retrieval_runs` / `retrieval_jobs` / `retrieval_evidence` 保存检索运行、子任务状态、证据引用及核验结果。正式要求清单与章节引用绑定仍归域 C。索引由 `knowledge_catalogs.epoch` 管理来源失效；模型切换必须重建后激活。
 - `ingest/`：`Parse` 多格式解析（`docx.go`、`pdf*.go` 自研 PDF 对象层/字体/版面表格还原、`ocr.go` 可插拔 OCR）+ 行级切分核心 `SplitLines`（纯文本 `Split` 规则不变）+ 入库 `Ingest` / `IngestKnowledge`；`ingest/ingesttest` 提供内存 `.docx` / `.pdf` 样本构造器供测试复用。
-- `bidtools/`：面向招投标业务的 Worker 常驻工具、延迟工具（Deferred Tools）与领域技能（Skills）；知识库工具 `kb_*` 经 `knowledge-reuse` 技能解锁，结果必须携带 `citation`。
+- `bidtools/`：面向招投标业务的 Worker 常驻工具、延迟工具（Deferred Tools）与领域技能（Skills）；知识库工具 `kb_*` 经 `knowledge-reuse` 技能解锁，结果必须携带 `citation`；`proposal-review` 技能解锁 `compliance_verify` / `fulltext_consistency_check`。
+- `compliance/`：Phase 6A 纯规则层（不访问数据库）：`Verifier` 接口与 `RuleVerifier` / 可选 `LLMVerifier`，数值 / 中文数字 / 单位归一，关键承诺抽取与比对；加锁、落库与失效门禁全部在 `db/`。
 - `agent/`：Planner（主编审）与 Worker（执行单元）编排（注：Digest 是推演图冷节点折叠机制，非独立常驻 Agent；Worker 的 `activityEmitter` 目前推送 `tool`、`tool_error`、`text` 最终摘要三类事件）。
 - `intercept/` & `guard/`：**工具调用级**拦截器与 Hook 适配层。
   - `Guard` 仅拦截 `PreToolUse` / `PostToolUse`，`Guard.Stop()` 恒返回不干预；
   - `intercept_pending` 受执行 Context 与 `waiter_until` 心跳约束，仅用于短时在途工具审批，**不可替代跨重启、跨天的大纲/章节持久化业务审批状态机**。
-- `server/`：REST API 路由（`server/http.go`；Phase 4 的 multipart 文档上传与 `/api/knowledge/*` 在 `server/knowledge.go`）、单任务 SSE 实时流（`GET /api/tasks/{id}/events`）与 Bearer Token 鉴权中间件；`APIConfig.OCR` / `APIConfig.Embedder` 由 `cmd/server` 以 `ingest.DefaultOCR()` / `db.DefaultEmbedder()` 注入。
+- `server/`：REST API 路由（`server/http.go`；Phase 4 的 multipart 文档上传与 `/api/knowledge/*` 在 `server/knowledge.go`；Phase 5 要求 / 大纲 / 章节在 `server/proposal.go`；Phase 6A 的 `/api/tasks/{id}/compliance/*`、`/consistency/*`、`/export-readiness` 在 `server/compliance.go`，均由 `server/http.go` 注册）、单任务 SSE 实时流（`GET /api/tasks/{id}/events`）与 Bearer Token 鉴权中间件；`APIConfig.OCR` / `APIConfig.Embedder` 由 `cmd/server` 以 `ingest.DefaultOCR()` / `db.DefaultEmbedder()` 注入。
 - `web/`：React 19 + TypeScript + Vite + Tailwind CSS v4 前端工作台（`npm run build` 产物 `web/dist` 由服务端按 `AUTOBID_WEB_DIR` 托管；开发时 `npm run dev` 代理 `/api` 到 `127.0.0.1:8080`）。
 - **检索增强模块**：`retrieval/` 已统一召回、融合、重排、原文分页、预算、缓存、降级与研究协调；`eval/retrieval/` / `cmd/retrieval-eval/` 保存评测清单、执行器和实测报告。真实运行/证据/索引/任务检索 API 在 `server/retrieval.go` 实现，详情及限制见 [eval/retrieval/README.md](eval/retrieval/README.md)。
 

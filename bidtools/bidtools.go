@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/export"
 	"github.com/autobid/autobid-engine/internal/tool"
 	"github.com/autobid/autobid-engine/retrieval"
 )
@@ -41,6 +42,7 @@ type Kit struct {
 	emb       db.Embedder
 	retrieval *retrieval.Service
 	research  *retrieval.Coordinator
+	charts    *export.Service
 }
 
 func (k *Kit) WithRetrieval(s *retrieval.Service) *Kit { k.retrieval = s; return k }
@@ -66,7 +68,8 @@ func (k *Kit) ResidentTools() []tool.CoreTool {
 // DeferredTools 返回专业延迟工具；它们只注册、不下发 Schema。
 func (k *Kit) DeferredTools() []tool.CoreTool {
 	return append([]tool.CoreTool{k.queryCredentialsTool(), k.simulateScoringTool(), k.verifyCommercialTool(),
-		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool()}, append(append(k.proposalTools(), k.reviewTools()...), k.retrievalTools()...)...)
+		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool(), k.chartGenerateTool()},
+		append(append(k.proposalTools(), k.reviewTools()...), k.retrievalTools()...)...)
 }
 
 // ---------------------------------------------------------------------------

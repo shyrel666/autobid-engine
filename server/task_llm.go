@@ -14,6 +14,7 @@ import (
 	"github.com/autobid/autobid-engine/agent"
 	"github.com/autobid/autobid-engine/bidtools"
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/export"
 	"github.com/autobid/autobid-engine/internal/llm"
 	"github.com/autobid/autobid-engine/internal/llm/anthropic"
 	"github.com/autobid/autobid-engine/internal/llm/llmhttp"
@@ -87,12 +88,14 @@ func (c RetryConfig) policy() (int, func(attempt int) time.Duration) {
 type LLMServiceConfig struct {
 	MultiRetrieval bool
 	Retrieval      *retrieval.Service
-	Factory        ProviderFactory
-	Retry          RetryConfig
-	Planner        agent.PlannerConfig // Provider / KillWork / SteerWork 由服务注入
-	Worker         agent.WorkerConfig  // Provider / Transcripts 由服务注入
-	OnActivity     func(taskID int64, a db.Activity)
-	OnLedgerErr    func(error)
+	// Charts 为 chart_generate 工具提供图表生成 / 渲染（为 nil 时工具返回未配置）。
+	Charts      *export.Service
+	Factory     ProviderFactory
+	Retry       RetryConfig
+	Planner     agent.PlannerConfig // Provider / KillWork / SteerWork 由服务注入
+	Worker      agent.WorkerConfig  // Provider / Transcripts 由服务注入
+	OnActivity  func(taskID int64, a db.Activity)
+	OnLedgerErr func(error)
 	// RecordBodies 是原始报文录制的全局开关（可随时切换，每个请求时读取）；为 nil 表示关闭。
 	// token 账本不受它影响，始终写入。
 	RecordBodies func() bool
@@ -313,7 +316,7 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 	}
 	// 招投标领域工具按任务绑定：常驻文档精读工具直接下发，专业工具经 Skill 解锁（§4.3）。
 	kit := bidtools.New(s.pg, t.ID, t.Assets, t.Store)
-	kit.WithRetrieval(s.cfg.Retrieval)
+	kit.WithRetrieval(s.cfg.Retrieval).WithCharts(s.cfg.Charts)
 	if s.cfg.Retrieval != nil {
 		kit.WithResearch(&retrieval.Coordinator{Service: s.cfg.Retrieval, Reasoner: &agent.RetrievalReasoner{Planner: b.plannerRuntime, Worker: b.workerRuntime}, MultiEnabled: s.cfg.MultiRetrieval})
 	}

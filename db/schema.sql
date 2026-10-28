@@ -1311,3 +1311,50 @@ DROP TRIGGER IF EXISTS trg_proposal_outline_compliance_stale ON proposal_outline
 CREATE TRIGGER trg_proposal_outline_compliance_stale AFTER UPDATE OF status ON proposal_outlines
     FOR EACH ROW WHEN (NEW.status = 'superseded' AND OLD.status <> 'superseded')
     EXECUTE FUNCTION compliance_outline_superseded();
+
+-- ---------------------------------------------------------------------------
+-- Phase 6B：标书图表（标书正文域）。
+--   proposal_charts   绑定到具体章节修订（section_rev_id + rev_no，复合外键）。章节产生新的有效修订后，绑定旧修订的图表
+--                     在查询时判定为过期（rev_no <> 章节 current_rev_no），导出快照只收录与锁定修订一致的图表。
+-- 不写入 assets 或 explorations/findings。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS proposal_charts (
+    id             BIGSERIAL PRIMARY KEY,
+    tenant_id      TEXT NOT NULL DEFAULT 'default',
+    task_id        BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    section_id     BIGINT NOT NULL,
+    section_rev_id BIGINT NOT NULL,
+    rev_no         INT NOT NULL CHECK (rev_no > 0),
+    chart_type     TEXT NOT NULL CHECK (chart_type IN ('architecture','gantt','org','equipment_table')),
+    title          TEXT NOT NULL CHECK (title <> ''),
+    spec           JSONB NOT NULL DEFAULT '{}',
+    source_format  TEXT NOT NULL CHECK (source_format IN ('mermaid','json')),
+    source         TEXT NOT NULL CHECK (source <> ''),
+    source_hash    TEXT NOT NULL,
+    render_status  TEXT NOT NULL DEFAULT 'pending' CHECK (render_status IN ('pending','rendered','unrendered','failed')),
+    render_format  TEXT NOT NULL DEFAULT '' CHECK (render_format IN ('','png','native')),
+    render_error   TEXT NOT NULL DEFAULT '',
+    artifact_path  TEXT NOT NULL DEFAULT '',
+    artifact_hash  TEXT NOT NULL DEFAULT '',
+    artifact_size  BIGINT NOT NULL DEFAULT 0 CHECK (artifact_size >= 0),
+    width_px       INT NOT NULL DEFAULT 0 CHECK (width_px >= 0),
+    height_px      INT NOT NULL DEFAULT 0 CHECK (height_px >= 0),
+    rendered_at    TIMESTAMPTZ,
+    created_by     TEXT NOT NULL DEFAULT '',
+    updated_by     TEXT NOT NULL DEFAULT '',
+    approved_by    TEXT NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_proposal_charts_task_id UNIQUE (tenant_id, task_id, id),
+    CONSTRAINT ck_proposal_charts_source CHECK ((chart_type = 'equipment_table') = (source_format = 'json')),
+    CONSTRAINT ck_proposal_charts_rendered CHECK (render_status <> 'rendered' OR render_format <> ''),
+    CONSTRAINT fk_proposal_charts_section FOREIGN KEY (tenant_id, task_id, section_id)
+        REFERENCES proposal_sections(tenant_id, task_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_proposal_charts_revision FOREIGN KEY (tenant_id, section_id, section_rev_id, rev_no)
+        REFERENCES section_revisions(tenant_id, section_id, id, rev_no) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_proposal_charts_section ON proposal_charts(tenant_id, section_id, id);
+CREATE INDEX IF NOT EXISTS idx_proposal_charts_task ON proposal_charts(tenant_id, task_id, id);
+DROP TRIGGER IF EXISTS trg_proposal_charts_upd ON proposal_charts;
+CREATE TRIGGER trg_proposal_charts_upd BEFORE UPDATE ON proposal_charts
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();

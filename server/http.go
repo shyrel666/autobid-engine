@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/autobid/autobid-engine/agent"
 	"github.com/autobid/autobid-engine/compliance"
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/export"
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
 	"github.com/autobid/autobid-engine/retrieval"
@@ -39,6 +42,8 @@ type APIConfig struct {
 	SectionWriter SectionWriter
 	// ComplianceVerifier 是响应矩阵核验器；为 nil 时使用确定性 compliance.RuleVerifier（LLM 核验未接入生产）。
 	ComplianceVerifier compliance.Verifier
+	// Export 是图表渲染服务（导出目录、mmdc）；为 nil 时以系统临时目录下的 autobid-exports 探测创建。
+	Export *export.Service
 }
 
 type API struct {
@@ -58,6 +63,9 @@ func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *
 	}
 	if cfg.Retrieval == nil {
 		cfg.Retrieval = retrieval.New(m.DB(), nil, nil)
+	}
+	if cfg.Export == nil {
+		cfg.Export = export.NewServiceFromEnv(m.DB(), filepath.Join(os.TempDir(), "autobid-exports"), nil)
 	}
 	return &API{runCtx: runCtx, m: m, e: e, llm: svc, ic: ic, hub: hub, pg: m.DB(), cfg: cfg}
 }
@@ -127,6 +135,8 @@ func (a *API) Handler() http.Handler {
 
 	// 双层响应核验矩阵、全文一致性核验与导出就绪度（Phase 6A）
 	a.registerComplianceRoutes(mux)
+	// Phase 6B：章节图表（server/charts.go）
+	a.registerChartRoutes(mux)
 
 	// LLM 配置与配额链
 	mux.HandleFunc("GET /api/llm/profiles", a.listProfiles)

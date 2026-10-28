@@ -8,6 +8,8 @@
 //	AUTOBID_WORKERS        每任务 Worker 槽数，默认 3
 //	AUTOBID_RECORD_BODIES  为 1/true 时录制 LLM 原始请求/响应正文（不含请求头）
 //	AUTOBID_WEB_DIR        前端工作台构建产物目录，默认 web/dist；目录内无 index.html 时不托管
+//	AUTOBID_EXPORT_DIR     图表渲染产物目录，默认 data/exports（按租户 / 任务隔离，已加入 .gitignore）
+//	AUTOBID_MMDC_PATH      mermaid-cli（mmdc）路径；未设置时查 PATH，均不可用时图表为 unrendered
 //	模型密钥按各 Profile 的 api_key_env 从环境变量读取。
 package main
 
@@ -28,6 +30,7 @@ import (
 	"time"
 
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/export"
 	"github.com/autobid/autobid-engine/guard"
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
@@ -97,9 +100,16 @@ func run(logger *slog.Logger) error {
 	hub := server.NewHub()
 	var recordBodies atomic.Bool
 	recordBodies.Store(envBool("AUTOBID_RECORD_BODIES"))
+	exportDir := os.Getenv("AUTOBID_EXPORT_DIR")
+	if exportDir == "" {
+		exportDir = "data/exports"
+	}
+	// 启动时探测 mermaid-cli 并记日志；不可用时图表为 unrendered。
+	exporter := export.NewServiceFromEnv(pg, exportDir, logger)
 	svc := server.NewLLMService(pg, server.LLMServiceConfig{
 		MultiRetrieval: envBool("AUTOBID_RETRIEVAL_MULTI_AGENT"),
 		Retrieval:      retriever,
+		Charts:         exporter,
 		OnActivity:     func(_ int64, a db.Activity) { hub.Publish(a) },
 		OnLedgerErr:    func(err error) { logger.Warn("llm ledger write failed", "err", err) },
 		RecordBodies:   recordBodies.Load,
@@ -149,7 +159,8 @@ func run(logger *slog.Logger) error {
 	// 4. HTTP/SSE 控制面。WriteTimeout 为 0：SSE 是长连接，单个处理器自行控制生命周期。
 	// 扫描件 OCR：AUTOBID_OCR_URL（HTTP 服务）→ PATH 中的 tesseract → 不可用（扫描件上传返回 422）。
 	ocr := ingest.DefaultOCR()
-	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(), Retrieval: retriever})
+	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
+		Retrieval: retriever, Export: exporter})
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),

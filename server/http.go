@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/autobid/autobid-engine/agent"
+	"github.com/autobid/autobid-engine/compliance"
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
@@ -36,6 +37,8 @@ type APIConfig struct {
 	Retrieval *retrieval.Service
 	// SectionWriter 执行章节 AI 撰写；为 nil 时使用任务 Worker 模型（无可用 Profile 时派发返回 503）。
 	SectionWriter SectionWriter
+	// ComplianceVerifier 是响应矩阵核验器；为 nil 时使用确定性 compliance.RuleVerifier（LLM 核验未接入生产）。
+	ComplianceVerifier compliance.Verifier
 }
 
 type API struct {
@@ -121,6 +124,9 @@ func (a *API) Handler() http.Handler {
 
 	// 投标要求清单、技术标大纲审批与章节写作（Phase 5）
 	a.registerProposalRoutes(mux)
+
+	// 双层响应核验矩阵、全文一致性核验与导出就绪度（Phase 6A）
+	a.registerComplianceRoutes(mux)
 
 	// LLM 配置与配额链
 	mux.HandleFunc("GET /api/llm/profiles", a.listProfiles)

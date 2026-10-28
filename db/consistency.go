@@ -300,7 +300,7 @@ func omissionsTx(ctx context.Context, q queryer, tenant string, taskID, outlineI
 	}
 	cells := map[int64][]cell{}
 	rows, err := q.QueryContext(ctx, `SELECT m.requirement_id, s.id, s.section_code, COALESCE(c.verify_status, ''),
-			COALESCE(NULLIF(c.failure_reason, ''), c.stale_reason, ''), COALESCE(c.rev_no = s.current_rev_no, false)
+			COALESCE(CASE WHEN c.verify_status = 'stale' THEN c.stale_reason ELSE c.failure_reason END, ''), COALESCE(c.rev_no = s.current_rev_no, false)
 		FROM proposal_section_requirements m
 		JOIN proposal_sections s ON s.tenant_id = m.tenant_id AND s.id = m.section_id
 		LEFT JOIN compliance_matrix c ON c.tenant_id = m.tenant_id AND c.section_id = m.section_id AND c.requirement_item_id = m.requirement_id

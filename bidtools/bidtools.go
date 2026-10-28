@@ -66,7 +66,7 @@ func (k *Kit) ResidentTools() []tool.CoreTool {
 // DeferredTools 返回专业延迟工具；它们只注册、不下发 Schema。
 func (k *Kit) DeferredTools() []tool.CoreTool {
 	return append([]tool.CoreTool{k.queryCredentialsTool(), k.simulateScoringTool(), k.verifyCommercialTool(),
-		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool()}, append(k.proposalTools(), k.retrievalTools()...)...)
+		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool()}, append(append(k.proposalTools(), k.reviewTools()...), k.retrievalTools()...)...)
 }
 
 // ---------------------------------------------------------------------------

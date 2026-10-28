@@ -270,7 +270,7 @@ func TestSkillsUnlockDeferredTools(t *testing.T) {
 		names[d.Name()] = true
 	}
 	skills := Skills()
-	if len(skills) != 5 {
+	if len(skills) != 6 {
 		t.Fatalf("skills = %d", len(skills))
 	}
 	owned := map[string]string{}
@@ -318,9 +318,9 @@ func TestSkillsUnlockDeferredTools(t *testing.T) {
 func TestResidentToolsAreReadOnly(t *testing.T) {
 	kit := New(nil, 1, nil, nil)
 	for _, tl := range append(kit.ResidentTools(), kit.DeferredTools()...) {
-		if tl.Name() == ToolSectionWriteDraft {
+		if tl.Name() == ToolSectionWriteDraft || tl.Name() == ToolComplianceVerify || tl.Name() == ToolFulltextConsistent {
 			if tl.IsReadOnly(nil) {
-				t.Fatalf("%s writes section revisions and must not be read-only", tl.Name())
+				t.Fatalf("%s writes proposal-domain records and must not be read-only", tl.Name())
 			}
 			continue
 		}

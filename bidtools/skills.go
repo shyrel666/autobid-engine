@@ -9,6 +9,7 @@ const (
 	SkillCommercialPricing  = "commercial-pricing"
 	SkillKnowledgeReuse     = "knowledge-reuse"
 	SkillProposalWriting    = "proposal-writing"
+	SkillProposalReview     = "proposal-review"
 )
 
 // Skills 返回内置招投标专业技能；每个技能解锁其所属的延迟工具（§4.3 阶段 B）。
@@ -88,6 +89,20 @@ func Skills() []tool.Skill {
    section_read_context 的返回值（派发时给了 lease_token 也一并传入）。
 6. outcome 为 stale_outline（大纲已在你写作期间被修改）或 conflict_candidate（他人已保存新版本）时，草稿只是候选稿，没有覆盖当前版本：
    不要换个版本号强行重试，重新读取上下文并报告结果，由人工决定是否采用。`,
+		},
+		{
+			Name:        SkillProposalReview,
+			Description: "技术标正文审查：逐条核验要求在章节当前修订中的实质响应（响应矩阵），并做全文关键承诺一致性与 ★/▲ 漏项核验。",
+			Tools:       []string{ToolComplianceVerify, ToolFulltextConsistent},
+			Body: `# 技术标正文审查
+
+1. 先 SearchExtraTools("select:compliance_verify") 取 Schema，调用 compliance_verify（可按 section_code 限定单章）。
+   它只核验已批准大纲下各章节的当前有效修订；verified 要求正文有实质应答，只挂章节名、只有 citation 或复述要求都不算。
+2. failed / pending 行说明正文缺少实质应答或数值不满足门槛：用 proposal-writing 技能修改对应章节，而不是改写核验结论。
+3. SearchExtraTools("select:fulltext_consistency_check") 后调用 fulltext_consistency_check，比对总工期、质保期、SLA、团队人数、
+   核心软硬件型号与数量是否前后一致，并列出没有通过核验的 ★/▲ 条款。
+4. 对每条 contradiction 与 omission 用 record_fact 记录（写明双方章节、rev_no 与原文片段）并提示人工处理；
+   规则抽取的召回率与准确率未经评测，「无结论」不等于全文一致，不得据此宣称可以导出。`,
 		},
 	}
 }

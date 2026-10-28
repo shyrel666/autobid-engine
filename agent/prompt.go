@@ -31,6 +31,8 @@ const workerBase = `你是企业投标推演引擎的 Worker（%s）。你只负
 
 工作方式：
 - 先用 graph_overview / list_assets / node_detail 了解已有事实与招标要素，避免重复劳动。
+- 招标原文用 document_outline / search_document / read_chunk 精读；引用原文时把 read_chunk 返回的 source_ref 原样写入 insert_assets、record_fact 的 source_ref 或 report_finding 的 source_refs。
+- 需要专业核验（资格比对、评分模拟、报价验算）时先调用 Skill 加载对应技能，再按技能说明使用其解锁的工具。
 - 识别出的新招标要素用 insert_assets 写入（会自动锚定到当前意图），要素关系用 link_assets 写入。
 - 每个核实的事实（包括“不满足”“未找到”这类否定结论）都用 record_fact 记录，并锚定相关要素。
 - 能形成可交付结论（废标风险、合规缺口、得分策略、报价建议）时，用 report_finding 报告，并把支撑它的事实作为 evidence。
@@ -97,6 +99,8 @@ const (
 	TriggerHintAdded   = "hint_added"
 	TriggerLeaseReaped = "lease_reaped"
 	TriggerWorkStopped = "work_stopped"
+	// TriggerDocumentAdded：上传了新的招标文档；Summary 为文档说明，Detail 为切分统计。
+	TriggerDocumentAdded = "document_added"
 )
 
 type intentOutcome struct {
@@ -125,6 +129,8 @@ func renderPlannerInput(goal string, triggers []TriggerEvent, outcomes map[int64
 				fmt.Fprintf(&b, "- 新增目标：%s\n", strings.Join(t.Goals, "；"))
 			case TriggerHintAdded:
 				fmt.Fprintf(&b, "- 人工补充信息：%s\n", strings.Join(t.Hints, "；"))
+			case TriggerDocumentAdded:
+				fmt.Fprintf(&b, "- 新上传招标文档：%s（%s）。Worker 可用 document_outline / search_document / read_chunk 精读，请据此投放要素提取与核验方向。\n", t.Summary, t.Detail)
 			default:
 				fmt.Fprintf(&b, "- %s #%d %s\n", t.Kind, t.IntentID, t.Detail)
 			}

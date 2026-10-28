@@ -72,6 +72,9 @@ func TestDefaultEnabledToolsAndConfigOverride(t *testing.T) {
 	if _, enabled := New(st, Options{}).Evaluate(ctx, "Bash", nil); !enabled {
 		t.Fatal("Bash should be enabled by default")
 	}
+	if _, enabled := New(st, Options{}).Evaluate(ctx, "verify_commercial_bid", nil); !enabled {
+		t.Fatal("verify_commercial_bid should be enabled by default for the approval demo")
+	}
 	if _, enabled := New(st, Options{}).Evaluate(ctx, "record_fact", nil); enabled {
 		t.Fatal("graph tools are not enabled by default")
 	}

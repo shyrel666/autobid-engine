@@ -17,6 +17,7 @@ import (
 
 	"github.com/autobid/autobid-engine/agent"
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
 )
 
@@ -78,6 +79,13 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/findings", a.withTask(a.findings))
 	mux.HandleFunc("GET /api/tasks/{id}/assets", a.withTask(a.assets))
 	mux.HandleFunc("GET /api/assets/{assetID}/edges", a.assetEdges)
+	mux.HandleFunc("GET /api/tasks/{id}/report", a.withTask(a.report))
+
+	// 招标文档与企业资料库
+	mux.HandleFunc("POST /api/tasks/{id}/documents", a.withTask(a.uploadDocument))
+	mux.HandleFunc("GET /api/tasks/{id}/documents", a.withTask(a.listDocuments))
+	mux.HandleFunc("POST /api/company/credentials", a.upsertCredentials)
+	mux.HandleFunc("GET /api/company/credentials", a.listCredentials)
 
 	// LLM 配置与配额链
 	mux.HandleFunc("GET /api/llm/profiles", a.listProfiles)
@@ -172,7 +180,11 @@ func fail(w http.ResponseWriter, err error) {
 }
 
 func decodeBody(r *http.Request, v any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
+	return decodeBodyLimit(r, v, 1<<20)
+}
+
+func decodeBodyLimit(r *http.Request, v any, limit int64) error {
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return badRequest("invalid JSON body: %v", err)
@@ -909,4 +921,181 @@ func (a *API) events(w http.ResponseWriter, r *http.Request, t *Task) {
 			return
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 招标文档、企业资料库与推演报告
+// ---------------------------------------------------------------------------
+
+// maxDocumentBody 是招标文档上传的请求体上限（文本形式，32 MiB）。
+const maxDocumentBody = 32 << 20
+
+type uploadDocumentReq struct {
+	TenderNo    string `json:"tender_no"`
+	LotNo       string `json:"lot_no"`
+	Title       string `json:"title"`
+	Text        string `json:"text"`
+	WakePlanner bool   `json:"wake_planner"`
+}
+
+// uploadDocument 切分并入库招标文档；wake_planner 为 true 且产生了新文档时向 Planner 投递 document_added 触发。
+func (a *API) uploadDocument(w http.ResponseWriter, r *http.Request, t *Task) {
+	var req uploadDocumentReq
+	if err := decodeBodyLimit(r, &req, maxDocumentBody); err != nil {
+		fail(w, err)
+		return
+	}
+	if strings.TrimSpace(req.TenderNo) == "" || strings.TrimSpace(req.Text) == "" {
+		fail(w, badRequest("tender_no and text are required"))
+		return
+	}
+	res, err := ingest.Ingest(r.Context(), a.pg, t.Assets, ingest.Input{TenderNo: req.TenderNo, LotNo: req.LotNo, Title: req.Title, Text: req.Text})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	woke := false
+	if req.WakePlanner && res.Created {
+		t.NotifyDocument(fmt.Sprintf("#%d %s（招标编号 %s）", res.Document.ID, res.Document.Title, res.Document.TenderNo),
+			fmt.Sprintf("%d 个章节/条款，其中 %d 个强制性条款", res.Chunks, res.Mandatory))
+		woke = true
+	}
+	status := http.StatusCreated
+	if !res.Created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{"result": res, "planner_notified": woke})
+}
+
+// listDocuments 列出任务的招标文档及其章节切分；?content=1 时附带段落正文。
+func (a *API) listDocuments(w http.ResponseWriter, r *http.Request, t *Task) {
+	docs, err := a.pg.ListTenderDocuments(r.Context(), t.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	withContent := r.URL.Query().Get("content") == "1"
+	type docView struct {
+		*db.TenderDocument
+		Chunks []*db.DocumentChunk `json:"chunks"`
+	}
+	out := make([]docView, 0, len(docs))
+	for _, d := range docs {
+		var chunks []*db.DocumentChunk
+		if withContent {
+			chunks, err = a.pg.TaskChunks(r.Context(), t.ID, d.ID, 100000)
+		} else {
+			chunks, err = a.pg.DocumentOutline(r.Context(), t.ID, d.ID, 100000)
+		}
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if chunks == nil {
+			chunks = []*db.DocumentChunk{}
+		}
+		out = append(out, docView{d, chunks})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type credentialReq struct {
+	Category   string          `json:"category"`
+	Code       string          `json:"code"`
+	Title      string          `json:"title"`
+	Attributes json.RawMessage `json:"attributes"`
+	ValidUntil *string         `json:"valid_until"`
+}
+
+// upsertCredentials 录入企业资料：请求体为单个对象或对象数组；code 非空的记录按 (category, code) 幂等更新。
+func (a *API) upsertCredentials(w http.ResponseWriter, r *http.Request) {
+	var raw json.RawMessage
+	if err := decodeBodyLimit(r, &raw, 4<<20); err != nil {
+		fail(w, err)
+		return
+	}
+	var reqs []credentialReq
+	trimmed := strings.TrimSpace(string(raw))
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	dec.DisallowUnknownFields()
+	var err error
+	if strings.HasPrefix(trimmed, "[") {
+		err = dec.Decode(&reqs)
+	} else {
+		var one credentialReq
+		err = dec.Decode(&one)
+		reqs = []credentialReq{one}
+	}
+	if err != nil {
+		fail(w, badRequest("invalid JSON body: %v", err))
+		return
+	}
+	if len(reqs) == 0 {
+		fail(w, badRequest("at least one credential is required"))
+		return
+	}
+	for i, c := range reqs {
+		if strings.TrimSpace(c.Category) == "" || strings.TrimSpace(c.Title) == "" {
+			fail(w, badRequest("credential %d: category and title are required", i))
+			return
+		}
+		if len(c.Attributes) > 0 && !strings.HasPrefix(strings.TrimSpace(string(c.Attributes)), "{") {
+			fail(w, badRequest("credential %d: attributes must be a JSON object", i))
+			return
+		}
+		if c.ValidUntil != nil && *c.ValidUntil != "" {
+			if _, err := time.Parse(time.DateOnly, *c.ValidUntil); err != nil {
+				fail(w, badRequest("credential %d: valid_until must be YYYY-MM-DD", i))
+				return
+			}
+		}
+	}
+	type result struct {
+		*db.CompanyCredential
+		Created bool `json:"created"`
+	}
+	out := make([]result, 0, len(reqs))
+	for _, c := range reqs {
+		saved, created, err := a.pg.UpsertCompanyCredential(r.Context(), &db.CompanyCredential{Category: c.Category, Code: c.Code,
+			Title: c.Title, Attributes: c.Attributes, ValidUntil: c.ValidUntil})
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		out = append(out, result{saved, created})
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// listCredentials 查询企业资料：?category=&q=（空格分隔，任一命中）&valid_on=YYYY-MM-DD&limit=
+func (a *API) listCredentials(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	validOn := q.Get("valid_on")
+	if validOn != "" {
+		if _, err := time.Parse(time.DateOnly, validOn); err != nil {
+			fail(w, badRequest("valid_on must be YYYY-MM-DD"))
+			return
+		}
+	}
+	creds, err := a.pg.ListCompanyCredentials(r.Context(), db.CredentialFilter{Category: q.Get("category"),
+		Terms: strings.Fields(q.Get("q")), ValidOn: validOn, Limit: limit})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if creds == nil {
+		creds = []*db.CompanyCredential{}
+	}
+	writeJSON(w, http.StatusOK, creds)
+}
+
+// report 导出任务的结构化推演报告。
+func (a *API) report(w http.ResponseWriter, r *http.Request, t *Task) {
+	rep, err := a.pg.TaskReport(r.Context(), t.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }

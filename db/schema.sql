@@ -483,3 +483,55 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_expnodes_touch ON exploration_nodes;
 CREATE TRIGGER trg_expnodes_touch BEFORE INSERT OR UPDATE OF state, payload, content_version ON exploration_nodes
     FOR EACH ROW EXECUTE FUNCTION expnode_touch_round();
+
+-- ---------------------------------------------------------------------------
+-- Phase 2：招标原文与企业资料库。
+--   tender_documents  任务上传的招标文件原文；content_hash 保证同一任务重复上传幂等。
+--   document_chunks   按章节/条款切分的段落；seq 为文档内顺序（read_chunk 相邻窗口），
+--                     is_mandatory 标记 ★/*/废标/否决等强制条款。
+--   company_credentials 本企业资质/业绩/人员库（全局，不随任务删除）；code 非空时 (category, code) 唯一。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tender_documents (
+    id           BIGSERIAL PRIMARY KEY,
+    task_id      BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    tender_no    TEXT NOT NULL CHECK (tender_no <> ''),
+    lot_no       TEXT NOT NULL DEFAULT '',
+    title        TEXT NOT NULL DEFAULT '',
+    raw_text     TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tender_documents_content
+    ON tender_documents(task_id, tender_no, lot_no, content_hash);
+
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id             BIGSERIAL PRIMARY KEY,
+    doc_id         BIGINT NOT NULL REFERENCES tender_documents(id) ON DELETE CASCADE,
+    task_id        BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    seq            INT  NOT NULL CHECK (seq >= 0),
+    level          INT  NOT NULL DEFAULT 0,
+    section_code   TEXT NOT NULL DEFAULT '',
+    section_title  TEXT NOT NULL DEFAULT '',
+    page_no        INT  NOT NULL DEFAULT 1,
+    content        TEXT NOT NULL DEFAULT '',
+    token_estimate INT  NOT NULL DEFAULT 0,
+    is_mandatory   BOOLEAN NOT NULL DEFAULT false,
+    UNIQUE (doc_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_task ON document_chunks(task_id, doc_id, seq);
+
+CREATE TABLE IF NOT EXISTS company_credentials (
+    id          BIGSERIAL PRIMARY KEY,
+    category    TEXT NOT NULL CHECK (category <> ''),
+    code        TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL CHECK (title <> ''),
+    attributes  JSONB NOT NULL DEFAULT '{}',
+    valid_until DATE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_company_credentials_code ON company_credentials(category, code) WHERE code <> '';
+CREATE INDEX IF NOT EXISTS idx_company_credentials_category ON company_credentials(category);
+DROP TRIGGER IF EXISTS trg_company_credentials_upd ON company_credentials;
+CREATE TRIGGER trg_company_credentials_upd BEFORE UPDATE ON company_credentials
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();

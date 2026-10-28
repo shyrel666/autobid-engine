@@ -38,8 +38,9 @@ const (
 )
 
 // DefaultEnabledTools 是默认启用拦截的工具集合（§6.2），可由 Options 或 intercept_config 覆盖。
-// 未启用的工具不进入规则/Judge 链。
-var DefaultEnabledTools = []string{"Bash", "WebFetch", "web_search", "session_open", "session_send", "Write", "Edit", "MultiEdit"}
+// 未启用的工具不进入规则/Judge 链。verify_commercial_bid（bidtools 报价验算延迟工具）默认纳入，便于演示审批挂起。
+var DefaultEnabledTools = []string{"Bash", "WebFetch", "web_search", "session_open", "session_send", "Write", "Edit", "MultiEdit",
+	"verify_commercial_bid"}
 
 // Store 是 Interceptor 依赖的持久化契约；*db.DB 实现它，单元测试可替换为内存实现。
 type Store interface {

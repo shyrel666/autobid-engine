@@ -153,6 +153,11 @@ func writeTool(spec tool.Spec, fn func(ctx context.Context, in json.RawMessage) 
 // summaryOf 从 payload 取 summary（回落 title），截断到 max 个字符。
 func summaryOf(n *db.Node, max int) string { return db.NodeSummary(n, max) }
 
+func isJSONObject(raw json.RawMessage) bool {
+	var m map[string]any
+	return len(raw) > 0 && json.Unmarshal(raw, &m) == nil && m != nil
+}
+
 func truncate(s string, max int) string {
 	r := []rune(s)
 	if max <= 0 || len(r) <= max {
@@ -509,13 +514,15 @@ func (s *ToolSet) recordFactTool() tool.CoreTool {
 			"evidence":   str("quote or location supporting the fact"),
 			"confidence": number("0-1"),
 			"anchors":    ids("asset ids"),
+			"source_ref": map[string]any{"type": "object", "description": "origin in the tender text, the source_ref returned by read_chunk"},
 		}, "summary"),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		req, err := decode[struct {
-			Summary    string   `json:"summary"`
-			Evidence   string   `json:"evidence"`
-			Confidence *float64 `json:"confidence"`
-			Anchors    []int64  `json:"anchors"`
+			Summary    string          `json:"summary"`
+			Evidence   string          `json:"evidence"`
+			Confidence *float64        `json:"confidence"`
+			Anchors    []int64         `json:"anchors"`
+			SourceRef  json.RawMessage `json:"source_ref"`
 		}](in)
 		if err != nil || strings.TrimSpace(req.Summary) == "" {
 			return tool.Errorf("summary is required"), nil
@@ -526,6 +533,9 @@ func (s *ToolSet) recordFactTool() tool.CoreTool {
 		payload := map[string]any{"summary": req.Summary, "evidence": req.Evidence}
 		if req.Confidence != nil {
 			payload["confidence"] = *req.Confidence
+		}
+		if isJSONObject(req.SourceRef) {
+			payload["source_ref"] = req.SourceRef
 		}
 		// v2：默认归属当前 Intent，保证 yields 血缘完整（原仓不回落 ownerNode）。
 		id, err := s.ts.RecordFactWithYieldsTx(ctx, s.ownerNode, payload, 0, s.worker, req.Anchors)
@@ -550,19 +560,32 @@ func (s *ToolSet) reportFindingTool() tool.CoreTool {
 			"detail":   map[string]any{"type": "object"},
 			"evidence": ids("fact/finding ids supporting it"),
 			"anchors":  ids("asset ids"),
+			"source_refs": map[string]any{"type": "array", "items": map[string]any{"type": "object"},
+				"description": "origins in the tender text (source_ref objects returned by read_chunk); stored in detail.source_refs"},
 		}, "category", "title"),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		req, err := decode[struct {
-			Category string          `json:"category"`
-			Severity string          `json:"severity"`
-			Title    string          `json:"title"`
-			Summary  string          `json:"summary"`
-			Detail   json.RawMessage `json:"detail"`
-			Evidence []int64         `json:"evidence"`
-			Anchors  []int64         `json:"anchors"`
+			Category   string            `json:"category"`
+			Severity   string            `json:"severity"`
+			Title      string            `json:"title"`
+			Summary    string            `json:"summary"`
+			Detail     json.RawMessage   `json:"detail"`
+			Evidence   []int64           `json:"evidence"`
+			Anchors    []int64           `json:"anchors"`
+			SourceRefs []json.RawMessage `json:"source_refs"`
 		}](in)
 		if err != nil {
 			return tool.Errorf("invalid input: %v", err), nil
+		}
+		if len(req.SourceRefs) > 0 {
+			detail := map[string]any{}
+			if len(req.Detail) > 0 && json.Unmarshal(req.Detail, &detail) != nil {
+				detail = map[string]any{"value": req.Detail}
+			}
+			detail["source_refs"] = req.SourceRefs
+			if req.Detail, err = json.Marshal(detail); err != nil {
+				return tool.Errorf("invalid detail: %v", err), nil
+			}
 		}
 		rec, err := s.ts.RecordFinding(ctx, db.RecordFindingInput{
 			TaskID: s.taskID, IntentID: s.ownerNode, Category: req.Category, Severity: req.Severity,

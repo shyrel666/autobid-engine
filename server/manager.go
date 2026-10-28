@@ -242,6 +242,11 @@ func (m *Manager) AddGoal(ctx context.Context, t *Task, summary string) (int64, 
 	return id, nil
 }
 
+// NotifyDocument 告知 Planner 有新招标文档上传，并唤醒它。
+func (t *Task) NotifyDocument(summary, detail string) {
+	t.appendTrigger(agent.TriggerEvent{Kind: agent.TriggerDocumentAdded, Summary: summary, Detail: detail})
+}
+
 // AddHint 追加人工补充上下文并唤醒 Planner。
 func (m *Manager) AddHint(ctx context.Context, t *Task, text string, anchors []int64) (int64, error) {
 	id, err := t.Store.AddNode(ctx, db.KindHint, db.StateHintActive, map[string]any{"summary": text}, 0, "", anchors)

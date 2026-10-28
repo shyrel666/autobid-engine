@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/autobid/autobid-engine/agent"
+	"github.com/autobid/autobid-engine/bidtools"
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/internal/llm"
 	"github.com/autobid/autobid-engine/internal/llm/anthropic"
@@ -307,7 +308,11 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 	if wc.Transcripts == nil {
 		wc.Transcripts = db.NewTranscriptStore(s.pg)
 	}
-	wc.ExtraTools = append([]tool.CoreTool(nil), wc.ExtraTools...)
+	// 招投标领域工具按任务绑定：常驻文档精读工具直接下发，专业工具经 Skill 解锁（§4.3）。
+	kit := bidtools.New(s.pg, t.ID, t.Assets, t.Store)
+	wc.ExtraTools = append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...)
+	wc.Deferred = append(append([]tool.CoreTool(nil), wc.Deferred...), kit.DeferredTools()...)
+	wc.Skills = append(append([]tool.Skill(nil), wc.Skills...), bidtools.Skills()...)
 	b.pl, b.wk = agent.NewPlanner(pc), agent.NewWorker(wc)
 	s.taskAgents[t.ID] = b
 	return b.pl, b.wk

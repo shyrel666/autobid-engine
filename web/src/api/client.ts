@@ -8,6 +8,7 @@ import type {
   Task, TaskReport, TaskView, UploadDocumentFileReq, UploadDocumentReq, UploadDocumentResp, ResearchRequest, RetrievalRun,
   ExtractResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
   RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionClaim, SectionDetail,
+  ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
 } from './types'
 
 const TOKEN_KEY = 'autobid.token'
@@ -208,6 +209,20 @@ export const api = {
     post<ProposalSection>(`${t(id)}/sections/${sectionID}/revisions/${revNo}/approve`),
   rollbackRevision: (id: number, sectionID: number, revNo: number, baseRevNo?: number) =>
     post<SaveRevisionResult>(`${t(id)}/sections/${sectionID}/revisions/${revNo}/rollback`, baseRevNo === undefined ? {} : { base_rev_no: baseRevNo }),
+
+  // 双层响应核验矩阵、全文一致性核验与导出就绪度（Phase 6A）
+  verifyCompliance: (id: number, sectionID?: number) =>
+    post<VerifyMatrixResult>(`${t(id)}/compliance/verify`, sectionID ? { section_id: sectionID } : {}),
+  complianceMatrix: (id: number, f: { status?: string; kind?: string; section_id?: number } = {}) =>
+    get<MatrixView>(`${t(id)}/compliance/matrix${qs(f)}`),
+  complianceCoverage: (id: number) => get<ComplianceCoverage>(`${t(id)}/compliance/coverage`),
+  runConsistency: (id: number) => post<ConsistencyRunDetail>(`${t(id)}/consistency/runs`),
+  consistencyRuns: (id: number) => get<{ runs: ConsistencyRun[] }>(`${t(id)}/consistency/runs`),
+  consistencyFindings: (id: number, f: { run_id?: number; status?: string } = {}) =>
+    get<ConsistencyRunDetail>(`${t(id)}/consistency/findings${qs(f)}`),
+  resolveFinding: (id: number, findingID: number, req: ResolveFindingReq) =>
+    post<ConsistencyFinding>(`${t(id)}/consistency/findings/${findingID}/resolve`, req),
+  exportReadiness: (id: number) => get<ExportReadiness>(`${t(id)}/export-readiness`),
 
   // LLM 配置
   listProfiles: () => get<LLMProfile[] | null>('/api/llm/profiles'),

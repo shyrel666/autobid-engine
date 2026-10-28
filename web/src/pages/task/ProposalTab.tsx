@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, FileSearch, GitBranch, History, ListChecks, Pencil, Plus, RefreshCw, RotateCcw,
-  Save, Send, ShieldCheck, Sparkles, Trash2, XCircle,
+  AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, FileSearch, GitBranch, GitCompare, History, ListChecks, Pencil, Plus, RefreshCw, RotateCcw,
+  Save, Send, ShieldCheck, Sparkles, Table2, Trash2, XCircle,
 } from 'lucide-react'
 import { ApiError, api, errorText } from '../../api/client'
 import type {
@@ -13,12 +13,13 @@ import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Pre, Sele
 import type { Tone } from '../../components/ui'
 import { RetrievalEvidence } from '../../components/RetrievalEvidence'
 import { useAsync, useInterval } from '../../hooks/useAsync'
+import { ConsistencyPanel, MatrixPanel } from './ReviewPanels'
 import {
   fmtTime, manifestStatusLabel, outlineStatusLabel, pageRange, requirementCategoryLabel, reviewStatusLabel, revisionSourceLabel,
   revisionStatusLabel, sectionStatusLabel,
 } from '../../lib/format'
 
-type View = 'requirements' | 'outline' | 'writing'
+type View = 'requirements' | 'outline' | 'writing' | 'matrix' | 'consistency'
 
 const categories: RequirementCategory[] = ['mandatory_clause', 'scoring_item', 'non_scoring_required', 'format_attachment']
 
@@ -52,6 +53,8 @@ export default function ProposalTab({ taskID, tick }: { taskID: number; tick: nu
     { key: 'requirements', label: '① 投标要求清单复核', icon: <ListChecks className="size-4" /> },
     { key: 'outline', label: '② 技术标大纲与审批', icon: <GitBranch className="size-4" /> },
     { key: 'writing', label: '③ 章节写作与版本', icon: <Pencil className="size-4" /> },
+    { key: 'matrix', label: '④ 响应矩阵', icon: <Table2 className="size-4" /> },
+    { key: 'consistency', label: '⑤ 一致性核验', icon: <GitCompare className="size-4" /> },
   ]
   return (
     <div className="space-y-4">
@@ -67,10 +70,13 @@ export default function ProposalTab({ taskID, tick }: { taskID: number; tick: nu
       <p className="text-xs text-slate-500">
         流程：要求清单遍历提取并人工确认完整 → 生成大纲并提交审批（状态持久化，跨重启有效）→ 批准后按前置依赖派发章节写作。
         写回由数据库同时校验 <code>based_on_outline_version</code> 与 <code>base_rev_no</code>：大纲已变或他人已保存时只存为候选稿，不覆盖当前版本。
+        定稿后在「响应矩阵」逐条核验正文实质响应、在「一致性核验」比对关键承诺与 ★/▲ 漏项；章节新修订、要求变更、证据失效或大纲被取代都会让相关结论自动失效。
       </p>
       {view === 'requirements' && <RequirementsPanel taskID={taskID} tick={tick} />}
       {view === 'outline' && <OutlinePanel taskID={taskID} tick={tick} onOpenSection={openSection} />}
       {view === 'writing' && <WritingPanel taskID={taskID} tick={tick} sectionID={sectionID} onSelect={setSectionID} />}
+      {view === 'matrix' && <MatrixPanel taskID={taskID} tick={tick} onOpenSection={openSection} />}
+      {view === 'consistency' && <ConsistencyPanel taskID={taskID} tick={tick} />}
     </div>
   )
 }

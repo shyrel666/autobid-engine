@@ -682,3 +682,63 @@ export interface SaveRevisionReq {
   base_rev_no: number; based_on_outline_version: number; content_md: string; summary_note?: string
   diff_summary?: string; evidence_ids?: number[]; gaps?: RevisionGap[]
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6A：双层响应核验矩阵、全文一致性核验与导出就绪度（db/compliance.go、db/consistency.go、db/export_readiness.go、server/compliance.go）
+// ---------------------------------------------------------------------------
+export type VerifyStatus = 'pending' | 'verified' | 'stale' | 'failed'
+export type Deviation = 'none' | 'positive' | 'negative'
+export type RequirementKind = 'star' | 'triangle' | 'scoring' | 'required' | 'format'
+
+export interface ComplianceCheck { name: string; passed: boolean; detail?: string }
+export interface ComplianceRow {
+  id: number; task_id: number; outline_id: number; outline_version: number
+  requirement_item_id: number; requirement_code: string; requirement_title: string; category: RequirementCategory; kind: RequirementKind; is_mandatory: boolean
+  section_id: number; section_code: string; section_title: string; section_rev_id?: number; rev_no?: number; current_rev_no: number
+  anchor: string; anchor_excerpt: string; response_summary: string; deviation: Deviation; verify_status: VerifyStatus
+  failure_reason: string; stale_reason: string; evidence_ids: number[]; checks: ComplianceCheck[] | null; verifier: 'rule' | 'llm'
+  verified_at?: string; created_by: string; updated_by: string; updated_at: string
+}
+export interface MatrixView { outline_version: number; approved: boolean; rows: ComplianceRow[] }
+export interface VerifyMatrixResult {
+  outline_version: number; section_id?: number; checked: number; verified: number; failed: number; pending: number; stale: number; rows: ComplianceRow[]
+}
+export type RequirementComplianceStatus = VerifyStatus | 'unmapped' | 'unchecked'
+export interface RequirementCompliance {
+  id: number; code: string; title: string; category: RequirementCategory; kind: RequirementKind; is_mandatory: boolean
+  mapped: boolean; section_codes: string[]; status: RequirementComplianceStatus; deviation: Deviation; reason?: string
+}
+export interface KindCoverage { kind: RequirementKind; total: number; mapped: number; verified: number; failed: number; stale: number; pending: number; unchecked: number }
+export interface ComplianceCoverage {
+  outline_version: number; approved: boolean; total: number; mapped: number; mapping_rate: number; verified: number; response_rate: number
+  negative_deviations: number; by_kind: KindCoverage[]; requirements: RequirementCompliance[]
+}
+
+export type FindingStatus = 'open' | 'resolved' | 'stale'
+export type ResolutionKind = 'fixed' | 'accepted' | 'false_positive'
+export interface ConsistencyRun {
+  id: number; task_id: number; outline_id: number; outline_version: number; snapshot: Record<string, number>
+  status: 'completed' | 'stale'; stale_reason: string; contradictions: number; omissions: number
+  summary: { sections?: number; sections_with_text?: number; mentions?: number; by_metric?: Record<string, number> }
+  created_by: string; created_at: string; updated_at: string
+}
+export interface ConsistencyFinding {
+  id: number; run_id: number; kind: 'contradiction' | 'omission'; metric: string; metric_label: string
+  requirement_item_id?: number; requirement_code?: string; requirement_title?: string; requirement_kind?: RequirementKind
+  section_ids: number[]
+  a_section_id?: number; a_section_code?: string; a_section_title?: string; a_rev_no?: number; a_value: string; a_excerpt: string
+  b_section_id?: number; b_section_code?: string; b_section_title?: string; b_rev_no?: number; b_value: string; b_excerpt: string
+  detail: string; status: FindingStatus; stale_reason: string; resolution_kind: '' | ResolutionKind; resolution_note: string
+  resolved_by: string; resolved_at?: string; version: number; created_at: string; updated_at: string
+}
+export interface ConsistencyRunDetail { run?: ConsistencyRun | null; findings: ConsistencyFinding[]; current: boolean }
+export interface ResolveFindingReq { version: number; resolution_kind: ResolutionKind; note?: string }
+
+export interface ExportBlocker {
+  kind: string; message: string; section_id?: number; section_code?: string
+  requirement_item_id?: number; requirement_code?: string; finding_id?: number; evidence_id?: number
+}
+export interface ExportReadiness {
+  ready: boolean; outline_version: number; consistency_run_id?: number; checked_at: string
+  counts: Record<string, number>; blockers: ExportBlocker[]
+}

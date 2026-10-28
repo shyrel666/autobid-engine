@@ -13,16 +13,15 @@ interface Plan {
 }
 
 // 仅展示 ROADMAP.md 中的规划；这些模块的后端接口尚未实现，本页不调用任何接口、不展示假数据。
-// Phase 5 已落地为任务工作台的「技术标大纲与写作」页签（/proposal），此处只保留 Phase 6。
+// Phase 5 与 Phase 6A（响应矩阵、一致性核验、导出就绪度）已落地为任务工作台的「技术标大纲与写作」页签（/proposal），此处只保留 Phase 6B。
 const plans: Record<string, Plan> = {
   phase6: {
-    phase: 'Phase 6', title: '图表、一致性核验与成稿套版导出', icon: <FileOutput className="size-5" />, gaps: '缺口 #6、#7、#8',
-    summary: '生成架构图、甘特图等标书图表；双层核验要求覆盖与正文实质响应并检查全文一致性；锁定已批准版本套模板导出 DOCX / PDF。',
+    phase: 'Phase 6B', title: '标书图表与成稿套版导出', icon: <FileOutput className="size-5" />, gaps: '缺口 #7、#8',
+    summary: '生成架构图、甘特图等标书图表；锁定已批准版本套模板导出 DOCX / PDF。双层响应核验与全文一致性核验（6A）已在任务页「技术标大纲与写作 → ④ 响应矩阵 / ⑤ 一致性核验」提供。',
     items: [
       'proposal_charts + chart_generate：Mermaid/SVG 架构图、实施甘特图、组织架构图、设备选型表，绑定章节版本',
-      'compliance_matrix：大纲映射率与正文实质响应率两层验收；要求或正文变更自动标记 stale 待重检',
-      'fulltext_consistency_check：工期、质保期、SLA、团队人数、软硬件型号等关键承诺前后一致性',
       'export_jobs + export/：锁定 section_id → rev_no 快照，套用 .docx 模板，渲染 TOC 页码、页眉页脚与《点对点应答及偏离表》',
+      '导出门禁复用 6A 的导出就绪度判定（db.ExportReadiness），偏离表读取 compliance_matrix',
     ],
     apis: ['导出任务 API（待定义）'],
   },

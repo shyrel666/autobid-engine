@@ -165,7 +165,7 @@ export default function App() {
           </div>
           <div className="space-y-0.5">
             <div className="px-3 pb-1 text-xs font-medium text-slate-400">规划中模块</div>
-            <NavItem to="/roadmap/phase6" icon={<FileOutput className="size-4" />} label="成稿套版导出" muted active={isRoadmap('phase6')} badge={<Badge>P6</Badge>} />
+            <NavItem to="/roadmap/phase6" icon={<FileOutput className="size-4" />} label="成稿套版导出" muted active={isRoadmap('phase6')} badge={<Badge>P6B</Badge>} />
           </div>
         </nav>
         <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-400">Phase 5 · 单团队版</div>

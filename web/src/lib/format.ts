@@ -104,3 +104,24 @@ export const revisionStatusLabel: Record<string, string> = {
   draft: '草稿', reviewing: '待审核', approved: '曾批准', rejected: '已驳回', stale_outline: '大纲过期候选稿',
   stale_evidence: '证据失效', conflict_candidate: '冲突候选稿',
 }
+
+// Phase 6A：响应矩阵与一致性核验
+export const requirementKindLabel: Record<string, string> = {
+  star: '★ 条款', triangle: '▲ 条款', scoring: '评分项', required: '必答项', format: '格式项',
+}
+
+export const verifyStatusLabel: Record<string, string> = {
+  verified: '实质响应', failed: '未通过', stale: '已失效·待重检', pending: '章节无正文', unchecked: '未核验', unmapped: '未映射',
+}
+
+export const deviationLabel: Record<string, string> = { none: '无偏离', positive: '正偏离', negative: '负偏离' }
+
+export const findingStatusLabel: Record<string, string> = { open: '待处理', resolved: '已处理', stale: '已失效' }
+
+export const resolutionKindLabel: Record<string, string> = { fixed: '已修正', accepted: '确认无误（说明原因）', false_positive: '误报' }
+
+export const exportBlockerLabel: Record<string, string> = {
+  no_approved_outline: '无批准大纲', requirements_not_confirmed: '要求清单未确认', requirement_unmapped: '要求未映射',
+  section_not_approved: '章节未定稿', matrix_stale: '响应核验失效', matrix_failed: '响应核验未通过', matrix_unverified: '尚未核验',
+  consistency_not_run: '未做一致性核验', consistency_stale: '一致性核验过期', finding_open: '一致性结论待处理', evidence_invalid: '证据失效',
+}

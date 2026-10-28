@@ -125,3 +125,23 @@ export const exportBlockerLabel: Record<string, string> = {
   section_not_approved: '章节未定稿', matrix_stale: '响应核验失效', matrix_failed: '响应核验未通过', matrix_unverified: '尚未核验',
   consistency_not_run: '未做一致性核验', consistency_stale: '一致性核验过期', finding_open: '一致性结论待处理', evidence_invalid: '证据失效',
 }
+
+export const chartTypeLabel: Record<string, string> = {
+  architecture: '技术架构图', gantt: '实施甘特图', org: '组织架构图', equipment_table: '设备选型表',
+}
+
+export const chartRenderLabel: Record<string, string> = { pending: '待渲染', rendered: '已渲染', unrendered: '未渲染（mmdc 不可用）', failed: '渲染失败' }
+
+export const exportStatusLabel: Record<string, string> = { queued: '排队中', running: '执行中', succeeded: '已完成', failed: '失败' }
+
+export const exportWarningLabel: Record<string, string> = {
+  chart_unrendered: '图表未渲染', chart_failed: '图表渲染失败', chart_stale: '图表已过期', toc_not_refreshed: '目录页码未刷新',
+  chart_artifact_missing: '图表产物缺失', retried: '回收重试', self_check: '成稿自检', office_unavailable: 'LibreOffice 不可用',
+  renderer_unavailable: 'mmdc 不可用',
+}
+
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}

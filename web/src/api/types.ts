@@ -742,3 +742,59 @@ export interface ExportReadiness {
   ready: boolean; outline_version: number; consistency_run_id?: number; checked_at: string
   counts: Record<string, number>; blockers: ExportBlocker[]
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6B：章节图表与锁定版本导出（server/export.go）
+// ---------------------------------------------------------------------------
+
+export type ChartType = 'architecture' | 'gantt' | 'org' | 'equipment_table'
+export type ChartRenderStatus = 'pending' | 'rendered' | 'unrendered' | 'failed'
+
+export interface ProposalChart {
+  id: number; task_id: number; section_id: number; section_code: string; section_title: string
+  section_rev_id: number; rev_no: number; current_rev_no: number; stale: boolean; stale_reason?: string
+  chart_type: ChartType; title: string; spec: unknown; source_format: 'mermaid' | 'json'; source: string; source_hash: string
+  render_status: ChartRenderStatus; render_format: '' | 'png' | 'native'; render_error: string
+  artifact_hash: string; artifact_size: number; width_px: number; height_px: number; rendered_at?: string
+  created_by: string; updated_by: string; created_at: string; updated_at: string
+}
+
+export interface ChartReq { section_id: number; chart_type: ChartType; title: string; spec: unknown }
+
+export interface ExportStatus {
+  office: boolean; office_version?: string; office_path?: string; office_reason?: string
+  renderer: boolean; renderer_name?: string; renderer_reason?: string
+}
+
+export interface ExportWarning { kind: string; message: string; section_id?: number; chart_id?: number }
+
+export interface ExportTemplate {
+  id: number; name: string; file_name: string; sha256: string; size: number
+  meta: { page_width_mm?: number; page_height_mm?: number; margins_mm?: number[]; has_content_placeholder?: boolean; missing_styles?: string[] }
+  created_by: string; created_at: string
+}
+
+export interface ExportPreflight {
+  readiness: ExportReadiness; warnings: ExportWarning[]; charts: number; status: ExportStatus
+  templates: ExportTemplate[]; default_template_hash: string
+}
+
+export type ExportFormat = 'docx' | 'pdf'
+export type ExportJobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export interface SnapshotSection { section_id: number; section_code: string; title: string; level: number; seq: number; rev_no: number; rev_id: number }
+
+export interface ExportJob {
+  id: number; task_id: number; outline_id: number; outline_version: number; format: ExportFormat; status: ExportJobStatus
+  template_id?: number; template_key: string; template_hash: string
+  rev_snapshot: Record<string, number>
+  chart_snapshot: { chart_id: number; section_id: number; rev_no: number; chart_type: ChartType; title: string; render_status: ChartRenderStatus }[]
+  matrix_snapshot: { requirement_code: string; section_code: string; deviation: string }[]
+  doc_snapshot: { task_name: string; bidder?: string; outline_version: number; sections: SnapshotSection[]; created_at: string }
+  artifact_name: string; artifact_hash: string; artifact_size: number; toc_refreshed: boolean
+  warnings: ExportWarning[]; error: string; attempts: number; max_attempts: number
+  lease_owner?: string; lease_until?: string; started_at?: string; finished_at?: string
+  created_by: string; created_at: string; updated_at: string
+}
+
+export interface CreateExportReq { formats: ExportFormat[]; template_id?: number; bidder?: string }

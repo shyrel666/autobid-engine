@@ -9,6 +9,7 @@ import type {
   ExtractResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
   RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionClaim, SectionDetail,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
+  ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
 } from './types'
 
 const TOKEN_KEY = 'autobid.token'
@@ -108,6 +109,32 @@ function formData(fields: Record<string, string | boolean | undefined>, file: Fi
   for (const [k, v] of Object.entries(fields)) if (v !== undefined && v !== '') fd.set(k, String(v))
   fd.set('file', file, file.name)
   return fd
+}
+
+// blob 下载需要鉴权的二进制资源（产物、图表 PNG），从 Content-Disposition 解析文件名。
+async function blob(path: string): Promise<{ blob: Blob; filename: string }> {
+  const resp = await send('GET', path)
+  const cd = resp.headers.get('Content-Disposition') ?? ''
+  let filename = ''
+  const star = /filename\*=(?:UTF-8|utf-8)''([^;]+)/.exec(cd)
+  if (star) filename = decodeURIComponent(star[1])
+  else {
+    const plain = /filename="?([^";]+)"?/.exec(cd)
+    if (plain) filename = plain[1]
+  }
+  return { blob: await resp.blob(), filename }
+}
+
+// saveBlob 触发浏览器下载。
+export function saveBlob(b: Blob, filename: string) {
+  const url = URL.createObjectURL(b)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
 }
 
 export const api = {
@@ -223,6 +250,22 @@ export const api = {
   resolveFinding: (id: number, findingID: number, req: ResolveFindingReq) =>
     post<ConsistencyFinding>(`${t(id)}/consistency/findings/${findingID}/resolve`, req),
   exportReadiness: (id: number) => get<ExportReadiness>(`${t(id)}/export-readiness`),
+
+  // 章节图表与锁定版本导出（Phase 6B）
+  charts: (id: number, sectionID?: number) => get<{ charts: ProposalChart[]; renderer: ExportStatus }>(`${t(id)}/charts${qs({ section_id: sectionID })}`),
+  generateChart: (id: number, req: ChartReq) => post<ProposalChart>(`${t(id)}/charts`, req),
+  renderChart: (id: number, chartID: number) => post<ProposalChart>(`${t(id)}/charts/${chartID}/render`),
+  rebindChart: (id: number, chartID: number) => post<ProposalChart>(`${t(id)}/charts/${chartID}/rebind`),
+  deleteChart: (id: number, chartID: number) => del(`${t(id)}/charts/${chartID}`),
+  chartImage: (id: number, chartID: number) => blob(`${t(id)}/charts/${chartID}/image`),
+  exportPreflight: (id: number) => get<ExportPreflight>(`${t(id)}/exports/preflight`),
+  createExport: (id: number, req: CreateExportReq) => post<{ jobs: ExportJob[]; warnings: ExportWarning[] }>(`${t(id)}/exports`, req),
+  exportJobs: (id: number) => get<{ jobs: ExportJob[] }>(`${t(id)}/exports`),
+  downloadExport: (id: number, jobID: number) => blob(`${t(id)}/exports/${jobID}/download`),
+  exportTemplates: () => get<{ templates: ExportTemplate[]; default_template_hash: string }>('/api/export/templates'),
+  uploadTemplate: (file: File, name: string) => json<ExportTemplate>('POST', '/api/export/templates', formData({ name }, file)),
+  deleteTemplate: (templateID: number) => del(`/api/export/templates/${templateID}`),
+  defaultTemplate: () => blob('/api/export/templates/default/file'),
 
   // LLM 配置
   listProfiles: () => get<LLMProfile[] | null>('/api/llm/profiles'),

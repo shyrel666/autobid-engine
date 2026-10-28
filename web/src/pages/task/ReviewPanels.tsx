@@ -37,7 +37,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
 }
 
 // ---------------------------------------------------------------------------
-// 导出就绪度（只读；导出按钮在 6B 提供）
+// 导出就绪度（只读；发起导出在「⑥ 导出成稿」视图）
 // ---------------------------------------------------------------------------
 
 export function ExportReadinessCard({ taskID, tick }: { taskID: number; tick: number }) {
@@ -53,7 +53,7 @@ export function ExportReadinessCard({ taskID, tick }: { taskID: number; tick: nu
       actions={<Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} onClick={() => void data.reload()} />}>
       <ErrorBanner error={data.error} onRetry={data.reload} />
       {!r ? <Spinner /> : r.ready ? (
-        <p className="text-sm text-emerald-700">全部章节已批准当前修订，响应矩阵全部实质响应且未失效，最新一致性核验无待处理结论，证据均有效。导出功能将在 Phase 6B 提供。</p>
+        <p className="text-sm text-emerald-700">全部章节已批准当前修订，响应矩阵全部实质响应且未失效，最新一致性核验无待处理结论，证据均有效。可在「⑥ 导出成稿」锁定版本并导出 DOCX / PDF。</p>
       ) : (
         <div className="space-y-3">
           <div className="flex flex-wrap gap-1.5">

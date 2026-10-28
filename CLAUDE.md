@@ -11,8 +11,8 @@
 - **已完成基线（详见 [`ROADMAP.md`](./ROADMAP.md) 第一节）**：
   - **Phase 1**：PostgreSQL 存储与幂等迁移（`db/schema.sql`）、双图状态与租约争抢（`db/exploration.go`, `db/assets.go`）、冷节点折叠与有界概览（`db/digest.go`, `db/overview.go`）、LLM 连接池与审计录制（`llmpool`, `llmrec`）、工具调用级拦截与计数（`intercept`, `guard`）及 HTTP/SSE 服务层（`server/http.go`）。
   - **Phase 2**：纯文本/Markdown 招标文档章节切分（`ingest/splitter.go`）、企业资信库（`company_credentials`）、标书核验工具与技能（`bidtools/`：`document_outline`、`search_document`、`read_chunk`、`query_company_credentials`、`simulate_scoring_table`、`verify_commercial_bid`）及结构化审查报告（`db/report.go`）。
+  - **Phase 3**：单团队标书合规审查工作台前端（`web/`，对应缺口 #9）+ 轻量配套后端接口（`PUT/DELETE /api/company/credentials/{id}`、`GET /api/tasks/{id}/report?format=markdown`、`server/static.go` 托管 `web/dist` 并做 SPA 回退）。
 - **待演进阶段（详见 [`ROADMAP.md`](./ROADMAP.md) 第四节）**：
-  - **Phase 3**：单团队标书合规审查工作台前端（`web/`，对应缺口 #9）+ 轻量配套后端接口（资信按 ID 全量更新与删除、报告 Markdown 导出、静态资源托管）
   - **Phase 4**：PDF/DOCX/扫描件 OCR 深度解析与 PostgreSQL 企业方案知识库 RAG（对应缺口 #1、#4）
   - **Phase 5**：可复核要求清单、持久化大纲审批状态机、带依赖门禁的章节写作与乐观锁多版本修订（对应缺口 #2、#3、#5）
   - **Phase 6**：标书图表生成、双层覆盖率与全文一致性核验、锁定版本集合的 DOCX/PDF 套版导出（对应缺口 #6、#7、#8）
@@ -37,7 +37,7 @@
   - `Guard` 仅拦截 `PreToolUse` / `PostToolUse`，`Guard.Stop()` 恒返回不干预；
   - `intercept_pending` 受执行 Context 与 `waiter_until` 心跳约束，仅用于短时在途工具审批，**不可替代跨重启、跨天的大纲/章节持久化业务审批状态机**。
 - `server/`：REST API 路由（`server/http.go`）、单任务 SSE 实时流（`GET /api/tasks/{id}/events`）与 Bearer Token 鉴权中间件。
-- `web/`：（Phase 3 起）React 19 + TypeScript + Vite + Tailwind CSS 前端工作台。
+- `web/`：React 19 + TypeScript + Vite + Tailwind CSS v4 前端工作台（`npm run build` 产物 `web/dist` 由服务端按 `AUTOBID_WEB_DIR` 托管；开发时 `npm run dev` 代理 `/api` 到 `127.0.0.1:8080`）。
 
 ---
 

@@ -56,7 +56,7 @@
 
 | 缺口编号 | 用户侧目标能力 | 当前真实状态 | 目标阶段 | 核心工程落点（PostgreSQL Schema / Tools / API / 状态机） |
 | :--- | :--- | :--- | :--- | :--- |
-| **#9** | **投标人员使用的网页工作台** | 未实现前端；后端已有核心审查接口，缺少量配套接口 | **Phase 3** | 新增 `web/` 单团队审查工作台（对接真实 `/api/tasks/{id}/*` 路由）；本阶段同步补齐企业资料按 ID 全量更新/删除与报告 Markdown 导出等配套能力 |
+| **#9** | **投标人员使用的网页工作台** | ✅ 已实现（Phase 3）：`web/` 工作台 + 资信按 ID 更新/删除、报告 Markdown 导出、静态托管 | **Phase 3** | 新增 `web/` 单团队审查工作台（对接真实 `/api/tasks/{id}/*` 路由）；本阶段同步补齐企业资料按 ID 全量更新/删除与报告 Markdown 导出等配套能力 |
 | **#1** | **上传 PDF、Word、扫描件并准确解析** | `POST /api/tasks/{id}/documents` 仅接收纯文本 `text` | **Phase 4** | 扩展 `ingest/` 与文档上传接口：支持 `multipart/form-data` 上传 `.docx`/`.pdf`/扫描件、OCR 接口、跨页表格结构化还原（Markdown + JSON）及页码/坐标溯源 |
 | **#4** | **复用企业方案、历史标书、产品资料** | 仅有结构化 `company_credentials` 表 | **Phase 4** | 在 `db/schema.sql` 新增 PostgreSQL `knowledge_documents` / `knowledge_chunks`（基于 `tsvector` GIN 全文索引 + `pgvector`/向量检索）；新增 `kb_search_*` 工具与管理 API |
 | **#2** | **根据评分标准生成技术标目录** | 无要求清单汇总表，无大纲结构与持久化确认流程 | **Phase 5** | 新增 `requirement_items`（可复核要求清单）与 `proposal_outlines` / `proposal_sections` 表；实现版本化大纲持久化审批状态机（非 `intercept` 临时挂起） |
@@ -72,7 +72,11 @@
 ## 四、 分阶段实施规范与可执行验收标准 (Phased Execution Plan)
 
 ### Phase 3：单团队标书合规审查工作台 (Web Console) — 对应缺口 #9
-- **状态**：`[ ] 待实施（下一步由 Claude 执行）`
+- **状态**：`[x] 已完成（2026-10-28）`
+- **交付记录**：
+  - 后端：`db.UpdateCompanyCredential` / `db.DeleteCompanyCredential` 与 `PUT/DELETE /api/company/credentials/{id}`（attributes 整体替换；不存在 404，`(category, code)` 冲突 409）；`GET /api/tasks/{id}/report?format=markdown`（`db/report_markdown.go`）；`server/static.go` 托管 `AUTOBID_WEB_DIR`（默认 `web/dist`）并做 SPA 回退（`/api`、`/healthz` 不回退）。
+  - 前端：`web/`（React 19 + TypeScript + Vite + Tailwind CSS v4 + lucide-react）：令牌设置与 401 提示、健康状态栏、任务生命周期、文档导入与章节目录树、推演态势与工作槽控制、SSE 活动流（断线重连后重拉 overview / intercepts）、工具审批面板与审计、要素与结论、审查报告（JSON / Markdown 下载）、企业资信库增删改查、LLM 配置/绑定/配额链/用量，以及 Phase 4~6 规划占位页。
+  - 验证：`go vet ./...` 与 `go test ./...`（`AUTOBID_TEST_DATABASE_URL` 指向真实 PostgreSQL）全部通过；`cd web && npm run build` 零错误；本地联调覆盖令牌鉴权、任务创建、文档导入、SSE 断线重连恢复与资信原位编辑。注：当前 Windows 环境无 cgo/gcc，`go test -race` 未能执行。
 - **阶段边界定位**：先交付**真实可用的单团队招标审查工作台**，100% 对接 Phase 1 ~ 2 已实现的后端能力，并为 Phase 4 ~ 6（知识库、大纲与写标、成稿导出）预留清晰的导航扩展位（标注规划阶段，不伪造未实现的后端假功能）。
 - **接口契约区分**：
   1. **直接对接的现有接口（`server/http.go`）**：

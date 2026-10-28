@@ -7,6 +7,7 @@
 //	AUTOBID_API_TOKEN      非空时 /api 需要 Bearer 鉴权（监听非回环地址时强烈建议设置）
 //	AUTOBID_WORKERS        每任务 Worker 槽数，默认 3
 //	AUTOBID_RECORD_BODIES  为 1/true 时录制 LLM 原始请求/响应正文（不含请求头）
+//	AUTOBID_WEB_DIR        前端工作台构建产物目录，默认 web/dist；目录内无 index.html 时不托管
 //	模型密钥按各 Profile 的 api_key_env 从环境变量读取。
 package main
 
@@ -61,6 +62,10 @@ func run(logger *slog.Logger) error {
 		}
 	}
 	workers, _ := strconv.Atoi(os.Getenv("AUTOBID_WORKERS"))
+	webDir := os.Getenv("AUTOBID_WEB_DIR")
+	if webDir == "" {
+		webDir = "web/dist"
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -133,7 +138,7 @@ func run(logger *slog.Logger) error {
 	logger.Info("engine started", "resumed_tasks", resumed)
 
 	// 4. HTTP/SSE 控制面。WriteTimeout 为 0：SSE 是长连接，单个处理器自行控制生命周期。
-	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token})
+	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir})
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),
@@ -143,7 +148,7 @@ func run(logger *slog.Logger) error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		logger.Info("http listening", "addr", addr)
+		logger.Info("http listening", "addr", addr, "web_dir", webDir)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,6 +26,8 @@ type APIConfig struct {
 	Token string
 	// SSEHeartbeat 是 SSE 保活注释间隔，默认 15s。
 	SSEHeartbeat time.Duration
+	// WebDir 为前端构建产物目录（含 index.html）时托管静态文件；为空或不存在时不托管。
+	WebDir string
 }
 
 type API struct {
@@ -86,6 +89,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/documents", a.withTask(a.listDocuments))
 	mux.HandleFunc("POST /api/company/credentials", a.upsertCredentials)
 	mux.HandleFunc("GET /api/company/credentials", a.listCredentials)
+	mux.HandleFunc("PUT /api/company/credentials/{credID}", a.updateCredential)
+	mux.HandleFunc("DELETE /api/company/credentials/{credID}", a.deleteCredential)
 
 	// LLM 配置与配额链
 	mux.HandleFunc("GET /api/llm/profiles", a.listProfiles)
@@ -107,6 +112,11 @@ func (a *API) Handler() http.Handler {
 
 	// 实时活动流
 	mux.HandleFunc("GET /api/tasks/{id}/events", a.withTask(a.events))
+
+	// 前端工作台静态产物（web/dist）与 SPA 路由回退
+	if spa := newSPAHandler(a.cfg.WebDir); spa != nil {
+		mux.Handle("/", spa)
+	}
 
 	return a.auth(mux)
 }
@@ -166,7 +176,7 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, he.status, he.err)
 	case errors.Is(err, db.ErrNotFound), errors.Is(err, intercept.ErrNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, errWorkControlConflict), errors.Is(err, intercept.ErrAlreadyDecided):
+	case errors.Is(err, errWorkControlConflict), errors.Is(err, intercept.ErrAlreadyDecided), errors.Is(err, db.ErrCredentialConflict):
 		writeError(w, http.StatusConflict, err)
 	case errors.Is(err, intercept.ErrWaiterGone):
 		writeError(w, http.StatusGone, err)
@@ -1035,19 +1045,9 @@ func (a *API) upsertCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, c := range reqs {
-		if strings.TrimSpace(c.Category) == "" || strings.TrimSpace(c.Title) == "" {
-			fail(w, badRequest("credential %d: category and title are required", i))
+		if err := validateCredential(c); err != nil {
+			fail(w, badRequest("credential %d: %v", i, err))
 			return
-		}
-		if len(c.Attributes) > 0 && !strings.HasPrefix(strings.TrimSpace(string(c.Attributes)), "{") {
-			fail(w, badRequest("credential %d: attributes must be a JSON object", i))
-			return
-		}
-		if c.ValidUntil != nil && *c.ValidUntil != "" {
-			if _, err := time.Parse(time.DateOnly, *c.ValidUntil); err != nil {
-				fail(w, badRequest("credential %d: valid_until must be YYYY-MM-DD", i))
-				return
-			}
 		}
 	}
 	type result struct {
@@ -1065,6 +1065,60 @@ func (a *API) upsertCredentials(w http.ResponseWriter, r *http.Request) {
 		out = append(out, result{saved, created})
 	}
 	writeJSON(w, http.StatusCreated, out)
+}
+
+// validateCredential 校验单条企业资料请求的必填项、attributes 形状与有效期格式。
+func validateCredential(c credentialReq) error {
+	if strings.TrimSpace(c.Category) == "" || strings.TrimSpace(c.Title) == "" {
+		return badRequest("category and title are required")
+	}
+	if attrs := strings.TrimSpace(string(c.Attributes)); attrs != "" && attrs != "null" && !strings.HasPrefix(attrs, "{") {
+		return badRequest("attributes must be a JSON object")
+	}
+	if c.ValidUntil != nil && *c.ValidUntil != "" {
+		if _, err := time.Parse(time.DateOnly, *c.ValidUntil); err != nil {
+			return badRequest("valid_until must be YYYY-MM-DD")
+		}
+	}
+	return nil
+}
+
+// updateCredential 按 id 全量更新企业资料：attributes 整体替换，valid_until 省略或为空表示长期有效。
+func (a *API) updateCredential(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "credID")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var req credentialReq
+	if err := decodeBody(r, &req); err != nil {
+		fail(w, err)
+		return
+	}
+	if err := validateCredential(req); err != nil {
+		fail(w, err)
+		return
+	}
+	saved, err := a.pg.UpdateCompanyCredential(r.Context(), &db.CompanyCredential{ID: id, Category: req.Category, Code: req.Code,
+		Title: req.Title, Attributes: req.Attributes, ValidUntil: req.ValidUntil})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
+
+func (a *API) deleteCredential(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "credID")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := a.pg.DeleteCompanyCredential(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // listCredentials 查询企业资料：?category=&q=（空格分隔，任一命中）&valid_on=YYYY-MM-DD&limit=
@@ -1090,11 +1144,23 @@ func (a *API) listCredentials(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, creds)
 }
 
-// report 导出任务的结构化推演报告。
+// report 导出任务的结构化推演报告：默认 JSON，?format=markdown 返回 Markdown 审查报告。
 func (a *API) report(w http.ResponseWriter, r *http.Request, t *Task) {
+	format := r.URL.Query().Get("format")
+	if format != "" && format != "json" && format != "markdown" {
+		fail(w, badRequest("format must be json or markdown"))
+		return
+	}
 	rep, err := a.pg.TaskReport(r.Context(), t.ID)
 	if err != nil {
 		fail(w, err)
+		return
+	}
+	if format == "markdown" {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="task-%d-report.md"`, t.ID))
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, rep.Markdown())
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)

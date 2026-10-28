@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TenderDocument 是任务上传的一份招标文件；列表接口不回传 RawText。
@@ -278,6 +280,61 @@ func (d *DB) UpsertCompanyCredential(ctx context.Context, c *CompanyCredential) 
 		out.ValidUntil = &vu.String
 	}
 	return &out, created, nil
+}
+
+// ErrCredentialConflict 表示修改后的 (category, code) 与另一条记录冲突。
+var ErrCredentialConflict = errors.New("db: credential (category, code) already exists")
+
+// UpdateCompanyCredential 按主键全量替换一条企业资料：category/code/title/valid_until 以新值为准，
+// attributes 整体替换（不做 JSONB 合并），因此可删除旧属性键、修改分类与编号、编辑 code 为空的记录。
+// 记录不存在返回 ErrNotFound；新 (category, code) 与其他记录冲突返回 ErrCredentialConflict。
+func (d *DB) UpdateCompanyCredential(ctx context.Context, c *CompanyCredential) (*CompanyCredential, error) {
+	category, code, title := strings.TrimSpace(c.Category), strings.TrimSpace(c.Code), strings.TrimSpace(c.Title)
+	if c.ID <= 0 || category == "" || title == "" {
+		return nil, errors.New("db: credential id, category and title are required")
+	}
+	if string(c.Attributes) == "null" {
+		c.Attributes = nil
+	}
+	attrs, err := marshalPayload(c.Attributes)
+	if err != nil {
+		return nil, err
+	}
+	var valid any
+	if c.ValidUntil != nil && strings.TrimSpace(*c.ValidUntil) != "" {
+		v := strings.TrimSpace(*c.ValidUntil)
+		if _, err := time.Parse(time.DateOnly, v); err != nil {
+			return nil, fmt.Errorf("db: valid_until must be YYYY-MM-DD: %q", v)
+		}
+		valid = v
+	}
+	out, err := scanCredential(d.QueryRowContext(ctx, `UPDATE company_credentials
+		SET category = $2, code = $3, title = $4, attributes = $5::jsonb, valid_until = $6::date
+		WHERE id = $1 RETURNING `+credentialCols, c.ID, category, code, title, string(attrs), valid))
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, fmt.Errorf("%w: credential %d", ErrNotFound, c.ID)
+	case errors.As(err, &pgErr) && pgErr.Code == "23505":
+		return nil, fmt.Errorf("%w: (%s, %s)", ErrCredentialConflict, category, code)
+	}
+	return out, err
+}
+
+// DeleteCompanyCredential 按主键删除一条企业资料；不存在返回 ErrNotFound。
+func (d *DB) DeleteCompanyCredential(ctx context.Context, id int64) error {
+	res, err := d.ExecContext(ctx, `DELETE FROM company_credentials WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: credential %d", ErrNotFound, id)
+	}
+	return nil
 }
 
 // CredentialFilter 过滤企业资料：Terms 任一命中 code/title/attributes 文本（不区分大小写）即入选。

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -310,5 +311,117 @@ func TestBidToolsSkillDisclosureEndToEnd(t *testing.T) {
 	}
 	if ev.NodeID != worker.factID || ev.Summary != "资质核验结论："+bidtools.VerdictSatisfied || factRef != findingRef {
 		t.Fatalf("evidence: %+v", ev)
+	}
+}
+
+func TestHTTPCredentialUpdateDeleteAndMarkdownReport(t *testing.T) {
+	c, _ := newIdleAPI(t)
+	tag := fmt.Sprintf("cred-upd-%d", time.Now().UnixNano())
+	var saved []struct {
+		db.CompanyCredential
+		Created bool `json:"created"`
+	}
+	creds := []map[string]any{
+		{"category": "qualification", "code": tag + "-a", "title": "资质 A " + tag, "attributes": map[string]any{"level": "一级", "old": "x"}, "valid_until": "2030-01-01"},
+		{"category": "qualification", "code": tag + "-b", "title": "资质 B " + tag},
+		{"category": "personnel", "title": "项目经理 " + tag, "attributes": map[string]any{"title": "高级工程师", "age": 40}},
+	}
+	if code := c.do("POST", "/api/company/credentials", creds, &saved); code != 201 || len(saved) != 3 {
+		t.Fatalf("create credentials: %d %+v", code, saved)
+	}
+	a, b, person := saved[0], saved[1], saved[2]
+
+	// 全量更新：attributes 整体替换（旧键 old 被删除），valid_until 省略即清空，分类与编号可改。
+	var upd db.CompanyCredential
+	if code := c.do("PUT", fmt.Sprintf("/api/company/credentials/%d", a.ID), map[string]any{"category": "certificate", "code": tag + "-a2",
+		"title": "体系认证 " + tag, "attributes": map[string]any{"level": "特级"}}, &upd); code != 200 {
+		t.Fatalf("update credential: %d", code)
+	}
+	var attrs map[string]any
+	_ = json.Unmarshal(upd.Attributes, &attrs)
+	if upd.ID != a.ID || upd.Category != "certificate" || upd.Code != tag+"-a2" || upd.ValidUntil != nil ||
+		len(attrs) != 1 || attrs["level"] != "特级" {
+		t.Fatalf("updated credential: %+v attrs=%v", upd, attrs)
+	}
+
+	// 无编号的人员记录按 id 编辑，并删除全部属性。
+	var updPerson db.CompanyCredential
+	if code := c.do("PUT", fmt.Sprintf("/api/company/credentials/%d", person.ID), map[string]any{"category": "personnel",
+		"title": "项目经理（已更新） " + tag, "attributes": map[string]any{}, "valid_until": "2031-06-30"}, &updPerson); code != 200 {
+		t.Fatalf("update personnel: %d", code)
+	}
+	if updPerson.ID != person.ID || updPerson.Code != "" || string(updPerson.Attributes) != "{}" || updPerson.ValidUntil == nil ||
+		*updPerson.ValidUntil != "2031-06-30" || !strings.Contains(updPerson.Title, "已更新") {
+		t.Fatalf("updated personnel: %+v attrs=%s", updPerson, updPerson.Attributes)
+	}
+
+	// 修改后的 (category, code) 与 B 冲突 → 409；不存在 → 404；非法输入 → 400。
+	if code := c.do("PUT", fmt.Sprintf("/api/company/credentials/%d", a.ID), map[string]any{"category": "qualification",
+		"code": tag + "-b", "title": "冲突"}, nil); code != 409 {
+		t.Fatalf("conflicting update: %d", code)
+	}
+	if code := c.do("PUT", "/api/company/credentials/999999999", map[string]any{"category": "x", "title": "y"}, nil); code != 404 {
+		t.Fatalf("update missing credential: %d", code)
+	}
+	if code := c.do("PUT", fmt.Sprintf("/api/company/credentials/%d", a.ID), map[string]any{"category": "x", "title": "y",
+		"attributes": []int{1}}, nil); code != 400 {
+		t.Fatalf("non-object attributes: %d", code)
+	}
+	if code := c.do("PUT", fmt.Sprintf("/api/company/credentials/%d", a.ID), map[string]any{"title": "y"}, nil); code != 400 {
+		t.Fatalf("missing category: %d", code)
+	}
+	if code := c.do("PUT", "/api/company/credentials/abc", map[string]any{"category": "x", "title": "y"}, nil); code != 400 {
+		t.Fatalf("invalid id: %d", code)
+	}
+
+	// 删除：成功 204，再删 404；列表只剩两条。
+	if code := c.do("DELETE", fmt.Sprintf("/api/company/credentials/%d", b.ID), nil, nil); code != 204 {
+		t.Fatalf("delete credential: %d", code)
+	}
+	if code := c.do("DELETE", fmt.Sprintf("/api/company/credentials/%d", b.ID), nil, nil); code != 404 {
+		t.Fatalf("delete missing credential: %d", code)
+	}
+	var list []db.CompanyCredential
+	if code := c.do("GET", "/api/company/credentials?q="+tag, nil, &list); code != 200 || len(list) != 2 {
+		t.Fatalf("list after delete: %d %+v", code, list)
+	}
+
+	// 报告 Markdown 导出。
+	tender := fmt.Sprintf("ZB-MD-%d", time.Now().UnixNano())
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if code := c.do("POST", "/api/tasks", map[string]any{"name": "md-task", "goal": "完成资格审查",
+		"scopes": []map[string]string{{"tender_no": tender}}}, &created); code != 201 {
+		t.Fatalf("create task: %d", code)
+	}
+	base := fmt.Sprintf("/api/tasks/%d", created.ID)
+	if code := c.do("POST", base+"/documents", map[string]any{"tender_no": tender, "title": "招标文件", "text": bidTenderText}, nil); code != 201 {
+		t.Fatalf("upload: %d", code)
+	}
+	req, _ := http.NewRequest("GET", c.url+base+"/report?format=markdown", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	md := string(raw)
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/markdown") {
+		t.Fatalf("markdown report: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	for _, want := range []string{"# 标书合规审查报告：md-task", "## 一、总体指标", "| 招标文档 | 1 |", "## 三、强制性条款核验清单",
+		"## 六、审查结论与证据链", "完成资格审查"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
+	}
+	var rep db.TaskReport
+	if code := c.do("GET", base+"/report?format=json", nil, &rep); code != 200 || rep.Task.ID != created.ID {
+		t.Fatalf("json report: %d", code)
+	}
+	if code := c.do("GET", base+"/report?format=pdf", nil, nil); code != 400 {
+		t.Fatalf("unsupported format: %d", code)
 	}
 }

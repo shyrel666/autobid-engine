@@ -9,6 +9,7 @@ import (
 
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/internal/tool"
+	"github.com/autobid/autobid-engine/retrieval"
 )
 
 // 常驻工具名。
@@ -23,18 +24,38 @@ const (
 	ToolQueryCredentials = "query_company_credentials"
 	ToolSimulateScoring  = "simulate_scoring_table"
 	ToolVerifyCommercial = "verify_commercial_bid"
+	// 企业方案知识库（knowledge-reuse 技能）
+	ToolKBSearchProposals = "kb_search_proposals"
+	ToolKBSearchProducts  = "kb_search_products"
+	ToolKBReadChunk       = "kb_read_chunk"
 )
 
-// Kit 绑定一个任务：文档检索只读该任务的 document_chunks，要素与事实读取走任务的 AssetStore / ExplorationStore。
+// Kit 绑定一个任务：文档检索只读该任务的 document_chunks，要素与事实读取走任务的 AssetStore / ExplorationStore；
+// 知识库检索按 tenant 隔离（Phase 7 前为默认租户），向量召回使用 emb。
 type Kit struct {
-	pg     *db.DB
-	taskID int64
-	as     *db.AssetStore
-	es     *db.ExplorationStore
+	pg        *db.DB
+	taskID    int64
+	as        *db.AssetStore
+	es        *db.ExplorationStore
+	tenant    string
+	emb       db.Embedder
+	retrieval *retrieval.Service
+	research  *retrieval.Coordinator
 }
 
+func (k *Kit) WithRetrieval(s *retrieval.Service) *Kit { k.retrieval = s; return k }
+
 func New(pg *db.DB, taskID int64, as *db.AssetStore, es *db.ExplorationStore) *Kit {
-	return &Kit{pg: pg, taskID: taskID, as: as, es: es}
+	return &Kit{pg: pg, taskID: taskID, as: as, es: es, tenant: db.DefaultTenant, emb: db.DefaultEmbedder()}
+}
+
+// WithKnowledge 设置知识库租户与向量器（emb 为 nil 时只做全文 + 关键词检索）。
+func (k *Kit) WithKnowledge(tenant string, emb db.Embedder) *Kit {
+	if tenant != "" {
+		k.tenant = tenant
+	}
+	k.emb = emb
+	return k
 }
 
 // ResidentTools 返回常驻文档精读工具。
@@ -44,7 +65,8 @@ func (k *Kit) ResidentTools() []tool.CoreTool {
 
 // DeferredTools 返回专业延迟工具；它们只注册、不下发 Schema。
 func (k *Kit) DeferredTools() []tool.CoreTool {
-	return []tool.CoreTool{k.queryCredentialsTool(), k.simulateScoringTool(), k.verifyCommercialTool()}
+	return append([]tool.CoreTool{k.queryCredentialsTool(), k.simulateScoringTool(), k.verifyCommercialTool(),
+		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool()}, append(k.proposalTools(), k.retrievalTools()...)...)
 }
 
 // ---------------------------------------------------------------------------

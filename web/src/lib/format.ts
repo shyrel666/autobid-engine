@@ -64,3 +64,43 @@ export const severityOrder = ['critical', 'high', 'medium', 'low', 'info']
 export const credentialCategoryLabel: Record<string, string> = {
   qualification: '企业资质', performance: '项目业绩', personnel: '人员证书', financial: '财务信誉', certificate: '体系认证',
 }
+
+export const knowledgeCategoryLabel: Record<string, string> = {
+  historical_bid: '历史标书', whitepaper: '技术白皮书', product_spec: '产品规格书', standard_solution: '标准技术方案',
+}
+
+// pageRange 把页码范围格式化为 "P3" 或 "P3–5"。
+export function pageRange(start?: number, end?: number): string {
+  if (!start) return 'P—'
+  return end && end > start ? `P${start}–${end}` : `P${start}`
+}
+
+export const docFormatLabel: Record<string, string> = {
+  text: '纯文本', markdown: 'Markdown', docx: 'Word (.docx)', pdf: 'PDF', image: '扫描图片 (OCR)',
+}
+
+export const requirementCategoryLabel: Record<string, string> = {
+  scoring_item: '评分项', mandatory_clause: '★ 强制条款', non_scoring_required: '非评分必答项', format_attachment: '格式与附件',
+}
+
+export const reviewStatusLabel: Record<string, string> = { draft: '待复核', confirmed: '已确认', needs_revision: '原文已变·需复核' }
+
+export const manifestStatusLabel: Record<string, string> = { draft: '未确认', confirmed: '已确认完整', stale: '已变更·需重新确认' }
+
+export const outlineStatusLabel: Record<string, string> = {
+  draft: '草稿', pending_approval: '待审批', approved: '已批准', superseded: '已取代',
+}
+
+export const sectionStatusLabel: Record<string, string> = {
+  pending: '等待前置章节', ready: '可写作', writing: '撰写中', draft: '草稿', reviewing: '待审核', approved: '已定稿',
+  rejected: '已驳回', stale_outline: '大纲已失效', stale_evidence: '证据已失效',
+}
+
+export const revisionSourceLabel: Record<string, string> = {
+  ai_initial: 'AI 初稿', ai_rewrite: 'AI 重写', human_edit: '人工编辑', rollback: '回滚',
+}
+
+export const revisionStatusLabel: Record<string, string> = {
+  draft: '草稿', reviewing: '待审核', approved: '曾批准', rejected: '已驳回', stale_outline: '大纲过期候选稿',
+  stale_evidence: '证据失效', conflict_candidate: '冲突候选稿',
+}

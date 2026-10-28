@@ -20,6 +20,7 @@ import (
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
+	"github.com/autobid/autobid-engine/retrieval"
 )
 
 type APIConfig struct {
@@ -28,6 +29,13 @@ type APIConfig struct {
 	SSEHeartbeat time.Duration
 	// WebDir 为前端构建产物目录（含 index.html）时托管静态文件；为空或不存在时不托管。
 	WebDir string
+	// OCR 识别扫描件与无文本层 PDF 页面；为 nil 时扫描件上传返回 422。
+	OCR ingest.OCRProvider
+	// Embedder 为知识库分块与检索生成向量；为 nil 时使用 db.DefaultEmbedder()。
+	Embedder  db.Embedder
+	Retrieval *retrieval.Service
+	// SectionWriter 执行章节 AI 撰写；为 nil 时使用任务 Worker 模型（无可用 Profile 时派发返回 503）。
+	SectionWriter SectionWriter
 }
 
 type API struct {
@@ -44,6 +52,9 @@ type API struct {
 func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *intercept.Interceptor, hub *Hub, cfg APIConfig) *API {
 	if cfg.SSEHeartbeat <= 0 {
 		cfg.SSEHeartbeat = 15 * time.Second
+	}
+	if cfg.Retrieval == nil {
+		cfg.Retrieval = retrieval.New(m.DB(), nil, nil)
 	}
 	return &API{runCtx: runCtx, m: m, e: e, llm: svc, ic: ic, hub: hub, pg: m.DB(), cfg: cfg}
 }
@@ -91,6 +102,25 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/company/credentials", a.listCredentials)
 	mux.HandleFunc("PUT /api/company/credentials/{credID}", a.updateCredential)
 	mux.HandleFunc("DELETE /api/company/credentials/{credID}", a.deleteCredential)
+
+	// 企业方案知识库（Phase 4）
+	mux.HandleFunc("GET /api/knowledge/documents", a.listKnowledge)
+	mux.HandleFunc("POST /api/knowledge/documents", a.uploadKnowledge)
+	mux.HandleFunc("GET /api/knowledge/documents/{kid}", a.getKnowledge)
+	mux.HandleFunc("DELETE /api/knowledge/documents/{kid}", a.deleteKnowledge)
+	mux.HandleFunc("GET /api/knowledge/search", a.searchKnowledge)
+	mux.HandleFunc("GET /api/knowledge/indexes", a.listKnowledgeIndexes)
+	mux.HandleFunc("POST /api/knowledge/indexes", a.buildKnowledgeIndex)
+	mux.HandleFunc("POST /api/knowledge/indexes/{indexID}/activate", a.activateKnowledgeIndex)
+	mux.HandleFunc("GET /api/retrieval/runs/{runID}", a.getRetrievalRun)
+	mux.HandleFunc("POST /api/tasks/{id}/research", a.withTask(a.researchTask))
+	mux.HandleFunc("GET /api/tasks/{id}/retrieval-runs", a.withTask(a.taskRetrievalRuns))
+	mux.HandleFunc("POST /api/retrieval/runs/{runID}/cancel", a.cancelRetrievalRun)
+	mux.HandleFunc("GET /api/retrieval/runs/{runID}/evidence", a.getRetrievalEvidence)
+	mux.HandleFunc("POST /api/retrieval/runs/{runID}/evidence/{evidenceID}/verify", a.verifyRetrievalEvidence)
+
+	// 投标要求清单、技术标大纲审批与章节写作（Phase 5）
+	a.registerProposalRoutes(mux)
 
 	// LLM 配置与配额链
 	mux.HandleFunc("GET /api/llm/profiles", a.listProfiles)
@@ -180,8 +210,13 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err)
 	case errors.Is(err, intercept.ErrWaiterGone):
 		writeError(w, http.StatusGone, err)
-	case errors.Is(err, db.ErrInvalidDigest), errors.Is(err, db.ErrInvalidEdge), errors.Is(err, db.ErrForeignNode):
+	case errors.Is(err, db.ErrInvalidDigest), errors.Is(err, db.ErrInvalidEdge), errors.Is(err, db.ErrForeignNode),
+		errors.Is(err, db.ErrInvalidKnowledge), errors.Is(err, ingest.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, err)
+	case errors.Is(err, ingest.ErrUnsupportedFormat):
+		writeError(w, http.StatusUnsupportedMediaType, err)
+	case errors.Is(err, ingest.ErrOCRUnavailable), errors.Is(err, ingest.ErrNoText):
+		writeError(w, http.StatusUnprocessableEntity, err)
 	case errors.Is(err, context.DeadlineExceeded):
 		writeError(w, http.StatusGatewayTimeout, err)
 	default:
@@ -937,7 +972,7 @@ func (a *API) events(w http.ResponseWriter, r *http.Request, t *Task) {
 // 招标文档、企业资料库与推演报告
 // ---------------------------------------------------------------------------
 
-// maxDocumentBody 是招标文档上传的请求体上限（文本形式，32 MiB）。
+// maxDocumentBody 是招标文档 / 知识库 JSON 文本上传的请求体上限（32 MiB）；multipart 文件上传见 maxUploadBytes。
 const maxDocumentBody = 32 << 20
 
 type uploadDocumentReq struct {
@@ -946,35 +981,6 @@ type uploadDocumentReq struct {
 	Title       string `json:"title"`
 	Text        string `json:"text"`
 	WakePlanner bool   `json:"wake_planner"`
-}
-
-// uploadDocument 切分并入库招标文档；wake_planner 为 true 且产生了新文档时向 Planner 投递 document_added 触发。
-func (a *API) uploadDocument(w http.ResponseWriter, r *http.Request, t *Task) {
-	var req uploadDocumentReq
-	if err := decodeBodyLimit(r, &req, maxDocumentBody); err != nil {
-		fail(w, err)
-		return
-	}
-	if strings.TrimSpace(req.TenderNo) == "" || strings.TrimSpace(req.Text) == "" {
-		fail(w, badRequest("tender_no and text are required"))
-		return
-	}
-	res, err := ingest.Ingest(r.Context(), a.pg, t.Assets, ingest.Input{TenderNo: req.TenderNo, LotNo: req.LotNo, Title: req.Title, Text: req.Text})
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	woke := false
-	if req.WakePlanner && res.Created {
-		t.NotifyDocument(fmt.Sprintf("#%d %s（招标编号 %s）", res.Document.ID, res.Document.Title, res.Document.TenderNo),
-			fmt.Sprintf("%d 个章节/条款，其中 %d 个强制性条款", res.Chunks, res.Mandatory))
-		woke = true
-	}
-	status := http.StatusCreated
-	if !res.Created {
-		status = http.StatusOK
-	}
-	writeJSON(w, status, map[string]any{"result": res, "planner_notified": woke})
 }
 
 // listDocuments 列出任务的招标文档及其章节切分；?content=1 时附带段落正文。

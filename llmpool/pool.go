@@ -119,6 +119,9 @@ func (p *Pool) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Mes
 	for _, m := range p.candidates(req) {
 		msg, stop, usage, err := m.Prov.Complete(ctx, req)
 		p.record(m, err)
+		if llm.SingleAttempt(ctx) {
+			return msg, stop, usage, err
+		}
 		if err == nil {
 			return msg, stop, usage, nil
 		}

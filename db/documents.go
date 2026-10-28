@@ -16,32 +16,56 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// DefaultTenant 是 Phase 7 多租户落地前所有业务数据归属的租户。
+const DefaultTenant = "default"
+
 // TenderDocument 是任务上传的一份招标文件；列表接口不回传 RawText。
+// FileName / MimeType / PageCount / ParseMeta 记录原始文件来源与解析过程（纯文本上传时为空）。
 type TenderDocument struct {
-	ID          int64     `json:"id"`
-	TaskID      int64     `json:"task_id"`
-	TenderNo    string    `json:"tender_no"`
-	LotNo       string    `json:"lot_no,omitempty"`
-	Title       string    `json:"title"`
-	RawText     string    `json:"raw_text,omitempty"`
-	ContentHash string    `json:"content_hash"`
-	ChunkCount  int       `json:"chunk_count"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          int64           `json:"id"`
+	TenantID    string          `json:"tenant_id"`
+	TaskID      int64           `json:"task_id"`
+	TenderNo    string          `json:"tender_no"`
+	LotNo       string          `json:"lot_no,omitempty"`
+	Title       string          `json:"title"`
+	FileName    string          `json:"file_name,omitempty"`
+	MimeType    string          `json:"mime_type,omitempty"`
+	PageCount   int             `json:"page_count,omitempty"`
+	ParseMeta   json.RawMessage `json:"parse_meta,omitempty"`
+	RawText     string          `json:"raw_text,omitempty"`
+	ContentHash string          `json:"content_hash"`
+	ChunkCount  int             `json:"chunk_count"`
+	CreatedBy   string          `json:"created_by,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
 }
 
-// DocumentChunk 是按章节/条款切分的段落；大纲查询不回传 Content。
+// DocumentChunk 是按章节/条款切分的段落；大纲查询不回传 Content / Tables / BBoxMeta。
+// PageNo 为起始页（兼容旧接口），PageStart~PageEnd 为段落跨越的页码范围。
 type DocumentChunk struct {
-	ID            int64  `json:"id"`
-	DocID         int64  `json:"doc_id"`
-	TaskID        int64  `json:"task_id"`
-	Seq           int    `json:"seq"`
-	Level         int    `json:"level"`
-	SectionCode   string `json:"section_code"`
-	SectionTitle  string `json:"section_title"`
-	PageNo        int    `json:"page_no"`
-	Content       string `json:"content,omitempty"`
-	TokenEstimate int    `json:"token_estimate"`
-	IsMandatory   bool   `json:"is_mandatory"`
+	ID            int64           `json:"id"`
+	DocID         int64           `json:"doc_id"`
+	TaskID        int64           `json:"task_id"`
+	Seq           int             `json:"seq"`
+	Level         int             `json:"level"`
+	SectionCode   string          `json:"section_code"`
+	SectionTitle  string          `json:"section_title"`
+	PageNo        int             `json:"page_no"`
+	PageStart     int             `json:"page_start"`
+	PageEnd       int             `json:"page_end"`
+	Content       string          `json:"content,omitempty"`
+	TokenEstimate int             `json:"token_estimate"`
+	IsMandatory   bool            `json:"is_mandatory"`
+	TableCount    int             `json:"table_count"`
+	Tables        json.RawMessage `json:"tables,omitempty"`
+	BBoxMeta      json.RawMessage `json:"bbox_meta,omitempty"`
+}
+
+// jsonOr 返回 raw，为空时返回 def（写入 JSONB 列）。
+func jsonOr(raw json.RawMessage, def string) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return def
+	}
+	return string(raw)
 }
 
 // ContentHash 是招标原文的幂等键。
@@ -61,28 +85,38 @@ func (d *DB) InsertTenderDocument(ctx context.Context, doc *TenderDocument, chun
 	if hash == "" {
 		hash = ContentHash(doc.RawText)
 	}
+	tenant := strings.TrimSpace(doc.TenantID)
+	if tenant == "" {
+		tenant = DefaultTenant
+	}
 	err = d.InTx(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx, `
-			INSERT INTO tender_documents(task_id, tender_no, lot_no, title, raw_text, content_hash)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (task_id, tender_no, lot_no, content_hash) DO NOTHING
-			RETURNING id`, doc.TaskID, tenderNo, lotNo, doc.Title, doc.RawText, hash).Scan(&id)
+			INSERT INTO tender_documents(tenant_id, task_id, tender_no, lot_no, title, raw_text, content_hash,
+			                             file_name, mime_type, page_count, parse_meta, created_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, 0), $11::jsonb, NULLIF($12, ''))
+			ON CONFLICT (tenant_id, task_id, tender_no, lot_no, content_hash) DO NOTHING
+			RETURNING id`, tenant, doc.TaskID, tenderNo, lotNo, doc.Title, doc.RawText, hash,
+			doc.FileName, doc.MimeType, doc.PageCount, nullableJSON(doc.ParseMeta), doc.CreatedBy).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return tx.QueryRowContext(ctx, `SELECT id FROM tender_documents
-				WHERE task_id = $1 AND tender_no = $2 AND lot_no = $3 AND content_hash = $4`,
-				doc.TaskID, tenderNo, lotNo, hash).Scan(&id)
+				WHERE tenant_id = $1 AND task_id = $2 AND tender_no = $3 AND lot_no = $4 AND content_hash = $5`,
+				tenant, doc.TaskID, tenderNo, lotNo, hash).Scan(&id)
 		}
 		if err != nil {
 			return err
 		}
 		created = true
 		for _, c := range chunks {
+			start := c.PageStart
+			if start <= 0 {
+				start = max(c.PageNo, 1)
+			}
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO document_chunks(doc_id, task_id, seq, level, section_code, section_title, page_no,
-				                            content, token_estimate, is_mandatory)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-				id, doc.TaskID, c.Seq, c.Level, c.SectionCode, c.SectionTitle, max(c.PageNo, 1),
-				c.Content, c.TokenEstimate, c.IsMandatory); err != nil {
+				                            page_start, page_end, content, token_estimate, is_mandatory, tables_json, bbox_meta)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb)`,
+				id, doc.TaskID, c.Seq, c.Level, c.SectionCode, c.SectionTitle, start, max(c.PageEnd, start),
+				c.Content, c.TokenEstimate, c.IsMandatory, jsonOr(c.Tables, "[]"), jsonOr(c.BBoxMeta, "{}")); err != nil {
 				return fmt.Errorf("insert chunk %d: %w", c.Seq, err)
 			}
 		}
@@ -91,13 +125,29 @@ func (d *DB) InsertTenderDocument(ctx context.Context, doc *TenderDocument, chun
 	return id, created, err
 }
 
-const docCols = `d.id, d.task_id, d.tender_no, d.lot_no, d.title, d.content_hash,
-	(SELECT COUNT(*) FROM document_chunks c WHERE c.doc_id = d.id), d.created_at`
+const docCols = `d.id, d.tenant_id, d.task_id, d.tender_no, d.lot_no, d.title, d.content_hash,
+	(SELECT COUNT(*) FROM document_chunks c WHERE c.doc_id = d.id), d.created_at,
+	COALESCE(d.file_name, ''), COALESCE(d.mime_type, ''), COALESCE(d.page_count, 0), d.parse_meta, COALESCE(d.created_by, '')`
 
 func scanDocument(r rowScanner) (*TenderDocument, error) {
-	var doc TenderDocument
-	err := r.Scan(&doc.ID, &doc.TaskID, &doc.TenderNo, &doc.LotNo, &doc.Title, &doc.ContentHash, &doc.ChunkCount, &doc.CreatedAt)
+	var (
+		doc  TenderDocument
+		meta []byte
+	)
+	err := r.Scan(&doc.ID, &doc.TenantID, &doc.TaskID, &doc.TenderNo, &doc.LotNo, &doc.Title, &doc.ContentHash, &doc.ChunkCount, &doc.CreatedAt,
+		&doc.FileName, &doc.MimeType, &doc.PageCount, &meta, &doc.CreatedBy)
+	if len(meta) > 0 {
+		doc.ParseMeta = meta
+	}
 	return &doc, err
+}
+
+// nullableJSON 把空 JSON 转为 SQL NULL。
+func nullableJSON(raw json.RawMessage) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return string(raw)
 }
 
 // ListTenderDocuments 按上传顺序列出任务的招标文档（不含原文）。
@@ -128,19 +178,30 @@ func (d *DB) GetTenderDocument(ctx context.Context, taskID, docID int64) (*Tende
 	return doc, err
 }
 
-const chunkHeadCols = `id, doc_id, task_id, seq, level, section_code, section_title, page_no, token_estimate, is_mandatory`
+const chunkHeadCols = `id, doc_id, task_id, seq, level, section_code, section_title, page_no, token_estimate, is_mandatory,
+	COALESCE(page_start, page_no), COALESCE(page_end, page_start, page_no), COALESCE(jsonb_array_length(tables_json), 0)`
+
+// chunkBodyCols 跟在 chunkHeadCols 之后，含正文、表格与版面溯源。
+const chunkBodyCols = `content, COALESCE(tables_json, '[]'::jsonb), COALESCE(bbox_meta, '{}'::jsonb)`
 
 func scanChunks(rows *sql.Rows, withContent bool) ([]*DocumentChunk, error) {
 	defer rows.Close()
 	var out []*DocumentChunk
 	for rows.Next() {
-		var c DocumentChunk
-		dest := []any{&c.ID, &c.DocID, &c.TaskID, &c.Seq, &c.Level, &c.SectionCode, &c.SectionTitle, &c.PageNo, &c.TokenEstimate, &c.IsMandatory}
+		var (
+			c             DocumentChunk
+			tables, boxes []byte
+		)
+		dest := []any{&c.ID, &c.DocID, &c.TaskID, &c.Seq, &c.Level, &c.SectionCode, &c.SectionTitle, &c.PageNo, &c.TokenEstimate, &c.IsMandatory,
+			&c.PageStart, &c.PageEnd, &c.TableCount}
 		if withContent {
-			dest = append(dest, &c.Content)
+			dest = append(dest, &c.Content, &tables, &boxes)
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return nil, err
+		}
+		if withContent {
+			c.Tables, c.BBoxMeta = tables, boxes
 		}
 		out = append(out, &c)
 	}
@@ -160,7 +221,7 @@ func (d *DB) DocumentOutline(ctx context.Context, taskID, docID int64, limit int
 
 // TaskChunks 返回任务下段落（含正文），供检索；docID=0 表示全部文档。
 func (d *DB) TaskChunks(ctx context.Context, taskID, docID int64, limit int) ([]*DocumentChunk, error) {
-	rows, err := d.QueryContext(ctx, `SELECT `+chunkHeadCols+`, content FROM document_chunks
+	rows, err := d.QueryContext(ctx, `SELECT `+chunkHeadCols+`, `+chunkBodyCols+` FROM document_chunks
 		WHERE task_id = $1 AND ($2::bigint = 0 OR doc_id = $2::bigint)
 		ORDER BY doc_id, seq LIMIT $3`, taskID, docID, limit)
 	if err != nil {
@@ -173,7 +234,7 @@ func (d *DB) TaskChunks(ctx context.Context, taskID, docID int64, limit int) ([]
 func (d *DB) ChunkWindow(ctx context.Context, taskID, chunkID int64, before, after int) (target *DocumentChunk, window []*DocumentChunk, err error) {
 	rows, err := d.QueryContext(ctx, `
 		WITH t AS (SELECT doc_id, seq FROM document_chunks WHERE id = $1 AND task_id = $2)
-		SELECT `+chunkHeadCols+`, content FROM document_chunks c
+		SELECT `+chunkHeadCols+`, `+chunkBodyCols+` FROM document_chunks c
 		WHERE c.doc_id = (SELECT doc_id FROM t)
 		  AND c.seq BETWEEN (SELECT seq FROM t) - $3 AND (SELECT seq FROM t) + $4
 		ORDER BY c.seq`, chunkID, taskID, max(before, 0), max(after, 0))

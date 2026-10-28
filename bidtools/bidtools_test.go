@@ -270,16 +270,26 @@ func TestSkillsUnlockDeferredTools(t *testing.T) {
 		names[d.Name()] = true
 	}
 	skills := Skills()
-	if len(skills) != 3 {
+	if len(skills) != 5 {
 		t.Fatalf("skills = %d", len(skills))
 	}
+	owned := map[string]string{}
 	for _, sk := range skills {
-		if len(sk.Tools) != 1 || !names[sk.Tools[0]] || sk.Body == "" || sk.Description == "" {
-			t.Fatalf("skill %s must unlock exactly one registered deferred tool: %+v", sk.Name, sk.Tools)
+		if len(sk.Tools) == 0 || sk.Body == "" || sk.Description == "" {
+			t.Fatalf("skill %s must unlock registered deferred tools: %+v", sk.Name, sk.Tools)
 		}
-		if !strings.Contains(sk.Body, "select:"+sk.Tools[0]) {
-			t.Fatalf("skill %s body must explain how to load %s", sk.Name, sk.Tools[0])
+		for _, name := range sk.Tools {
+			if !names[name] || owned[name] != "" {
+				t.Fatalf("skill %s: tool %s must be registered and owned by exactly one skill", sk.Name, name)
+			}
+			owned[name] = sk.Name
+			if !strings.Contains(sk.Body, "select:"+name) {
+				t.Fatalf("skill %s body must explain how to load %s", sk.Name, name)
+			}
 		}
+	}
+	if len(owned) != len(deferred) {
+		t.Fatalf("every deferred tool must belong to a skill: %v", owned)
 	}
 
 	ctx := context.Background()
@@ -300,7 +310,7 @@ func TestSkillsUnlockDeferredTools(t *testing.T) {
 	if !strings.Contains(res.Content, "input_schema") || !strings.Contains(res.Content, "ceiling_price") {
 		t.Fatalf("unlocked tool schema missing: %s", res.Content)
 	}
-	if unlock.IsUnlocked(ToolQueryCredentials) || unlock.IsUnlocked(ToolSimulateScoring) {
+	if unlock.IsUnlocked(ToolQueryCredentials) || unlock.IsUnlocked(ToolSimulateScoring) || unlock.IsUnlocked(ToolKBReadChunk) {
 		t.Fatal("a skill must unlock only its own tool")
 	}
 }
@@ -308,10 +318,16 @@ func TestSkillsUnlockDeferredTools(t *testing.T) {
 func TestResidentToolsAreReadOnly(t *testing.T) {
 	kit := New(nil, 1, nil, nil)
 	for _, tl := range append(kit.ResidentTools(), kit.DeferredTools()...) {
+		if tl.Name() == ToolSectionWriteDraft {
+			if tl.IsReadOnly(nil) {
+				t.Fatalf("%s writes section revisions and must not be read-only", tl.Name())
+			}
+			continue
+		}
 		if !tl.IsReadOnly(nil) || !tl.IsConcurrencySafe(nil) {
 			t.Fatalf("%s should be read-only and concurrency-safe", tl.Name())
 		}
-		if err := tool.ValidateInput(tl.InputSchema(), json.RawMessage(`{}`)); err != nil && tl.Name() != ToolReadChunk && tl.Name() != ToolVerifyCommercial {
+		if err := tool.ValidateInput(tl.InputSchema(), json.RawMessage(`{}`)); err != nil && tl.Name() != ToolReadChunk && tl.Name() != ToolVerifyCommercial && tl.Name() != ToolKBReadChunk {
 			t.Fatalf("%s: unexpected required fields: %v", tl.Name(), err)
 		}
 	}

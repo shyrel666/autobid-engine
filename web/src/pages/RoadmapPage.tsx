@@ -1,4 +1,4 @@
-import { BookOpen, Construction, FileOutput, PenTool } from 'lucide-react'
+import { Construction, FileOutput } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Badge, Card } from '../components/ui'
 
@@ -13,29 +13,8 @@ interface Plan {
 }
 
 // 仅展示 ROADMAP.md 中的规划；这些模块的后端接口尚未实现，本页不调用任何接口、不展示假数据。
+// Phase 5 已落地为任务工作台的「技术标大纲与写作」页签（/proposal），此处只保留 Phase 6。
 const plans: Record<string, Plan> = {
-  phase4: {
-    phase: 'Phase 4', title: '多格式文档解析与企业方案知识库', icon: <BookOpen className="size-5" />, gaps: '缺口 #1、#4',
-    summary: '上传 PDF / Word / 扫描件并还原章节、页码与跨页表格；沉淀历史标书、产品资料与标准方案，供 Worker 检索引用。',
-    items: [
-      'POST /api/tasks/{id}/documents 支持 multipart/form-data 上传 .docx / .pdf / 扫描件（兼容现有 JSON 文本上传）',
-      '章节、页码范围（page_start / page_end）与坐标溯源；跨页表格还原为 JSON + Markdown 表格；可插拔 OCR',
-      'PostgreSQL knowledge_documents / knowledge_chunks（tsvector GIN 全文 + 可选 pgvector 混合检索，含 tenant_id）',
-      'kb_search_proposals、kb_search_products、kb_read_chunk 工具，检索结果强制附带文档名、章节号与页码引用',
-    ],
-    apis: ['知识库文档管理 API（待定义）'],
-  },
-  phase5: {
-    phase: 'Phase 5', title: '要求清单、大纲审批与章节写作', icon: <PenTool className="size-5" />, gaps: '缺口 #2、#3、#5',
-    summary: '先形成可复核的投标要求清单，再生成并持久化审批技术标大纲，按依赖顺序派发章节写作并以乐观锁管理多版本修订。',
-    items: [
-      'requirement_items：评分项、★/▲ 强制条款、非评分必答项与格式附件要求，支持人工补充与“清单已完整”确认',
-      'proposal_outlines / proposal_sections：draft → pending_approval → approved → superseded 持久化状态机（不依赖短时 intercept）',
-      '派发入口与在途 Worker 写回双端校验 based_on_outline_version；大纲过期的写回仅存为 stale_outline 候选稿',
-      'section_revisions：base_rev_no 乐观锁，人工修改绝不被滞后的 AI 写回覆盖；批准绑定具体版本，重写自动撤销批准',
-    ],
-    apis: ['要求清单 / 大纲 / 章节版本 API（待定义）'],
-  },
   phase6: {
     phase: 'Phase 6', title: '图表、一致性核验与成稿套版导出', icon: <FileOutput className="size-5" />, gaps: '缺口 #6、#7、#8',
     summary: '生成架构图、甘特图等标书图表；双层核验要求覆盖与正文实质响应并检查全文一致性；锁定已批准版本套模板导出 DOCX / PDF。',
@@ -50,7 +29,7 @@ const plans: Record<string, Plan> = {
 }
 
 export default function RoadmapPage({ phase }: { phase: string }) {
-  const p = plans[phase] ?? plans.phase4
+  const p = plans[phase] ?? plans.phase6
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-6">
       <div className="flex items-center gap-3">

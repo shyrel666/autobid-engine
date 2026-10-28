@@ -1,31 +1,60 @@
-// Package ingest 把招标文件文本切分为章节/条款段落并写入 tender_documents / document_chunks，
-// 同时幂等创建根 tender（及可选 lot）静态实体。
+// Package ingest 把招标文件（纯文本/Markdown/DOCX/PDF/扫描件）解析并切分为章节/条款段落，写入 tender_documents /
+// document_chunks 并幂等创建根 tender（及可选 lot）静态实体；同一解析器也用于企业方案知识库入库。
 package ingest
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/autobid/autobid-engine/db"
 )
 
 // Section 是切分结果中的一个段落。Level：0 文首，1 章/篇，2 节或中文序号标题，
 // 3+ 为数字编号（"1"=3、"1.1"=4 …），★ 条款取其所在层级 +1。
+// PageNo 等于 PageStart；PageStart~PageEnd 为段落（含其表格）跨越的页码范围。
 type Section struct {
 	Level     int
 	Code      string
 	Title     string
 	PageNo    int
+	PageStart int
+	PageEnd   int
 	Content   string
 	Mandatory bool
+	// Tables 是段落内还原的结构化表格（其 Markdown 同时写入 Content，便于全文检索）。
+	Tables []*Table
+	// Boxes 是版面坐标溯源（PDF / OCR 每页一条外接矩形）。
+	Boxes []BBox
+	// BlockStart~BlockEnd 为来源文档中的块序号范围（文本行号、DOCX 段落/表格序号、PDF/OCR 版面行序号），-1 表示未知。
+	BlockStart, BlockEnd int
 }
+
+// BBox 是一个页面内的外接矩形（PDF 用户空间坐标，原点左下；OCR 为像素坐标，原点左上）。
+type BBox struct {
+	Page int     `json:"page"`
+	X0   float64 `json:"x0"`
+	Y0   float64 `json:"y0"`
+	X1   float64 `json:"x1"`
+	Y1   float64 `json:"y1"`
+	Conf float64 `json:"confidence,omitempty"`
+}
+
+// Line 是切分器的输入行。纯文本按行生成；DOCX/PDF/OCR 解析器按段落/版面行生成。
+type Line struct {
+	Text    string
+	Page    int // 起始页（1 基）
+	PageEnd int // 结束页；0 表示与 Page 相同
+	// Heading > 0 表示来源样式给出的标题级别（DOCX 标题样式 / 大纲级别、Markdown #），优先于编号规则定级。
+	Heading int
+	// Table 非空时本行是一张表格，Text 为其 Markdown。
+	Table *Table
+	Boxes []BBox // 版面坐标（跨页表格每页一条）
+	Block int    // 来源块序号，-1 表示未知
+}
+
+func (l Line) lastPage() int { return max(l.Page, l.PageEnd) }
 
 // MaxSectionRunes 是单个段落的正文上限，超长正文按段落边界续切为同编号的多个段落。
 const MaxSectionRunes = 2000
@@ -145,34 +174,17 @@ func startsWithDigitUnit(s string) bool {
 // Split 按标题层级切分招标文件文本。页码来自换页符（\f）或独占一行的页码标记（"- 12 -"、"第 12 页"），
 // 页码标记行本身不进入正文。返回的段落保持文档顺序；文首无标题的正文作为 Level 0 段落。
 func Split(text string) []Section {
+	return SplitLines(TextLines(text))
+}
+
+// TextLines 把纯文本转换为切分器输入行，并按换页符/页码标记计页（规则见 Split）。
+func TextLines(text string) []Line {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
-	var (
-		out   []Section
-		cur   *Section
-		body  []string
-		page  = 1
-		depth = 0
-		// afterClause：上一个标题是正文条款（见 heading.clause）
-		afterClause bool
-		starSeq     = map[string]int{}
-		parent      = map[int]string{} // 各层级最近编号，用于给无编号 ★ 条款生成编号
-	)
-	flush := func() {
-		if cur == nil {
-			if content := strings.TrimSpace(strings.Join(body, "\n")); content != "" {
-				out = append(out, Section{Level: 0, Title: "文首", PageNo: 1, Content: content, Mandatory: MandatoryPattern.MatchString(content)})
-			}
-			body = nil
-			return
-		}
-		cur.Content = strings.TrimSpace(strings.Join(body, "\n"))
-		cur.Mandatory = cur.Mandatory || MandatoryPattern.MatchString(cur.Content)
-		out = append(out, splitLong(*cur)...)
-		cur, body = nil, nil
-	}
+	var lines []Line
+	page := 1
 	// 有换页符时以换页符计页、页码标记行只丢弃；否则把页码标记视为页脚，遇到即翻页。
 	formFeeds := strings.Contains(text, "\f")
-	for _, raw := range strings.Split(text, "\n") {
+	for i, raw := range strings.Split(text, "\n") {
 		for strings.HasPrefix(raw, "\f") {
 			page++
 			raw = raw[1:]
@@ -187,13 +199,63 @@ func Split(text string) []Section {
 			page += pageBreaks
 			continue
 		}
-		h, ok := classify(trimmed, depth, afterClause)
-		if !ok {
-			body = append(body, line)
-			page += pageBreaks
+		lines = append(lines, Line{Text: line, Page: page, Block: i})
+		page += pageBreaks
+	}
+	return lines
+}
+
+// SplitLines 是切分核心：按标题层级把输入行归并为段落。表格行不参与标题识别，归入当前段落。
+func SplitLines(lines []Line) []Section {
+	var (
+		out   []Section
+		cur   *Section
+		body  []Line
+		depth = 0
+		// afterClause：上一个标题是正文条款（见 heading.clause）
+		afterClause bool
+		starSeq     = map[string]int{}
+		parent      = map[int]string{} // 各层级最近编号，用于给无编号 ★ 条款生成编号
+	)
+	flush := func() {
+		body = trimBlankLines(body)
+		if cur == nil {
+			if len(body) > 0 {
+				s := Section{Level: 0, Title: "文首"}
+				s.fill(body)
+				s.Mandatory = MandatoryPattern.MatchString(s.Content) || tablesMandatory(s.Tables)
+				out = append(out, splitLong(s, body)...)
+			}
+			body = nil
+			return
+		}
+		cur.fill(body)
+		cur.Mandatory = cur.Mandatory || MandatoryPattern.MatchString(cur.Content) || tablesMandatory(cur.Tables)
+		out = append(out, splitLong(*cur, body)...)
+		cur, body = nil, nil
+	}
+	for _, ln := range lines {
+		if ln.Page <= 0 {
+			ln.Page = 1
+		}
+		if ln.Table != nil {
+			body = append(body, ln)
 			continue
 		}
-		startPage := page
+		trimmed := strings.TrimSpace(ln.Text)
+		var (
+			h  heading
+			ok bool
+		)
+		if ln.Heading > 0 && trimmed != "" {
+			h, ok = styledHeading(trimmed, ln.Heading, depth, afterClause), true
+		} else {
+			h, ok = classify(trimmed, depth, afterClause)
+		}
+		if !ok {
+			body = append(body, ln)
+			continue
+		}
 		flush()
 		if h.star && h.code == "" {
 			base := nearestCode(parent, h.level)
@@ -211,12 +273,92 @@ func Split(text string) []Section {
 			}
 		}
 		parent[h.level] = h.code
-		cur = &Section{Level: h.level, Code: h.code, Title: h.title, PageNo: startPage, Mandatory: h.star}
-		body = append(body, trimmed)
-		page += pageBreaks
+		cur = &Section{Level: h.level, Code: h.code, Title: h.title, Mandatory: h.star}
+		ln.Text = trimmed
+		body = append(body, ln)
 	}
 	flush()
 	return out
+}
+
+// styledHeading 处理来源样式明确标注的标题：级别取样式级别，编号与标题尽量沿用编号规则的解析结果。
+func styledHeading(text string, level, depth int, afterClause bool) heading {
+	level = min(max(level, 1), 9)
+	if h, ok := classify(text, depth, afterClause); ok && !h.star {
+		h.level, h.clause = level, false
+		return h
+	}
+	title := strings.TrimLeft(text, "★☆▲*＊ ")
+	if !shortTitle(title) {
+		title = clauseTitle(title)
+	}
+	return heading{level: level, title: title, star: reStar.MatchString(text)}
+}
+
+func tablesMandatory(ts []*Table) bool {
+	for _, t := range ts {
+		if t.Mandatory {
+			return true
+		}
+	}
+	return false
+}
+
+func trimBlankLines(body []Line) []Line {
+	for len(body) > 0 && body[0].Table == nil && strings.TrimSpace(body[0].Text) == "" {
+		body = body[1:]
+	}
+	for len(body) > 0 && body[len(body)-1].Table == nil && strings.TrimSpace(body[len(body)-1].Text) == "" {
+		body = body[:len(body)-1]
+	}
+	return body
+}
+
+// fill 由正文行计算段落正文、页码范围、表格、坐标与来源块范围。
+func (s *Section) fill(body []Line) {
+	texts := make([]string, 0, len(body))
+	s.PageStart, s.PageEnd, s.BlockStart, s.BlockEnd = 0, 0, -1, -1
+	s.Tables, s.Boxes = nil, nil
+	boxes := map[int]*BBox{}
+	var pages []int
+	for _, l := range body {
+		texts = append(texts, l.Text)
+		if s.PageStart == 0 || l.Page < s.PageStart {
+			s.PageStart = l.Page
+		}
+		s.PageEnd = max(s.PageEnd, l.lastPage())
+		if l.Table != nil {
+			s.Tables = append(s.Tables, l.Table)
+			s.PageEnd = max(s.PageEnd, l.Table.PageEnd)
+		}
+		if l.Block >= 0 {
+			if s.BlockStart < 0 {
+				s.BlockStart = l.Block
+			}
+			s.BlockEnd = l.Block
+		}
+		for _, lb := range l.Boxes {
+			b, ok := boxes[lb.Page]
+			if !ok {
+				cp := lb
+				boxes[lb.Page] = &cp
+				pages = append(pages, lb.Page)
+				continue
+			}
+			b.X0, b.Y0 = min(b.X0, lb.X0), min(b.Y0, lb.Y0)
+			b.X1, b.Y1 = max(b.X1, lb.X1), max(b.Y1, lb.Y1)
+			if lb.Conf > 0 && (b.Conf == 0 || lb.Conf < b.Conf) {
+				b.Conf = lb.Conf // 取最低置信度，提示人工复核
+			}
+		}
+	}
+	for _, p := range pages {
+		s.Boxes = append(s.Boxes, *boxes[p])
+	}
+	s.PageStart = max(s.PageStart, 1)
+	s.PageEnd = max(s.PageEnd, s.PageStart)
+	s.PageNo = s.PageStart
+	s.Content = strings.TrimSpace(strings.Join(texts, "\n"))
 }
 
 func nearestCode(parent map[int]string, level int) string {
@@ -228,37 +370,51 @@ func nearestCode(parent map[int]string, level int) string {
 	return ""
 }
 
-// splitLong 把超长段落按空行/行边界续切，后续部分标题加“（续n）”。
-func splitLong(s Section) []Section {
+// splitLong 把超长段落按空行/行边界续切，后续部分标题加“（续n）”。表格行不拆分，整体归入一个部分。
+func splitLong(s Section, body []Line) []Section {
 	if utf8.RuneCountInString(s.Content) <= MaxSectionRunes {
 		return []Section{s}
 	}
 	var (
 		parts []Section
-		buf   []string
+		buf   []Line
 		size  int
 	)
 	emit := func() {
+		buf = trimBlankLines(buf)
 		if len(buf) == 0 {
 			return
 		}
 		p := s
-		p.Content = strings.TrimSpace(strings.Join(buf, "\n"))
+		p.fill(buf)
 		if len(parts) > 0 {
 			p.Title = fmt.Sprintf("%s（续%d）", s.Title, len(parts))
 		}
-		p.Mandatory = s.Mandatory && (len(parts) == 0 || MandatoryPattern.MatchString(p.Content))
+		p.Mandatory = s.Mandatory && (len(parts) == 0 || MandatoryPattern.MatchString(p.Content) || tablesMandatory(p.Tables))
 		parts = append(parts, p)
 		buf, size = nil, 0
 	}
-	for _, line := range strings.Split(s.Content, "\n") {
-		for _, piece := range hardWrap(line, MaxSectionRunes) {
-			n := utf8.RuneCountInString(piece) + 1
-			if size+n > MaxSectionRunes {
+	for _, line := range body {
+		if line.Table != nil {
+			n := utf8.RuneCountInString(line.Text) + 1
+			if size > 0 && size+n > MaxSectionRunes {
 				emit()
 			}
-			buf = append(buf, piece)
+			buf = append(buf, line)
 			size += n
+			continue
+		}
+		for _, text := range strings.Split(line.Text, "\n") {
+			for _, piece := range hardWrap(text, MaxSectionRunes) {
+				n := utf8.RuneCountInString(piece) + 1
+				if size+n > MaxSectionRunes {
+					emit()
+				}
+				l := line
+				l.Text = piece
+				buf = append(buf, l)
+				size += n
+			}
 		}
 	}
 	emit()
@@ -291,105 +447,4 @@ func EstimateTokens(s string) int {
 		}
 	}
 	return cjk + (other+3)/4
-}
-
-// ---------------------------------------------------------------------------
-// 写库
-// ---------------------------------------------------------------------------
-
-type Input struct {
-	TenderNo string
-	LotNo    string
-	Title    string
-	Text     string
-}
-
-type Result struct {
-	Document      *db.TenderDocument `json:"document"`
-	Created       bool               `json:"created"`
-	Chunks        int                `json:"chunks"`
-	Mandatory     int                `json:"mandatory_chunks"`
-	TenderAssetID int64              `json:"tender_asset_id"`
-	LotAssetID    int64              `json:"lot_asset_id,omitempty"`
-}
-
-// Ingest 切分并写入一份招标文档，幂等创建根 tender（LotNo 非空时再建 lot 与 tender -contains-> lot 边）。
-// 实体经任务 AssetStore 写入，因此会归集 task_ids 并自动补任务范围。相同原文重复上传不会重复切分。
-func Ingest(ctx context.Context, pg *db.DB, as *db.AssetStore, in Input) (*Result, error) {
-	in.TenderNo, in.LotNo = strings.TrimSpace(in.TenderNo), strings.TrimSpace(in.LotNo)
-	if in.TenderNo == "" {
-		return nil, errors.New("ingest: tender_no is required")
-	}
-	if strings.TrimSpace(in.Text) == "" {
-		return nil, errors.New("ingest: text is empty")
-	}
-	if as == nil || as.TaskID() <= 0 {
-		return nil, errors.New("ingest: a task-bound asset store is required")
-	}
-	if in.Title == "" {
-		in.Title = firstLine(in.Text)
-	}
-	docRef := map[string]any{"doc_title": in.Title}
-	res := &Result{}
-	var err error
-	res.TenderAssetID, _, err = as.UpsertAsset(ctx, &db.Asset{Type: db.AssetTender, TenderNo: in.TenderNo, Title: in.Title, SourceRef: mustJSON(docRef)}, 0)
-	if err != nil {
-		return nil, fmt.Errorf("ingest: upsert tender: %w", err)
-	}
-	if in.LotNo != "" {
-		res.LotAssetID, _, err = as.UpsertAsset(ctx, &db.Asset{Type: db.AssetLot, TenderNo: in.TenderNo, LotNo: in.LotNo, Title: in.Title, SourceRef: mustJSON(docRef)}, 0)
-		if err != nil {
-			return nil, fmt.Errorf("ingest: upsert lot: %w", err)
-		}
-		if _, err := as.UpsertEntityEdge(ctx, res.TenderAssetID, db.EntityRelContains, res.LotAssetID, as.TaskID(), nil, 1, nil); err != nil {
-			return nil, fmt.Errorf("ingest: link lot: %w", err)
-		}
-	}
-
-	sections := Split(in.Text)
-	chunks := make([]db.DocumentChunk, 0, len(sections))
-	for i, s := range sections {
-		chunks = append(chunks, db.DocumentChunk{Seq: i, Level: s.Level, SectionCode: s.Code, SectionTitle: s.Title,
-			PageNo: s.PageNo, Content: s.Content, TokenEstimate: EstimateTokens(s.Content), IsMandatory: s.Mandatory})
-		if s.Mandatory {
-			res.Mandatory++
-		}
-	}
-	docID, created, err := pg.InsertTenderDocument(ctx, &db.TenderDocument{TaskID: as.TaskID(), TenderNo: in.TenderNo,
-		LotNo: in.LotNo, Title: in.Title, RawText: in.Text}, chunks)
-	if err != nil {
-		return nil, fmt.Errorf("ingest: %w", err)
-	}
-	res.Created = created
-	if res.Document, err = pg.GetTenderDocument(ctx, as.TaskID(), docID); err != nil {
-		return nil, err
-	}
-	res.Chunks = res.Document.ChunkCount
-	if !created {
-		res.Mandatory = 0
-		outline, err := pg.DocumentOutline(ctx, as.TaskID(), docID, 100000)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range outline {
-			if c.IsMandatory {
-				res.Mandatory++
-			}
-		}
-	}
-	return res, nil
-}
-
-func firstLine(text string) string {
-	for _, l := range strings.Split(text, "\n") {
-		if l = strings.TrimSpace(strings.ReplaceAll(l, "\f", "")); l != "" {
-			return clauseTitle(l)
-		}
-	}
-	return ""
-}
-
-func mustJSON(v map[string]any) []byte {
-	raw, _ := json.Marshal(v)
-	return raw
 }

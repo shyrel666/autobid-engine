@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/autobid/autobid-engine/retrieval"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/guard"
+	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
 	"github.com/autobid/autobid-engine/internal/harness"
 	"github.com/autobid/autobid-engine/server"
@@ -87,13 +89,20 @@ func run(logger *slog.Logger) error {
 	defer pg.Close()
 
 	// 2. 控制面组件
+	embedding, reranker, err := retrieval.ModelsFromEnv()
+	if err != nil {
+		return err
+	}
+	retriever := retrieval.New(pg, embedding, reranker)
 	hub := server.NewHub()
 	var recordBodies atomic.Bool
 	recordBodies.Store(envBool("AUTOBID_RECORD_BODIES"))
 	svc := server.NewLLMService(pg, server.LLMServiceConfig{
-		OnActivity:   func(_ int64, a db.Activity) { hub.Publish(a) },
-		OnLedgerErr:  func(err error) { logger.Warn("llm ledger write failed", "err", err) },
-		RecordBodies: recordBodies.Load,
+		MultiRetrieval: envBool("AUTOBID_RETRIEVAL_MULTI_AGENT"),
+		Retrieval:      retriever,
+		OnActivity:     func(_ int64, a db.Activity) { hub.Publish(a) },
+		OnLedgerErr:    func(err error) { logger.Warn("llm ledger write failed", "err", err) },
+		RecordBodies:   recordBodies.Load,
 	})
 	hostname, _ := os.Hostname()
 	ic := intercept.New(pg, intercept.Options{
@@ -138,7 +147,9 @@ func run(logger *slog.Logger) error {
 	logger.Info("engine started", "resumed_tasks", resumed)
 
 	// 4. HTTP/SSE 控制面。WriteTimeout 为 0：SSE 是长连接，单个处理器自行控制生命周期。
-	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir})
+	// 扫描件 OCR：AUTOBID_OCR_URL（HTTP 服务）→ PATH 中的 tesseract → 不可用（扫描件上传返回 422）。
+	ocr := ingest.DefaultOCR()
+	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(), Retrieval: retriever})
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),
@@ -148,7 +159,7 @@ func run(logger *slog.Logger) error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		logger.Info("http listening", "addr", addr, "web_dir", webDir)
+		logger.Info("http listening", "addr", addr, "web_dir", webDir, "ocr", ocr.Name())
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}

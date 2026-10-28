@@ -169,14 +169,67 @@ export interface EntityEdge {
   last_seen: string
 }
 
+// 解析元数据（tender_documents.parse_meta / knowledge_documents.parse_meta，对应 ingest.ParseMeta）
+export interface ParseMeta {
+  format: string
+  parser: string
+  pages: number
+  lines: number
+  tables: number
+  styled_headings?: number
+  encoding?: string
+  ocr?: string
+  ocr_pages?: number[]
+  warnings?: string[]
+}
+
+// 还原的结构化表格（ingest.Table）：cells 为合并区域左上角原始单元格，grid 为展开网格。
+export interface TableCell {
+  row: number
+  col: number
+  row_span: number
+  col_span: number
+  text: string
+  header?: boolean
+  page: number
+}
+
+export interface ParsedTable {
+  rows: number
+  cols: number
+  header_rows: number
+  page_start: number
+  page_end: number
+  source: string
+  mandatory?: boolean
+  cells: TableCell[]
+  grid: string[][]
+  markdown: string
+}
+
+export interface BBox { page: number; x0: number; y0: number; x1: number; y1: number; confidence?: number }
+
+export interface BBoxMeta {
+  source?: string
+  block_start?: number
+  block_end?: number
+  boxes?: BBox[]
+}
+
 export interface TenderDocument {
   id: number
+  tenant_id?: string
   task_id: number
   tender_no: string
   lot_no?: string
   title: string
+  file_name?: string
+  mime_type?: string
+  page_count?: number
+  parse_meta?: ParseMeta | null
   content_hash: string
   chunk_count: number
+  created_by?: string
   created_at: string
 }
 
@@ -189,9 +242,14 @@ export interface DocumentChunk {
   section_code: string
   section_title: string
   page_no: number
+  page_start: number
+  page_end: number
   content?: string
   token_estimate: number
   is_mandatory: boolean
+  table_count: number
+  tables?: ParsedTable[]
+  bbox_meta?: BBoxMeta
 }
 
 export interface DocumentWithChunks extends TenderDocument {
@@ -212,10 +270,128 @@ export interface UploadDocumentResp {
     created: boolean
     chunks: number
     mandatory_chunks: number
+    tables: number
+    page_count: number
+    format: string
+    warnings?: string[]
     tender_asset_id: number
     lot_asset_id?: number
   }
   planner_notified: boolean
+}
+
+// 多格式文件上传（multipart/form-data）。
+export interface UploadDocumentFileReq {
+  tender_no: string
+  lot_no?: string
+  title?: string
+  wake_planner?: boolean
+  file: File
+}
+
+// ---------------------------------------------------------------------------
+// 企业方案知识库（/api/knowledge/*）
+// ---------------------------------------------------------------------------
+
+export type KnowledgeCategory = 'historical_bid' | 'whitepaper' | 'product_spec' | 'standard_solution'
+
+export interface KnowledgeDocument {
+  id: number
+  tenant_id: string
+  category: KnowledgeCategory
+  title: string
+  tags: string[]
+  file_name?: string
+  mime_type?: string
+  page_count: number
+  content_hash: string
+  parse_meta?: ParseMeta | null
+  extra?: Record<string, unknown> | null
+  chunk_count: number
+  table_count: number
+  created_by?: string
+  updated_by?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeChunk {
+  id: number
+  doc_id: number
+  seq: number
+  level: number
+  section_code: string
+  section_title: string
+  section_path: string
+  page_start: number
+  page_end: number
+  content?: string
+  token_estimate: number
+  is_mandatory: boolean
+  table_count: number
+  tables?: ParsedTable[]
+  bbox_meta?: BBoxMeta
+}
+
+export interface KnowledgeCitation {
+  doc_id: number
+  doc_title: string
+  category: KnowledgeCategory
+  file_name?: string
+  chunk_id: number
+  seq: number
+  section_code: string
+  section_title: string
+  section_path: string
+  page_start: number
+  page_end: number
+}
+
+export interface KnowledgeHit {
+  chunk: KnowledgeChunk
+  citation: KnowledgeCitation
+  tags: string[]
+  score: number
+  fts_rank: number
+  vector_score: number
+  keyword_score: number
+  matched_terms: string[]
+}
+
+export interface KnowledgeUploadResp {
+  document: KnowledgeDocument
+  created: boolean
+  chunks: number
+  tables: number
+  page_count: number
+  format: string
+  warnings?: string[]
+}
+
+export interface KnowledgeTextReq {
+  category: KnowledgeCategory
+  title?: string
+  tags?: string[]
+  extra?: Record<string, unknown>
+  text: string
+  file_name?: string
+}
+
+export interface KnowledgeFileReq {
+  category: KnowledgeCategory
+  title?: string
+  tags?: string[]
+  extra?: Record<string, unknown>
+  file: File
+}
+
+export interface KnowledgeSearchReq {
+  q: string
+  product?: string
+  category?: KnowledgeCategory[]
+  tags?: string[]
+  limit?: number
+  prefer_tables?: boolean
 }
 
 export interface CompanyCredential {
@@ -395,4 +571,114 @@ export interface TaskReport {
   documents: TenderDocument[]
   elements: ReportElement[]
   findings: ReportFinding[]
+}
+export interface RetrievalResult {
+  total: number; hits: KnowledgeHit[]; run_id: number; evidence_ids: number[] | null
+  degraded: string[]; index_id: number; strategy: string; cached: boolean
+}
+export interface EvidenceClaim {
+  text: string; parameter: string; operator: string; value: number; unit: string
+  product?: string; version?: string; as_of?: string
+}
+export interface RetrievalEvidence {
+  id: number; run_id: number; status: string; relation: string; reason: string; content_hash: string
+  snapshot: { document?: KnowledgeDocument; chunk?: KnowledgeChunk; page_reliability?: string }
+  claim: { verdict?: { quote?: string; table?: number; row?: number; column?: number } }
+}
+export interface KnowledgeIndex {
+  id: number; model: string; dimension: number; preprocessing: string; epoch: number
+  status: string; active: boolean; error: string
+}
+export interface ResearchRequest {
+ request_key: string; question: string; multi_agent?: boolean
+ query?: { must_terms?: string[] }; claim?: EvidenceClaim
+}
+export interface RetrievalRun {
+ id: number; status: string; kind: string; request: ResearchRequest
+ used_calls: number; max_calls: number; reserved_tokens: number; max_tokens: number; deadline: string
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5：要求清单、技术标大纲与章节修订（db/requirements.go、db/proposal.go、server/proposal.go）
+// ---------------------------------------------------------------------------
+export type RequirementCategory = 'scoring_item' | 'mandatory_clause' | 'non_scoring_required' | 'format_attachment'
+
+export interface RequirementItem {
+  id: number; tenant_id: string; task_id: number; code: string; category: RequirementCategory
+  title: string; description: string; is_mandatory: boolean; score_weight: number; origin: 'extracted' | 'manual'
+  source_asset_id?: number; source_doc_id?: number; source_chunk_id?: number; source_hash: string
+  source_loc: { doc_id?: number; chunk_id?: number; section_code?: string; section_title?: string; page_start?: number; page_end?: number; doc_title?: string; table?: number; row?: number; [k: string]: unknown }
+  evidence_run_id?: number; evidence_ids: number[]; evidence_gap: string
+  review_status: 'draft' | 'confirmed' | 'needs_revision'
+  created_by: string; updated_by: string; approved_by: string; created_at: string; updated_at: string
+  mapped_section_codes: string[]
+}
+export interface RequirementManifest {
+  tenant_id: string; task_id: number; epoch: number; status: 'draft' | 'confirmed' | 'stale'
+  confirmed_at?: string; approved_by: string; updated_by: string; updated_at: string
+}
+export interface RequirementStats {
+  total: number; by_category: Record<string, number>; mandatory: number; confirmed: number; needs_revision: number
+  with_evidence: number; evidence_gaps: number; no_evidence: number; outline_version: number; mapped: number; unmapped: string[]
+}
+export interface RequirementsView { manifest: RequirementManifest; items: RequirementItem[]; stats: RequirementStats }
+export interface ExtractResult { created: number; updated: number; unchanged: number; skipped_manual: number; scanned_chunks: number; codes: string[] }
+export interface RequirementInput {
+  code?: string; category?: RequirementCategory; title?: string; description?: string; is_mandatory?: boolean; score_weight?: number
+  source_chunk_id?: number; evidence_run_id?: number; evidence_ids?: number[]; evidence_gap?: string; review_status?: string
+}
+
+export type OutlineStatus = 'draft' | 'pending_approval' | 'approved' | 'superseded'
+export interface ProposalOutline {
+  id: number; task_id: number; version: number; requirements_epoch: number; status: OutlineStatus
+  derived_from_version?: number; note: string; submitted_by: string; submitted_at?: string
+  approved_by: string; approved_at?: string; superseded_at?: string; created_by: string; updated_by: string; created_at: string; updated_at: string
+}
+export interface ProposalSection {
+  id: number; task_id: number; outline_id: number; outline_version: number; section_code: string; title: string
+  level: number; seq: number; writing_guide: string; target_words: number; depends_on_section_ids: number[]
+  derived_from_section_id?: number; current_rev_no: number; approved_rev_no?: number; status: string
+  lease_token: number; lease_until?: string; created_by: string; updated_by: string; approved_by: string; updated_at: string
+  requirement_item_ids: number[]; depends_on: string[]; unmet_dependencies: string[]; dependencies_ready: boolean; writing: boolean
+}
+export interface RequirementRef { id: number; code: string; title: string; category: string; is_mandatory: boolean }
+export interface OutlineDetail {
+  outline: ProposalOutline; sections: ProposalSection[]
+  coverage: { total: number; mapped: number; unmapped: RequirementRef[] }
+  manifest: RequirementManifest; approved_version: number; requirements_epoch_current: boolean
+}
+export interface OutlineList { outlines: ProposalOutline[]; approved_version: number; open_version: number; manifest: RequirementManifest }
+export interface SectionInput {
+  section_code: string; title: string; level?: number; writing_guide?: string; target_words?: number
+  requirement_item_ids?: number[]; depends_on?: string[]
+}
+export interface OutlineInput { note?: string; from_version?: number; sections?: SectionInput[] }
+
+export interface RevisionGap { evidence_id?: number; requirement_id?: number; kind: string; note: string }
+export interface SectionRevision {
+  id: number; section_id: number; rev_no: number; base_rev_no: number; based_on_outline_version: number
+  source: 'ai_initial' | 'ai_rewrite' | 'human_edit' | 'rollback'; rollback_of_rev_no?: number
+  content_md: string; summary_note: string; diff_summary: string; evidence_ids: number[]; gaps: RevisionGap[]
+  status: string; created_by: string; approved_by: string; approved_at?: string; created_at: string
+}
+export interface EvidenceState {
+  id: number; run_id: number; source_domain: string; source_id: number; doc_id: number
+  relation: string; status: string; reason: string; usable: boolean; missing?: boolean
+}
+export interface DependencyState { id: number; section_code: string; title: string; current_rev_no: number; status: string; ready: boolean; summary_note?: string }
+export interface SectionDetail {
+  section: ProposalSection; outline: ProposalOutline; approved_version: number; writable: boolean; blocked_reason?: string
+  requirements: RequirementItem[]; dependencies: DependencyState[]; current_revision?: SectionRevision
+  revisions: SectionRevision[]; evidence: EvidenceState[]; warnings: string[]
+}
+export interface SectionClaim {
+  task_id: number; section_id: number; section_code: string; lease_token: number; lease_until: string
+  base_rev_no: number; based_on_outline_version: number
+}
+export interface SaveRevisionResult {
+  outcome: 'applied' | 'stale_outline' | 'conflict_candidate'; revision: SectionRevision; section: ProposalSection; reason?: string
+}
+export interface SaveRevisionReq {
+  base_rev_no: number; based_on_outline_version: number; content_md: string; summary_note?: string
+  diff_summary?: string; evidence_ids?: number[]; gaps?: RevisionGap[]
 }

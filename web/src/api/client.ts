@@ -3,8 +3,11 @@
 
 import type {
   Activity, Asset, CompanyCredential, CreateTaskReq, CredentialReq, DocumentWithChunks, EntityEdge, Finding,
-  InterceptAudit, InterceptPending, LLMChain, LLMHealth, LLMProfile, LLMUsage, NodeDetail, Overview, Coverage,
-  Task, TaskReport, TaskView, UploadDocumentReq, UploadDocumentResp,
+  InterceptAudit, InterceptPending, KnowledgeChunk, KnowledgeDocument, KnowledgeFileReq, KnowledgeSearchReq, RetrievalResult, RetrievalEvidence, KnowledgeIndex, EvidenceClaim,
+  KnowledgeTextReq, KnowledgeUploadResp, LLMChain, LLMHealth, LLMProfile, LLMUsage, NodeDetail, Overview, Coverage,
+  Task, TaskReport, TaskView, UploadDocumentFileReq, UploadDocumentReq, UploadDocumentResp, ResearchRequest, RetrievalRun,
+  ExtractResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
+  RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionClaim, SectionDetail,
 } from './types'
 
 const TOKEN_KEY = 'autobid.token'
@@ -29,9 +32,14 @@ export function setToken(token: string) {
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  code?: string
+  // data 为错误响应的 JSON 体（例如 409 时归档的候选稿）。
+  data?: unknown
+  constructor(status: number, message: string, data?: unknown) {
     super(message)
     this.status = status
+    this.data = data
+    if (data && typeof data === 'object' && typeof (data as { code?: unknown }).code === 'string') this.code = (data as { code: string }).code
   }
 }
 
@@ -44,27 +52,31 @@ export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+// send 发送请求：FormData 以 multipart/form-data 发送（由浏览器生成 boundary），其余请求体按 JSON 序列化。
 async function send(method: string, path: string, body?: unknown): Promise<Response> {
   const headers: Record<string, string> = {}
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const form = body instanceof FormData
+  if (body !== undefined && !form) headers['Content-Type'] = 'application/json'
   let resp: Response
   try {
-    resp = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
+    resp = await fetch(path, { method, headers, body: body === undefined ? undefined : form ? body : JSON.stringify(body) })
   } catch (e) {
     throw new ApiError(0, e instanceof Error ? e.message : '无法连接服务')
   }
   if (!resp.ok) {
     let msg = resp.statusText
+    let data: unknown
     try {
-      const j = await resp.json()
+      data = await resp.json()
+      const j = data as { error?: unknown } | null
       if (j && typeof j.error === 'string') msg = j.error
     } catch {
       /* 非 JSON 错误体 */
     }
     if (resp.status === 401) window.dispatchEvent(new Event('autobid:unauthorized'))
-    throw new ApiError(resp.status, msg)
+    throw new ApiError(resp.status, msg, data)
   }
   return resp
 }
@@ -89,6 +101,13 @@ function qs(params: Record<string, string | number | undefined>): string {
 }
 
 const t = (id: number) => `/api/tasks/${id}`
+
+function formData(fields: Record<string, string | boolean | undefined>, file: File): FormData {
+  const fd = new FormData()
+  for (const [k, v] of Object.entries(fields)) if (v !== undefined && v !== '') fd.set(k, String(v))
+  fd.set('file', file, file.name)
+  return fd
+}
 
 export const api = {
   // 健康检查（/healthz 不需要鉴权）
@@ -134,6 +153,8 @@ export const api = {
 
   // 招标文档
   uploadDocument: (id: number, req: UploadDocumentReq) => post<UploadDocumentResp>(`${t(id)}/documents`, req),
+  uploadDocumentFile: (id: number, req: UploadDocumentFileReq) => post<UploadDocumentResp>(`${t(id)}/documents`,
+    formData({ tender_no: req.tender_no, lot_no: req.lot_no, title: req.title, wake_planner: req.wake_planner }, req.file)),
   listDocuments: (id: number, content = true) =>
     get<DocumentWithChunks[]>(`${t(id)}/documents${content ? '?content=1' : ''}`),
 
@@ -144,6 +165,49 @@ export const api = {
     post<(CompanyCredential & { created: boolean })[]>('/api/company/credentials', req),
   updateCredential: (id: number, req: CredentialReq) => put<CompanyCredential>(`/api/company/credentials/${id}`, req),
   deleteCredential: (id: number) => del(`/api/company/credentials/${id}`),
+
+  // 企业方案知识库
+  listKnowledge: (f: { category?: string; tags?: string; q?: string; limit?: number }) =>
+    get<KnowledgeDocument[]>(`/api/knowledge/documents${qs(f)}`),
+  getKnowledge: (id: number, content = true) =>
+    get<{ document: KnowledgeDocument; chunks: KnowledgeChunk[] }>(`/api/knowledge/documents/${id}${content ? '?content=1' : ''}`),
+  uploadKnowledgeText: (req: KnowledgeTextReq) => post<KnowledgeUploadResp>('/api/knowledge/documents', req),
+  uploadKnowledgeFile: (req: KnowledgeFileReq) => post<KnowledgeUploadResp>('/api/knowledge/documents',
+    formData({ category: req.category, title: req.title, tags: req.tags?.join(','), extra: req.extra ? JSON.stringify(req.extra) : undefined }, req.file)),
+  deleteKnowledge: (id: number) => del(`/api/knowledge/documents/${id}`),
+  searchKnowledge: (r: KnowledgeSearchReq) => get<RetrievalResult>(`/api/knowledge/search${qs({
+    q: r.q, product: r.product, category: r.category?.join(','), tags: r.tags?.join(','), limit: r.limit, prefer_tables: r.prefer_tables ? 1 : undefined,
+  })}`),
+  retrievalEvidence: (id: number) => get<RetrievalEvidence[]>(`/api/retrieval/runs/${id}/evidence`),
+  taskRetrievalRuns: (id: number) => get<RetrievalRun[]>(`/api/tasks/${id}/retrieval-runs`),
+  research: (id: number, req: ResearchRequest) => post<{run_id: number; status: string; gaps: string[]; degraded: string[] | null}>(`/api/tasks/${id}/research`, req),
+  cancelResearch: (id: number) => send('POST', `/api/retrieval/runs/${id}/cancel`),
+  verifyEvidence: (run: number, id: number, claim: EvidenceClaim) => post<RetrievalEvidence>(`/api/retrieval/runs/${run}/evidence/${id}/verify`, claim),
+  knowledgeIndexes: () => get<KnowledgeIndex[]>('/api/knowledge/indexes'),
+  buildKnowledgeIndex: (dimension: number) => post<KnowledgeIndex>('/api/knowledge/indexes', { dimension }),
+  activateKnowledgeIndex: (id: number) => send('POST', `/api/knowledge/indexes/${id}/activate`),
+
+  // 投标要求清单、技术标大纲审批与章节写作（Phase 5）
+  requirements: (id: number) => get<RequirementsView>(`${t(id)}/requirements`),
+  extractRequirements: (id: number) => post<{ result: ExtractResult; requirements: RequirementsView }>(`${t(id)}/requirements/extract`),
+  createRequirement: (id: number, req: RequirementInput) => post<RequirementItem>(`${t(id)}/requirements`, req),
+  updateRequirement: (id: number, reqID: number, req: RequirementInput) => put<RequirementItem>(`${t(id)}/requirements/${reqID}`, req),
+  deleteRequirement: (id: number, reqID: number) => del(`${t(id)}/requirements/${reqID}`),
+  confirmRequirements: (id: number, epoch?: number) => post<RequirementManifest>(`${t(id)}/requirements/confirm`, { epoch: epoch ?? 0 }),
+  outlines: (id: number) => get<OutlineList>(`${t(id)}/outlines`),
+  createOutline: (id: number, req: OutlineInput = {}) => post<OutlineDetail>(`${t(id)}/outlines`, req),
+  getOutline: (id: number, version: number) => get<OutlineDetail>(`${t(id)}/outlines/${version}`),
+  updateOutline: (id: number, version: number, req: OutlineInput) => put<OutlineDetail>(`${t(id)}/outlines/${version}`, req),
+  submitOutline: (id: number, version: number) => post<OutlineDetail>(`${t(id)}/outlines/${version}/submit`),
+  approveOutline: (id: number, version: number) => post<OutlineDetail>(`${t(id)}/outlines/${version}/approve`),
+  section: (id: number, sectionID: number) => get<SectionDetail>(`${t(id)}/sections/${sectionID}`),
+  dispatchSection: (id: number, sectionID: number, req: { base_rev_no?: number; instruction?: string }) =>
+    post<SectionClaim>(`${t(id)}/sections/${sectionID}/dispatch`, req),
+  saveRevision: (id: number, sectionID: number, req: SaveRevisionReq) => post<SaveRevisionResult>(`${t(id)}/sections/${sectionID}/revisions`, req),
+  approveRevision: (id: number, sectionID: number, revNo: number) =>
+    post<ProposalSection>(`${t(id)}/sections/${sectionID}/revisions/${revNo}/approve`),
+  rollbackRevision: (id: number, sectionID: number, revNo: number, baseRevNo?: number) =>
+    post<SaveRevisionResult>(`${t(id)}/sections/${sectionID}/revisions/${revNo}/rollback`, baseRevNo === undefined ? {} : { base_rev_no: baseRevNo }),
 
   // LLM 配置
   listProfiles: () => get<LLMProfile[] | null>('/api/llm/profiles'),

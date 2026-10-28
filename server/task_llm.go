@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/autobid/autobid-engine/retrieval"
 	"iter"
 	"net/http"
 	"os"
@@ -84,12 +85,14 @@ func (c RetryConfig) policy() (int, func(attempt int) time.Duration) {
 }
 
 type LLMServiceConfig struct {
-	Factory     ProviderFactory
-	Retry       RetryConfig
-	Planner     agent.PlannerConfig // Provider / KillWork / SteerWork 由服务注入
-	Worker      agent.WorkerConfig  // Provider / Transcripts 由服务注入
-	OnActivity  func(taskID int64, a db.Activity)
-	OnLedgerErr func(error)
+	MultiRetrieval bool
+	Retrieval      *retrieval.Service
+	Factory        ProviderFactory
+	Retry          RetryConfig
+	Planner        agent.PlannerConfig // Provider / KillWork / SteerWork 由服务注入
+	Worker         agent.WorkerConfig  // Provider / Transcripts 由服务注入
+	OnActivity     func(taskID int64, a db.Activity)
+	OnLedgerErr    func(error)
 	// RecordBodies 是原始报文录制的全局开关（可随时切换，每个请求时读取）；为 nil 表示关闭。
 	// token 账本不受它影响，始终写入。
 	RecordBodies func() bool
@@ -310,9 +313,20 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 	}
 	// 招投标领域工具按任务绑定：常驻文档精读工具直接下发，专业工具经 Skill 解锁（§4.3）。
 	kit := bidtools.New(s.pg, t.ID, t.Assets, t.Store)
+	kit.WithRetrieval(s.cfg.Retrieval)
+	if s.cfg.Retrieval != nil {
+		kit.WithResearch(&retrieval.Coordinator{Service: s.cfg.Retrieval, Reasoner: &agent.RetrievalReasoner{Planner: b.plannerRuntime, Worker: b.workerRuntime}, MultiEnabled: s.cfg.MultiRetrieval})
+	}
 	wc.ExtraTools = append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...)
 	wc.Deferred = append(append([]tool.CoreTool(nil), wc.Deferred...), kit.DeferredTools()...)
 	wc.Skills = append(append([]tool.Skill(nil), wc.Skills...), bidtools.Skills()...)
+	if s.cfg.Retrieval != nil {
+		for i := range wc.Skills {
+			if wc.Skills[i].Name == bidtools.SkillKnowledgeReuse {
+				wc.Skills[i].Tools = append(append([]string(nil), wc.Skills[i].Tools...), "kb_read_evidence", "kb_verify_evidence", "kb_research")
+			}
+		}
+	}
 	b.pl, b.wk = agent.NewPlanner(pc), agent.NewWorker(wc)
 	s.taskAgents[t.ID] = b
 	return b.pl, b.wk
@@ -543,6 +557,9 @@ func completeTaskLLM(ctx context.Context, taskID int64, req llm.CompletionReques
 		var lastErr error
 		for attempt := 0; ; attempt++ {
 			msg, stop, usage, err := selection.provider.Complete(ctx, req)
+			if llm.SingleAttempt(ctx) {
+				return msg, stop, usage, err
+			}
 			if err == nil {
 				return msg, stop, usage, nil
 			}

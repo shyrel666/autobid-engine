@@ -12,9 +12,15 @@
   - **Phase 1**：PostgreSQL 存储与幂等迁移（`db/schema.sql`）、双图状态与租约争抢（`db/exploration.go`, `db/assets.go`）、冷节点折叠与有界概览（`db/digest.go`, `db/overview.go`）、LLM 连接池与审计录制（`llmpool`, `llmrec`）、工具调用级拦截与计数（`intercept`, `guard`）及 HTTP/SSE 服务层（`server/http.go`）。
   - **Phase 2**：纯文本/Markdown 招标文档章节切分（`ingest/splitter.go`）、企业资信库（`company_credentials`）、标书核验工具与技能（`bidtools/`：`document_outline`、`search_document`、`read_chunk`、`query_company_credentials`、`simulate_scoring_table`、`verify_commercial_bid`）及结构化审查报告（`db/report.go`）。
   - **Phase 3**：单团队标书合规审查工作台前端（`web/`，对应缺口 #9）+ 轻量配套后端接口（`PUT/DELETE /api/company/credentials/{id}`、`GET /api/tasks/{id}/report?format=markdown`、`server/static.go` 托管 `web/dist` 并做 SPA 回退）。
-- **待演进阶段（详见 [`ROADMAP.md`](./ROADMAP.md) 第四节）**：
-  - **Phase 4**：PDF/DOCX/扫描件 OCR 深度解析与 PostgreSQL 企业方案知识库 RAG（对应缺口 #1、#4）
-  - **Phase 5**：可复核要求清单、持久化大纲审批状态机、带依赖门禁的章节写作与乐观锁多版本修订（对应缺口 #2、#3、#5）
+  - [x] **Phase 4**：多格式文档深度解析（`ingest/`：DOCX、自研 PDF 解析、Markdown、GB18030 文本、可插拔 `OCRProvider`；页码范围、跨页表格 JSON + Markdown、版面溯源）与 PostgreSQL 企业方案知识库（`knowledge_documents` / `knowledge_chunks`、`db/knowledge.go` 全文 + 向量 + 关键词混合检索、`kb_search_proposals` / `kb_search_products` / `kb_read_chunk` + `knowledge-reuse` 技能、`/api/knowledge/*`、multipart 文档上传、「企业方案知识库」页面），对应缺口 #1、#4。
+  - **Phase 4 的完成边界**：上述为功能基线。默认 `HashEmbedder` 是 256 维词袋哈希，已提供 HTTP 语义 embedding 接口，但真实服务尚未部署；`ts_rank_cd` 不是 BM25。已实现 RRF/reranker 接口、版本化索引切换、持久化证据和预算/租约协调；多 Agent 默认关闭。现有引用字段与样例命中测试不能证明业务检索质量达标。
+  - [x] **Phase 5**（2026-10-28 工程验收）：域 C 要求清单与大纲 / 章节状态机（对应缺口 #2、#3、#5）。`db/schema.sql` 新增 `requirement_manifests`、`requirement_items`、`proposal_outlines`、`proposal_sections`、`proposal_section_requirements`、`section_revisions` 及失效触发器；`db/requirements.go`（遍历原文分块 + 招标要素幂等提取、人工增删改、清单确认 epoch）与 `db/proposal.go`（大纲 draft→pending_approval→approved→superseded、`ClaimSectionWrite` 派发门禁、`SaveSectionRevision` 写回二次门禁、绑定版本批准 / 自动撤销 / 回滚）；`bidtools/proposal.go`（`proposal-writing` 技能解锁 `section_read_context` / `section_write_draft`）；`server/proposal.go`（`/api/tasks/{id}/requirements|outlines|sections/*`，派发异步 AI 撰写）；前端任务页「技术标大纲与写作」与 `/proposal` 入口。
+  - **Phase 5 的完成边界**：状态机、门禁与证据失效联动经真实 PostgreSQL + `-race` 验证；`ccgp_2026-10-06/` 10 份真实招标文件（5 DOCX + 5 PDF）全链路无解析 / 状态机报错。要求提取是启发式规则（评分表按「分值列 / 得 N 分」识别，PDF 跨页表格存在行碎片与以类别列为标题的情况），召回与准确率未做人工标注评测，清单必须人工复核后确认。AI 派发为单次 LLM 调用，测试使用替身 Writer，未在真实模型上评估写作质量；知识库证据仍受 Phase 4.3 未验收边界约束，未核验证据只会被记为缺口。
+- **增强工程与待验收阶段（详见 [`ROADMAP.md`](./ROADMAP.md) 第四节）**：
+  - **Phase 4.1**：真实业务评测集、可复现基线与冻结的质量/性能/成本门槛。
+  - **Phase 4.2**：共享混合检索服务、语义 embedding、RRF、reranker、版本化索引与降级；按部署条件和实测选择 pgvector/HNSW。
+  - **Phase 4.3**：结构化证据、原文/型号/版本/数值核验、证据失效传播与单 Agent 有界补查。
+  - **Phase 4.4**：按独立证据范围派发多 Agent，补齐汇总门禁与全局预算，通过对比评测决定启用范围。
   - **Phase 6**：标书图表生成、双层覆盖率与全文一致性核验、锁定版本集合的 DOCX/PDF 套版导出（对应缺口 #6、#7、#8）
   - **Phase 7**：多企业租户隔离与多角色权限控制 RBAC（对应缺口 #10）
 
@@ -28,16 +34,19 @@
   - **数据域划分**：
     1. `assets` + `entity_edges`：仅存储招标文件静态要素（`tender`、`lot`、`clause`、`qualification`、`scoring_item`、`commercial_item`）；
     2. `explorations` + `exploration_nodes` + `findings`：存储任务推演过程节点与核验结论产出物；
-    3. `tender_documents` + `document_chunks` + `company_credentials`：存储招标原文分块与企业资信档案；
-    4. 后续新增的投标要求清单、标书大纲、章节版本正文、图表、知识库与导出记录必须使用独立业务表，严禁混入 `assets` 表。
-- `ingest/`：当前实现纯文本章节切分与强制条款识别；Phase 4 扩展 DOCX/PDF/OCR 版面与跨页表格还原。
-- `bidtools/`：面向招投标业务的 Worker 常驻工具、延迟工具（Deferred Tools）与领域技能（Skills）。
+    3. `tender_documents` + `document_chunks` + `company_credentials`：存储招标原文分块（含 `page_start`/`page_end`、`tables_json`、`bbox_meta` 与来源文件元数据）与企业资信档案；
+    4. `knowledge_documents` + `knowledge_chunks`（域 D）：企业方案/产品知识库，按 `tenant_id` 隔离，`search_tsv` 为由 Go 层中文双字词元生成的 tsvector 列（PostgreSQL 内置分词不切中文，勿改为直接 `to_tsvector(content)`），`embedding` 只与同 `embedding_model` 向量比较；
+    5. 域 C（Phase 5 已建）：`requirement_manifests`（任务级清单 epoch / 确认）、`requirement_items`、`proposal_outlines`、`proposal_sections`、`proposal_section_requirements`（复合外键保证同租户同任务）、`section_revisions`（正文不可篡改触发器）。要求实质变更或原文分块变更 → 清单 epoch 递增并把 approved / pending_approval 大纲置为 superseded（Go 层随即派生 version+1 草案）；`retrieval_evidence` 变 `stale` → 引用它的修订 / 章节降级为 `stale_evidence` 并撤销批准。锁顺序统一为「大纲行 → 章节行」。后续图表与导出记录同样必须使用独立业务表，严禁混入 `assets` 表。
+  - **检索增强存储（已建表）**：域 D 的 `knowledge_indexes` / `knowledge_embeddings` 保存版本化索引与派生上下文；域 B 的 `retrieval_runs` / `retrieval_jobs` / `retrieval_evidence` 保存检索运行、子任务状态、证据引用及核验结果。正式要求清单与章节引用绑定仍归域 C。索引由 `knowledge_catalogs.epoch` 管理来源失效；模型切换必须重建后激活。
+- `ingest/`：`Parse` 多格式解析（`docx.go`、`pdf*.go` 自研 PDF 对象层/字体/版面表格还原、`ocr.go` 可插拔 OCR）+ 行级切分核心 `SplitLines`（纯文本 `Split` 规则不变）+ 入库 `Ingest` / `IngestKnowledge`；`ingest/ingesttest` 提供内存 `.docx` / `.pdf` 样本构造器供测试复用。
+- `bidtools/`：面向招投标业务的 Worker 常驻工具、延迟工具（Deferred Tools）与领域技能（Skills）；知识库工具 `kb_*` 经 `knowledge-reuse` 技能解锁，结果必须携带 `citation`。
 - `agent/`：Planner（主编审）与 Worker（执行单元）编排（注：Digest 是推演图冷节点折叠机制，非独立常驻 Agent；Worker 的 `activityEmitter` 目前推送 `tool`、`tool_error`、`text` 最终摘要三类事件）。
 - `intercept/` & `guard/`：**工具调用级**拦截器与 Hook 适配层。
   - `Guard` 仅拦截 `PreToolUse` / `PostToolUse`，`Guard.Stop()` 恒返回不干预；
   - `intercept_pending` 受执行 Context 与 `waiter_until` 心跳约束，仅用于短时在途工具审批，**不可替代跨重启、跨天的大纲/章节持久化业务审批状态机**。
-- `server/`：REST API 路由（`server/http.go`）、单任务 SSE 实时流（`GET /api/tasks/{id}/events`）与 Bearer Token 鉴权中间件。
+- `server/`：REST API 路由（`server/http.go`；Phase 4 的 multipart 文档上传与 `/api/knowledge/*` 在 `server/knowledge.go`）、单任务 SSE 实时流（`GET /api/tasks/{id}/events`）与 Bearer Token 鉴权中间件；`APIConfig.OCR` / `APIConfig.Embedder` 由 `cmd/server` 以 `ingest.DefaultOCR()` / `db.DefaultEmbedder()` 注入。
 - `web/`：React 19 + TypeScript + Vite + Tailwind CSS v4 前端工作台（`npm run build` 产物 `web/dist` 由服务端按 `AUTOBID_WEB_DIR` 托管；开发时 `npm run dev` 代理 `/api` 到 `127.0.0.1:8080`）。
+- **检索增强模块**：`retrieval/` 已统一召回、融合、重排、原文分页、预算、缓存、降级与研究协调；`eval/retrieval/` / `cmd/retrieval-eval/` 保存评测清单、执行器和实测报告。真实运行/证据/索引/任务检索 API 在 `server/retrieval.go` 实现，详情及限制见 [eval/retrieval/README.md](eval/retrieval/README.md)。
 
 ---
 
@@ -52,3 +61,17 @@
    - Go 后端改动必须通过 `go vet ./...` 与 `go test -race ./...`；涉及数据库层的改动必须配置 `AUTOBID_TEST_DATABASE_URL` 连接真实 PostgreSQL 执行集成测试（避免 `openTestDB` 因未设置环境变量而 `t.Skip`）。
    - 前端改动（`web/`）必须通过 `npm run build` 零错误且与真实后端路由契约严格对齐。
    - 完成某个阶段并验收通过后，同步更新 [`ROADMAP.md`](./ROADMAP.md) 中的 `[x]` 状态。
+
+## 4. 检索增强实施约束（Phase 4.1 ~ 4.4）
+
+1. **先评测，再增强，再决定协作范围**：依次落实业务基线、语义混合检索、证据核验/单 Agent 补查、多 Agent 对比。默认复用现有 PostgreSQL 和 Planner/Worker；不要为每个检索步骤创建一个 Agent，也不要把现有双图当成 GraphRAG 索引。详细交付、证据来源、消融组与验收清单以 `ROADMAP.md` 为准。
+2. **模型与索引一致性**：通过既有 `Embedder` 接口接入服务，记录模型修订、维度、预处理和索引版本。新旧索引并存，重建校验后切换，允许回滚；不得只修改 `DefaultEmbedder()` 使旧数据静默退出召回。缓存/并发去重包含租户、权限、过滤条件与索引/策略版本，来源或权限变化须失效。Phase 7 前默认租户仍由服务端固定。
+3. **检索相关性与业务正确性分开**：RRF/reranker 用于候选排序；原文引用、产品型号/版本/有效期、单位/阈值与适用条件必须另行核验。LLM 派生上下文与原文分离，历史承诺不等于当前能力。模型故障返回带原因的降级状态；缺失、冲突和不可可靠解析的证据不得判满足。
+4. **完整性依赖全量要求**：Phase 5 从文档遍历及复核形成完整要求清单，检索只为每条要求找证据；不能用 Top-K 代替清单。4.3 先使用查询 ID 和版本化原文定位，5/6 再绑定要求、章节修订及响应矩阵；来源失效须传播为 `stale` 并参与导出门禁。
+5. **预算与依赖通过代码和持久化状态实现**：单 Agent 与多 Agent 共用整次运行的预算，初始最多 2 轮补查，多 Agent 初始最多 3 个并行 Worker；具体值受评测配置约束。`Frontier` 不检查前置依赖，必须补齐证据子任务终态检查、幂等汇总和重启恢复；部分失败只能产生明确缺口的部分结果，不能宣称完整通过。不得把 `intercept` 当作上述业务状态机。
+6. **门槛与成绩分开记录**：至少 200 条人工标注业务问题，按项目/文档家族隔离调参与保留集；真实链路报告 Recall@20、nDCG@10、完整证据召回、引用支持、无答案识别、完整正确任务率、P95 和每个正确任务成本。95% 关键证据召回与验收样本中 0 强制条款误判/0 跨租户泄漏是目标，非已达成结果。外部研究的提升幅度不得写成本项目成绩。
+7. **阶段依赖与启用边界**：Phase 5 表结构/审批设计可独立推进，基于知识库的自动写标启用前须完成 4.3；4.4 可保持关闭。分别记录功能实现、评测完成和生产启用，只有证据表明多 Agent 在目标复杂问题上稳定受益且成本达标才启用相应路由。
+
+## 5. Phase 4 增强工程验收边界（2026-10-28）
+
+已实现工程与测试记录见 `eval/retrieval/reports/engineering-checks.md`。用户确认没有真实语料和已部署模型服务，因此业务质量、生产规模/成本、E/D 优势未验收。自动核验只覆盖明确型号的标量属性；条件/复杂语义、招标与资信证据须复核。研究恢复是重发原请求/幂等键，20 秒租约过期后接管，并非后台自动恢复；原截止时间和总预算不延长。生产多 Agent 开关 `AUTOBID_RETRIEVAL_MULTI_AGENT` 默认 false。

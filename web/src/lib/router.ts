@@ -26,7 +26,9 @@ export type Route =
   | { name: 'task'; id: number; tab: string }
   | { name: 'intercepts' }
   | { name: 'credentials' }
+  | { name: 'knowledge' }
   | { name: 'llm' }
+  | { name: 'proposal' }
   | { name: 'roadmap'; phase: string }
   | { name: 'notfound' }
 
@@ -38,7 +40,13 @@ export function matchRoute(path: string): Route {
   }
   if (parts[0] === 'intercepts') return { name: 'intercepts' }
   if (parts[0] === 'credentials') return { name: 'credentials' }
+  if (parts[0] === 'knowledge') return { name: 'knowledge' }
   if (parts[0] === 'llm') return { name: 'llm' }
-  if (parts[0] === 'roadmap') return { name: 'roadmap', phase: parts[1] ?? 'phase4' }
+  if (parts[0] === 'proposal') return { name: 'proposal' }
+  if (parts[0] === 'roadmap') {
+    if (parts[1] === 'phase4') return { name: 'knowledge' }
+    if (parts[1] === 'phase5') return { name: 'proposal' }
+    return { name: 'roadmap', phase: parts[1] ?? 'phase6' }
+  }
   return { name: 'notfound' }
 }

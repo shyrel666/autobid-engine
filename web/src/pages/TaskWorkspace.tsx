@@ -13,9 +13,11 @@ import MonitorTab from './task/MonitorTab'
 import ElementsTab from './task/ElementsTab'
 import ReportTab from './task/ReportTab'
 import TaskLLMTab from './task/TaskLLMTab'
+import ResearchTab from './task/ResearchTab'
+import ProposalTab from './task/ProposalTab'
 import { InterceptList, InterceptAuditTable } from '../components/Intercepts'
 
-type Tab = 'documents' | 'monitor' | 'elements' | 'approvals' | 'report' | 'llm'
+type Tab = 'documents' | 'monitor' | 'elements' | 'approvals' | 'report' | 'llm' | 'research' | 'proposal'
 
 function TextPrompt({ open, title, label, placeholder, onClose, onSubmit }:
   { open: boolean; title: string; label: string; placeholder?: string; onClose: () => void; onSubmit: (v: string) => Promise<void> }) {
@@ -42,7 +44,9 @@ export default function TaskWorkspace({ id, tab, onInterceptsChanged }: { id: nu
   const intercepts = useAsync(() => api.listIntercepts(id), [id])
   const audit = useAsync(() => api.interceptAudit(id), [id], tab === 'approvals')
   const [prompt, setPrompt] = useState<'' | 'goal' | 'hint'>('')
-  const current = (['documents', 'monitor', 'elements', 'approvals', 'report', 'llm'].includes(tab) ? tab : 'documents') as Tab
+  const current = (['documents', 'monitor', 'elements', 'approvals', 'report', 'llm', 'research', 'proposal'].includes(tab) ? tab : 'documents') as Tab
+  // 章节 AI 撰写在后台完成，活动流中的 proposal / section-writer 事件驱动写作视图刷新。
+  const [proposalTick, setProposalTick] = useState(0)
 
   const { reload: reloadOverview } = overview
   const { reload: reloadTask } = task
@@ -70,6 +74,10 @@ export default function TaskWorkspace({ id, tab, onInterceptsChanged }: { id: nu
         refreshIntercepts()
       } else if (a.kind === 'intercept_decided') {
         refreshIntercepts()
+      }
+      if (a.worker === 'section-writer' || a.worker === 'proposal') {
+        if (a.worker === 'section-writer' && a.kind !== 'state' || a.summary.includes('已写回') || a.summary.includes('候选稿')) toast(a.kind === 'error' ? 'error' : 'info', a.summary)
+        setProposalTick((n) => n + 1)
       }
       if (a.kind !== 'tool') scheduleRefresh()
     },
@@ -132,6 +140,8 @@ export default function TaskWorkspace({ id, tab, onInterceptsChanged }: { id: nu
         { key: 'elements', label: '要素与结论' },
         { key: 'approvals', label: <>工具审批 {pending > 0 && <Badge tone="red">{pending}</Badge>}</> },
         { key: 'report', label: '审查报告' },
+        { key: 'research', label: '证据检索' },
+        { key: 'proposal', label: '技术标大纲与写作' },
         { key: 'llm', label: 'LLM 用量' },
       ]} />
 
@@ -146,6 +156,8 @@ export default function TaskWorkspace({ id, tab, onInterceptsChanged }: { id: nu
         </div>
       )}
       {current === 'report' && <ReportTab taskID={id} />}
+      {current === 'research' && <ResearchTab key={id} taskID={id} />}
+      {current === 'proposal' && <ProposalTab key={id} taskID={id} tick={proposalTick} />}
       {current === 'llm' && <TaskLLMTab taskID={id} />}
 
       <TextPrompt open={prompt === 'goal'} title="追加审查目标" label="目标描述" placeholder="例如：核验全部 ★ 条款均有对应响应"

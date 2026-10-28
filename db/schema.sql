@@ -501,8 +501,6 @@ CREATE TABLE IF NOT EXISTS tender_documents (
     content_hash TEXT NOT NULL DEFAULT '',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_tender_documents_content
-    ON tender_documents(task_id, tender_no, lot_no, content_hash);
 
 CREATE TABLE IF NOT EXISTS document_chunks (
     id             BIGSERIAL PRIMARY KEY,
@@ -535,3 +533,540 @@ CREATE INDEX IF NOT EXISTS idx_company_credentials_category ON company_credentia
 DROP TRIGGER IF EXISTS trg_company_credentials_upd ON company_credentials;
 CREATE TRIGGER trg_company_credentials_upd BEFORE UPDATE ON company_credentials
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ---------------------------------------------------------------------------
+-- Phase 4：多格式文档解析溯源（域 A 扩展）与企业方案知识库（域 D）。
+--   tender_documents  补充来源文件元数据：file_name / mime_type / page_count / parse_meta（解析器、OCR、告警），
+--                     content_hash 对二进制文件为原始字节 SHA-256；幂等唯一键纳入 tenant_id。
+--   document_chunks   page_start~page_end 为段落跨越的页码范围（page_no 保留为起始页，兼容旧接口），
+--                     tables_json 为段落内还原的结构化表格，bbox_meta 为版面坐标/段落序号溯源。
+-- ---------------------------------------------------------------------------
+ALTER TABLE tender_documents
+    ADD COLUMN IF NOT EXISTS tenant_id  TEXT NOT NULL DEFAULT 'default',
+    ADD COLUMN IF NOT EXISTS file_name  TEXT,
+    ADD COLUMN IF NOT EXISTS mime_type  TEXT,
+    ADD COLUMN IF NOT EXISTS page_count INT,
+    ADD COLUMN IF NOT EXISTS parse_meta JSONB,
+    ADD COLUMN IF NOT EXISTS created_by TEXT;
+DROP INDEX IF EXISTS uq_tender_documents_content;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tender_documents_tenant_content
+    ON tender_documents(tenant_id, task_id, tender_no, lot_no, content_hash);
+
+ALTER TABLE document_chunks
+    ADD COLUMN IF NOT EXISTS page_start  INT,
+    ADD COLUMN IF NOT EXISTS page_end    INT,
+    ADD COLUMN IF NOT EXISTS tables_json JSONB,
+    ADD COLUMN IF NOT EXISTS bbox_meta   JSONB;
+UPDATE document_chunks SET page_start = page_no, page_end = page_no WHERE page_start IS NULL;
+
+-- 企业方案与产品知识库（域 D，严禁混入 assets）。
+--   category：historical_bid 历史标书 / whitepaper 技术白皮书 / product_spec 产品规格书 / standard_solution 标准技术方案。
+--   content_hash 在租户内幂等去重；extra 保存产品名、厂商、项目年份等可选元数据。
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id           BIGSERIAL PRIMARY KEY,
+    tenant_id    TEXT NOT NULL DEFAULT 'default',
+    category     TEXT NOT NULL
+                   CHECK (category IN ('historical_bid','whitepaper','product_spec','standard_solution')),
+    title        TEXT NOT NULL CHECK (title <> ''),
+    tags         TEXT[] NOT NULL DEFAULT '{}',
+    file_name    TEXT NOT NULL DEFAULT '',
+    mime_type    TEXT NOT NULL DEFAULT '',
+    page_count   INT  NOT NULL DEFAULT 0,
+    content_hash TEXT NOT NULL CHECK (content_hash <> ''),
+    raw_text     TEXT NOT NULL DEFAULT '',
+    parse_meta   JSONB NOT NULL DEFAULT '{}',
+    extra        JSONB NOT NULL DEFAULT '{}',
+    created_by   TEXT NOT NULL DEFAULT '',
+    updated_by   TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_documents_hash ON knowledge_documents(tenant_id, content_hash);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_category ON knowledge_documents(tenant_id, category, id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_tags ON knowledge_documents USING GIN(tags);
+DROP TRIGGER IF EXISTS trg_knowledge_documents_upd ON knowledge_documents;
+CREATE TRIGGER trg_knowledge_documents_upd BEFORE UPDATE ON knowledge_documents
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 知识库分块。PostgreSQL 内置分词器不切分中文，因此由 Go 层（db.KnowledgeTokens）把 CJK 文本展开为
+-- 单字 + 双字 n-gram、拉丁/数字按词小写后写入 search_title / search_body，再以 'simple' 配置生成 tsvector：
+-- 标题与章节路径权重 A，正文与表格权重 B。embedding 为可选向量（embedding_model 标识向量空间，只比较同模型向量）。
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+    id              BIGSERIAL PRIMARY KEY,
+    tenant_id       TEXT NOT NULL DEFAULT 'default',
+    doc_id          BIGINT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+    seq             INT  NOT NULL CHECK (seq >= 0),
+    level           INT  NOT NULL DEFAULT 0,
+    section_code    TEXT NOT NULL DEFAULT '',
+    section_title   TEXT NOT NULL DEFAULT '',
+    section_path    TEXT NOT NULL DEFAULT '',
+    page_start      INT  NOT NULL DEFAULT 1,
+    page_end        INT  NOT NULL DEFAULT 1,
+    content         TEXT NOT NULL DEFAULT '',
+    tables_json     JSONB NOT NULL DEFAULT '[]',
+    bbox_meta       JSONB NOT NULL DEFAULT '{}',
+    token_estimate  INT  NOT NULL DEFAULT 0,
+    is_mandatory    BOOLEAN NOT NULL DEFAULT false,
+    search_title    TEXT NOT NULL DEFAULT '',
+    search_body     TEXT NOT NULL DEFAULT '',
+    search_tsv      tsvector GENERATED ALWAYS AS (
+                        setweight(to_tsvector('simple'::regconfig, search_title), 'A') ||
+                        setweight(to_tsvector('simple'::regconfig, search_body), 'B')) STORED,
+    embedding       float8[],
+    embedding_model TEXT NOT NULL DEFAULT '',
+    created_by      TEXT NOT NULL DEFAULT '',
+    updated_by      TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ck_knowledge_chunk_pages CHECK (page_end >= page_start)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_chunks_seq ON knowledge_chunks(tenant_id, doc_id, seq);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_tsv ON knowledge_chunks USING GIN(search_tsv);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_model ON knowledge_chunks(tenant_id, embedding_model) WHERE embedding IS NOT NULL;
+
+-- 余弦相似度（两向量任一为空、维度不同或零向量时返回 0）。
+CREATE OR REPLACE FUNCTION kb_cosine(a float8[], b float8[]) RETURNS float8 AS $$
+    SELECT CASE
+        WHEN a IS NULL OR b IS NULL OR cardinality(a) = 0 OR cardinality(a) <> cardinality(b) THEN 0
+        ELSE COALESCE((
+            SELECT SUM(x * y) / NULLIF(sqrt(SUM(x * x)) * sqrt(SUM(y * y)), 0)
+            FROM unnest(a, b) AS t(x, y)), 0)
+    END
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+-- Phase 4.2-4.4: versioned KB indexes (D), retrieval runs/evidence/jobs (B).
+CREATE TABLE IF NOT EXISTS knowledge_catalogs (
+    tenant_id TEXT PRIMARY KEY DEFAULT 'default',
+    epoch BIGINT NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS knowledge_indexes (
+    id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default',
+    model TEXT NOT NULL, dimension INT NOT NULL CHECK (dimension > 0),
+    preprocessing TEXT NOT NULL, epoch BIGINT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('building','ready','failed')),
+    active BOOLEAN NOT NULL DEFAULT false, error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT '',
+    UNIQUE (tenant_id,id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_active_index ON knowledge_indexes(tenant_id) WHERE active;
+CREATE TABLE IF NOT EXISTS knowledge_embeddings (
+    tenant_id TEXT NOT NULL DEFAULT 'default', index_id BIGINT NOT NULL, chunk_id BIGINT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+    content_hash TEXT NOT NULL, embedding float8[] NOT NULL,
+    created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (tenant_id,index_id,chunk_id),
+    FOREIGN KEY (tenant_id,index_id) REFERENCES knowledge_indexes(tenant_id,id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS retrieval_runs (
+    id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', task_id BIGINT,
+    request_key TEXT NOT NULL, request_hash TEXT NOT NULL, request JSONB NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('search','research')),
+    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','completed','partial','failed','cancelled','budget_exhausted')),
+    result JSONB NOT NULL DEFAULT '{}',
+    max_calls INT NOT NULL CHECK (max_calls>0), max_tokens INT NOT NULL CHECK (max_tokens>0),
+    used_calls INT NOT NULL DEFAULT 0, reserved_tokens INT NOT NULL DEFAULT 0,
+    actual_tokens INT NOT NULL DEFAULT 0,
+    deadline TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ,
+    created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT '',
+    UNIQUE (tenant_id,request_key), UNIQUE (tenant_id,id)
+);
+CREATE TABLE IF NOT EXISTS retrieval_evidence (
+    id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', run_id BIGINT NOT NULL,
+    source_domain TEXT NOT NULL CHECK (source_domain IN ('knowledge','tender','credential')),
+    source_id BIGINT NOT NULL, doc_id BIGINT NOT NULL, content_hash TEXT NOT NULL,
+    snapshot JSONB NOT NULL, claim JSONB NOT NULL DEFAULT '{}',
+    relation TEXT NOT NULL DEFAULT 'insufficient' CHECK (relation IN ('supports','contradicts','insufficient')),
+    status TEXT NOT NULL DEFAULT 'unverified' CHECK (status IN ('unverified','verified','stale')),
+    reason TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT '',
+    UNIQUE (tenant_id,run_id,source_domain,source_id),
+    FOREIGN KEY (tenant_id,run_id) REFERENCES retrieval_runs(tenant_id,id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS retrieval_jobs (
+    id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', run_id BIGINT NOT NULL,
+    ordinal INT NOT NULL, spec JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','completed','failed','cancelled','budget_exhausted')),
+    lease_token BIGINT NOT NULL DEFAULT 0, lease_until TIMESTAMPTZ,
+    attempts INT NOT NULL DEFAULT 0, result JSONB NOT NULL DEFAULT '{}',
+    created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT '',
+    UNIQUE (tenant_id,run_id,ordinal),
+    FOREIGN KEY (tenant_id,run_id) REFERENCES retrieval_runs(tenant_id,id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_retrieval_runs_task ON retrieval_runs(tenant_id,task_id,id DESC);
+CREATE INDEX IF NOT EXISTS idx_retrieval_evidence_source ON retrieval_evidence(tenant_id,source_domain,doc_id);
+
+CREATE OR REPLACE FUNCTION retrieval_evidence_invalidated() RETURNS trigger AS $$
+BEGIN
+    IF NEW.status='stale' THEN
+        UPDATE retrieval_runs SET status='partial',result=jsonb_build_object('gap','source evidence invalidated; reread current evidence'),updated_by=NEW.updated_by
+        WHERE tenant_id=NEW.tenant_id AND id=NEW.run_id AND kind='research' AND status='completed';
+    END IF;
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS retrieval_evidence_invalidated_trigger ON retrieval_evidence;
+CREATE TRIGGER retrieval_evidence_invalidated_trigger AFTER UPDATE OF status ON retrieval_evidence
+    FOR EACH ROW EXECUTE FUNCTION retrieval_evidence_invalidated();
+
+CREATE OR REPLACE FUNCTION knowledge_changed() RETURNS trigger AS $$
+DECLARE t TEXT; did BIGINT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN t := OLD.tenant_id; ELSE t := NEW.tenant_id; END IF;
+    INSERT INTO knowledge_catalogs(tenant_id,epoch) VALUES(t,1)
+        ON CONFLICT(tenant_id) DO UPDATE SET epoch=knowledge_catalogs.epoch+1;
+    IF TG_TABLE_NAME='knowledge_documents' THEN
+        IF TG_OP='DELETE' THEN did:=OLD.id; ELSE did:=NEW.id; END IF;
+    ELSE
+        IF TG_OP='DELETE' THEN did:=OLD.doc_id; ELSE did:=NEW.doc_id; END IF;
+    END IF;
+    UPDATE retrieval_evidence SET status='stale', reason='source changed or deleted'
+        WHERE tenant_id=t AND source_domain='knowledge' AND doc_id=did AND status<>'stale';
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_knowledge_documents_changed ON knowledge_documents;
+CREATE TRIGGER trg_knowledge_documents_changed AFTER INSERT OR UPDATE OR DELETE ON knowledge_documents
+    FOR EACH ROW EXECUTE FUNCTION knowledge_changed();
+DROP TRIGGER IF EXISTS trg_knowledge_chunks_changed ON knowledge_chunks;
+CREATE TRIGGER trg_knowledge_chunks_changed AFTER INSERT OR UPDATE OR DELETE ON knowledge_chunks
+    FOR EACH ROW EXECUTE FUNCTION knowledge_changed();
+
+CREATE OR REPLACE FUNCTION retrieval_source_changed() RETURNS trigger AS $$
+DECLARE source TEXT; row_id BIGINT; parent_id BIGINT; t TEXT;
+BEGIN
+    row_id:=OLD.id;
+    t:=COALESCE(to_jsonb(OLD)->>'tenant_id','default');
+    IF TG_TABLE_NAME='company_credentials' THEN source:='credential';parent_id:=row_id;
+    ELSIF TG_TABLE_NAME='tender_documents' THEN source:='tender';parent_id:=row_id;
+    ELSE source:='tender';parent_id:=OLD.doc_id;
+    END IF;
+    UPDATE retrieval_evidence SET status='stale',reason='source changed or deleted'
+        WHERE tenant_id=t AND source_domain=source AND doc_id=parent_id AND status<>'stale';
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_tender_retrieval_stale ON tender_documents;
+CREATE TRIGGER trg_tender_retrieval_stale AFTER UPDATE OR DELETE ON tender_documents FOR EACH ROW EXECUTE FUNCTION retrieval_source_changed();
+DROP TRIGGER IF EXISTS trg_chunks_retrieval_stale ON document_chunks;
+CREATE TRIGGER trg_chunks_retrieval_stale AFTER UPDATE OR DELETE ON document_chunks FOR EACH ROW EXECUTE FUNCTION retrieval_source_changed();
+DROP TRIGGER IF EXISTS trg_credentials_retrieval_stale ON company_credentials;
+CREATE TRIGGER trg_credentials_retrieval_stale AFTER UPDATE OR DELETE ON company_credentials FOR EACH ROW EXECUTE FUNCTION retrieval_source_changed();
+
+-- ---------------------------------------------------------------------------
+-- Phase 5（域 C）：可复核要求清单、版本化大纲持久化审批与并发安全章节写作。
+--   requirement_manifests  任务级清单确认状态；requirement_items 的实质增删改或其原文分块变更会递增 epoch，
+--                          已确认清单变为 stale，并把 approved / pending_approval 大纲置为 superseded。
+--   requirement_items      逐文档遍历提取 + 人工复核的完整要求清单（不是检索 Top-K），绑定版本化原文来源与 4.3 证据。
+--   proposal_outlines      大纲版本与审批状态机（draft -> pending_approval -> approved -> superseded），跨重启持久化。
+--   proposal_sections      大纲章节、前置依赖与写作租约；要求映射见 proposal_section_requirements（复合外键保证同租户同任务）。
+--   section_revisions      章节多版本正文；正文不可篡改，候选稿（stale_outline / conflict_candidate）从不成为当前主版本。
+-- requirement_manifests.approved_by 记录确认清单完整的操作人。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS requirement_manifests (
+    tenant_id    TEXT NOT NULL DEFAULT 'default',
+    task_id      BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    epoch        BIGINT NOT NULL DEFAULT 1 CHECK (epoch > 0),
+    status       TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','stale')),
+    confirmed_at TIMESTAMPTZ,
+    created_by   TEXT NOT NULL DEFAULT '',
+    updated_by   TEXT NOT NULL DEFAULT '',
+    approved_by  TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, task_id)
+);
+DROP TRIGGER IF EXISTS trg_requirement_manifests_upd ON requirement_manifests;
+CREATE TRIGGER trg_requirement_manifests_upd BEFORE UPDATE ON requirement_manifests
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS requirement_items (
+    id              BIGSERIAL PRIMARY KEY,
+    tenant_id       TEXT NOT NULL DEFAULT 'default',
+    task_id         BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    code            TEXT NOT NULL CHECK (code <> ''),
+    category        TEXT NOT NULL
+                      CHECK (category IN ('scoring_item','mandatory_clause','non_scoring_required','format_attachment')),
+    title           TEXT NOT NULL CHECK (title <> ''),
+    description     TEXT NOT NULL DEFAULT '',
+    is_mandatory    BOOLEAN NOT NULL DEFAULT false,
+    score_weight    DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (score_weight >= 0),
+    origin          TEXT NOT NULL DEFAULT 'manual' CHECK (origin IN ('extracted','manual')),
+    source_asset_id BIGINT REFERENCES assets(id) ON DELETE SET NULL,
+    source_doc_id   BIGINT REFERENCES tender_documents(id) ON DELETE SET NULL,
+    source_chunk_id BIGINT REFERENCES document_chunks(id) ON DELETE SET NULL,
+    source_hash     TEXT NOT NULL DEFAULT '',
+    source_loc      JSONB NOT NULL DEFAULT '{}',
+    evidence_run_id BIGINT,
+    evidence_ids    BIGINT[] NOT NULL DEFAULT '{}',
+    evidence_gap    TEXT NOT NULL DEFAULT '',
+    review_status   TEXT NOT NULL DEFAULT 'draft' CHECK (review_status IN ('draft','confirmed','needs_revision')),
+    created_by      TEXT NOT NULL DEFAULT '',
+    updated_by      TEXT NOT NULL DEFAULT '',
+    approved_by     TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_requirement_items_code UNIQUE (tenant_id, task_id, code),
+    CONSTRAINT uq_requirement_items_tenant_id UNIQUE (tenant_id, id),
+    CONSTRAINT uq_requirement_items_task_id UNIQUE (tenant_id, task_id, id),
+    CONSTRAINT fk_requirement_items_run FOREIGN KEY (tenant_id, evidence_run_id)
+        REFERENCES retrieval_runs(tenant_id, id) ON DELETE SET NULL (evidence_run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_requirement_items_task ON requirement_items(tenant_id, task_id, category, id);
+CREATE INDEX IF NOT EXISTS idx_requirement_items_chunk ON requirement_items(source_chunk_id) WHERE source_chunk_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_requirement_items_evidence ON requirement_items USING GIN(evidence_ids);
+DROP TRIGGER IF EXISTS trg_requirement_items_upd ON requirement_items;
+CREATE TRIGGER trg_requirement_items_upd BEFORE UPDATE ON requirement_items
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS proposal_outlines (
+    id                   BIGSERIAL PRIMARY KEY,
+    tenant_id            TEXT NOT NULL DEFAULT 'default',
+    task_id              BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    version              INT NOT NULL CHECK (version > 0),
+    requirements_epoch   BIGINT NOT NULL DEFAULT 1,
+    status               TEXT NOT NULL DEFAULT 'draft'
+                           CHECK (status IN ('draft','pending_approval','approved','superseded')),
+    derived_from_version INT,
+    note                 TEXT NOT NULL DEFAULT '',
+    submitted_by         TEXT NOT NULL DEFAULT '',
+    submitted_at         TIMESTAMPTZ,
+    approved_at          TIMESTAMPTZ,
+    superseded_at        TIMESTAMPTZ,
+    created_by           TEXT NOT NULL DEFAULT '',
+    updated_by           TEXT NOT NULL DEFAULT '',
+    approved_by          TEXT NOT NULL DEFAULT '',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_proposal_outlines_version UNIQUE (tenant_id, task_id, version),
+    CONSTRAINT uq_proposal_outlines_tenant_id UNIQUE (tenant_id, id),
+    CONSTRAINT uq_proposal_outlines_task_id UNIQUE (tenant_id, task_id, id)
+);
+-- 每个任务至多一个有效批准大纲、至多一个在编（draft / pending_approval）大纲。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_proposal_outlines_approved ON proposal_outlines(tenant_id, task_id) WHERE status = 'approved';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_proposal_outlines_open ON proposal_outlines(tenant_id, task_id) WHERE status IN ('draft','pending_approval');
+DROP TRIGGER IF EXISTS trg_proposal_outlines_upd ON proposal_outlines;
+CREATE TRIGGER trg_proposal_outlines_upd BEFORE UPDATE ON proposal_outlines
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS proposal_sections (
+    id                      BIGSERIAL PRIMARY KEY,
+    tenant_id               TEXT NOT NULL DEFAULT 'default',
+    task_id                 BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    outline_id              BIGINT NOT NULL,
+    outline_version         INT NOT NULL CHECK (outline_version > 0),
+    section_code            TEXT NOT NULL CHECK (section_code <> ''),
+    title                   TEXT NOT NULL CHECK (title <> ''),
+    level                   INT NOT NULL DEFAULT 1 CHECK (level > 0),
+    seq                     INT NOT NULL CHECK (seq >= 0),
+    writing_guide           TEXT NOT NULL DEFAULT '',
+    target_words            INT NOT NULL DEFAULT 0 CHECK (target_words >= 0),
+    depends_on_section_ids  BIGINT[] NOT NULL DEFAULT '{}',
+    derived_from_section_id BIGINT,
+    current_rev_no          INT NOT NULL DEFAULT 0 CHECK (current_rev_no >= 0),
+    approved_rev_no         INT,
+    status                  TEXT NOT NULL DEFAULT 'pending'
+                              CHECK (status IN ('pending','ready','writing','draft','reviewing','approved','rejected','stale_outline','stale_evidence')),
+    lease_token             BIGINT NOT NULL DEFAULT 0,
+    lease_until             TIMESTAMPTZ,
+    created_by              TEXT NOT NULL DEFAULT '',
+    updated_by              TEXT NOT NULL DEFAULT '',
+    approved_by             TEXT NOT NULL DEFAULT '',
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_proposal_sections_code UNIQUE (tenant_id, outline_id, section_code),
+    CONSTRAINT uq_proposal_sections_seq UNIQUE (tenant_id, outline_id, seq),
+    CONSTRAINT uq_proposal_sections_tenant_id UNIQUE (tenant_id, id),
+    CONSTRAINT uq_proposal_sections_task_id UNIQUE (tenant_id, task_id, id),
+    CONSTRAINT ck_proposal_sections_approved CHECK (approved_rev_no IS NULL OR (approved_rev_no > 0 AND approved_rev_no <= current_rev_no)),
+    CONSTRAINT fk_proposal_sections_outline FOREIGN KEY (tenant_id, task_id, outline_id)
+        REFERENCES proposal_outlines(tenant_id, task_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_proposal_sections_outline ON proposal_sections(tenant_id, outline_id, seq);
+DROP TRIGGER IF EXISTS trg_proposal_sections_upd ON proposal_sections;
+CREATE TRIGGER trg_proposal_sections_upd BEFORE UPDATE ON proposal_sections
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 前置依赖只能指向同一大纲内的其他章节（无环由 Go 层在同一事务内校验）。
+CREATE OR REPLACE FUNCTION proposal_sections_check_deps() RETURNS trigger AS $$
+BEGIN
+    IF NEW.id = ANY(NEW.depends_on_section_ids) THEN
+        RAISE EXCEPTION 'proposal section % depends on itself', NEW.id USING ERRCODE = 'check_violation';
+    END IF;
+    IF EXISTS (SELECT 1 FROM unnest(NEW.depends_on_section_ids) AS d(id)
+               WHERE NOT EXISTS (SELECT 1 FROM proposal_sections s
+                                 WHERE s.id = d.id AND s.tenant_id = NEW.tenant_id AND s.outline_id = NEW.outline_id)) THEN
+        RAISE EXCEPTION 'proposal section dependencies must belong to outline %', NEW.outline_id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_proposal_sections_deps ON proposal_sections;
+CREATE TRIGGER trg_proposal_sections_deps BEFORE INSERT OR UPDATE OF depends_on_section_ids ON proposal_sections
+    FOR EACH ROW EXECUTE FUNCTION proposal_sections_check_deps();
+
+-- 章节与要求的多对多映射：复合外键保证两端同租户、同任务，杜绝跨租户 / 跨任务引用。
+CREATE TABLE IF NOT EXISTS proposal_section_requirements (
+    tenant_id      TEXT NOT NULL DEFAULT 'default',
+    task_id        BIGINT NOT NULL,
+    section_id     BIGINT NOT NULL,
+    requirement_id BIGINT NOT NULL,
+    created_by     TEXT NOT NULL DEFAULT '',
+    updated_by     TEXT NOT NULL DEFAULT '',
+    approved_by    TEXT NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, section_id, requirement_id),
+    FOREIGN KEY (tenant_id, task_id, section_id) REFERENCES proposal_sections(tenant_id, task_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, task_id, requirement_id) REFERENCES requirement_items(tenant_id, task_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_proposal_section_requirements_req ON proposal_section_requirements(tenant_id, requirement_id);
+
+CREATE TABLE IF NOT EXISTS section_revisions (
+    id                       BIGSERIAL PRIMARY KEY,
+    tenant_id                TEXT NOT NULL DEFAULT 'default',
+    task_id                  BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    section_id               BIGINT NOT NULL,
+    rev_no                   INT NOT NULL CHECK (rev_no > 0),
+    base_rev_no              INT NOT NULL CHECK (base_rev_no >= 0),
+    based_on_outline_version INT NOT NULL CHECK (based_on_outline_version > 0),
+    source                   TEXT NOT NULL CHECK (source IN ('ai_initial','ai_rewrite','human_edit','rollback')),
+    rollback_of_rev_no       INT,
+    content_md               TEXT NOT NULL DEFAULT '',
+    summary_note             TEXT NOT NULL DEFAULT '',
+    diff_summary             TEXT NOT NULL DEFAULT '',
+    evidence_ids             BIGINT[] NOT NULL DEFAULT '{}',
+    gaps                     JSONB NOT NULL DEFAULT '[]',
+    status                   TEXT NOT NULL
+                               CHECK (status IN ('draft','reviewing','approved','rejected','stale_outline','stale_evidence','conflict_candidate')),
+    created_by               TEXT NOT NULL DEFAULT '',
+    updated_by               TEXT NOT NULL DEFAULT '',
+    approved_by              TEXT NOT NULL DEFAULT '',
+    approved_at              TIMESTAMPTZ,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_section_revisions_rev UNIQUE (tenant_id, section_id, rev_no),
+    FOREIGN KEY (tenant_id, task_id, section_id) REFERENCES proposal_sections(tenant_id, task_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_section_revisions_evidence ON section_revisions USING GIN(evidence_ids);
+DROP TRIGGER IF EXISTS trg_section_revisions_upd ON section_revisions;
+CREATE TRIGGER trg_section_revisions_upd BEFORE UPDATE ON section_revisions
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 版本链不可篡改：修订记录只允许变更状态与审批字段。
+CREATE OR REPLACE FUNCTION section_revisions_immutable() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.tenant_id, NEW.task_id, NEW.section_id, NEW.rev_no, NEW.base_rev_no, NEW.based_on_outline_version, NEW.source,
+        NEW.rollback_of_rev_no, NEW.content_md, NEW.summary_note, NEW.diff_summary, NEW.evidence_ids, NEW.gaps, NEW.created_by, NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.tenant_id, OLD.task_id, OLD.section_id, OLD.rev_no, OLD.base_rev_no, OLD.based_on_outline_version, OLD.source,
+        OLD.rollback_of_rev_no, OLD.content_md, OLD.summary_note, OLD.diff_summary, OLD.evidence_ids, OLD.gaps, OLD.created_by, OLD.created_at) THEN
+        RAISE EXCEPTION 'section revision % is immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_section_revisions_immutable ON section_revisions;
+CREATE TRIGGER trg_section_revisions_immutable BEFORE UPDATE ON section_revisions
+    FOR EACH ROW EXECUTE FUNCTION section_revisions_immutable();
+
+-- 要求清单失效：递增清单 epoch，已确认清单变 stale，审批中 / 已批准大纲置为 superseded。
+-- 任务正在级联删除时（tasks 行已不可见）不做任何事。
+CREATE OR REPLACE FUNCTION requirement_manifest_bump(t TEXT, tid BIGINT, actor TEXT) RETURNS void AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM tasks WHERE id = tid) THEN
+        RETURN;
+    END IF;
+    INSERT INTO requirement_manifests(tenant_id, task_id, epoch, status, created_by, updated_by)
+    VALUES (t, tid, 1, 'draft', actor, actor)
+    ON CONFLICT (tenant_id, task_id) DO UPDATE
+        SET epoch = requirement_manifests.epoch + 1,
+            status = CASE WHEN requirement_manifests.status = 'confirmed' THEN 'stale' ELSE requirement_manifests.status END,
+            updated_by = EXCLUDED.updated_by;
+    UPDATE proposal_outlines SET status = 'superseded', superseded_at = now(), updated_by = actor
+        WHERE tenant_id = t AND task_id = tid AND status IN ('approved','pending_approval');
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION requirement_items_changed() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        PERFORM requirement_manifest_bump(OLD.tenant_id, OLD.task_id, OLD.updated_by);
+        RETURN NULL;
+    END IF;
+    IF TG_OP = 'UPDATE' AND
+       (NEW.code, NEW.category, NEW.title, NEW.description, NEW.is_mandatory, NEW.score_weight,
+        NEW.source_doc_id, NEW.source_chunk_id, NEW.source_hash, NEW.source_loc)
+       IS NOT DISTINCT FROM
+       (OLD.code, OLD.category, OLD.title, OLD.description, OLD.is_mandatory, OLD.score_weight,
+        OLD.source_doc_id, OLD.source_chunk_id, OLD.source_hash, OLD.source_loc) THEN
+        RETURN NULL; -- 证据绑定与复核状态变化不改变清单内容
+    END IF;
+    PERFORM requirement_manifest_bump(NEW.tenant_id, NEW.task_id, NEW.updated_by);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_requirement_items_changed ON requirement_items;
+CREATE TRIGGER trg_requirement_items_changed AFTER INSERT OR UPDATE OR DELETE ON requirement_items
+    FOR EACH ROW EXECUTE FUNCTION requirement_items_changed();
+
+-- 要求的招标原文分块被修改或删除：要求标记待复核并使清单 / 大纲失效（BEFORE DELETE 先于 SET NULL 外键动作）。
+CREATE OR REPLACE FUNCTION requirement_source_changed() RETURNS trigger AS $$
+DECLARE r RECORD;
+BEGIN
+    IF TG_OP = 'UPDATE' AND (NEW.content, NEW.section_code, NEW.section_title, NEW.page_start, NEW.page_end, NEW.tables_json)
+        IS NOT DISTINCT FROM (OLD.content, OLD.section_code, OLD.section_title, OLD.page_start, OLD.page_end, OLD.tables_json) THEN
+        RETURN NULL;
+    END IF;
+    IF EXISTS (SELECT 1 FROM tasks WHERE id = OLD.task_id) THEN
+        FOR r IN UPDATE requirement_items SET review_status = 'needs_revision'
+                     WHERE source_chunk_id = OLD.id RETURNING tenant_id, task_id LOOP
+            PERFORM requirement_manifest_bump(r.tenant_id, r.task_id, 'system');
+        END LOOP;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_chunks_requirement_upd ON document_chunks;
+CREATE TRIGGER trg_chunks_requirement_upd AFTER UPDATE ON document_chunks
+    FOR EACH ROW EXECUTE FUNCTION requirement_source_changed();
+DROP TRIGGER IF EXISTS trg_chunks_requirement_del ON document_chunks;
+CREATE TRIGGER trg_chunks_requirement_del BEFORE DELETE ON document_chunks
+    FOR EACH ROW EXECUTE FUNCTION requirement_source_changed();
+
+-- 大纲被取代：其章节失去写作资格（租约作废），在途写回只能归档为 stale_outline 候选稿。
+CREATE OR REPLACE FUNCTION proposal_outline_superseded() RETURNS trigger AS $$
+BEGIN
+    UPDATE proposal_sections SET status = 'stale_outline', lease_until = NULL, updated_by = NEW.updated_by
+        WHERE tenant_id = NEW.tenant_id AND outline_id = NEW.id;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_proposal_outline_superseded ON proposal_outlines;
+CREATE TRIGGER trg_proposal_outline_superseded AFTER UPDATE OF status ON proposal_outlines
+    FOR EACH ROW WHEN (NEW.status = 'superseded' AND OLD.status <> 'superseded')
+    EXECUTE FUNCTION proposal_outline_superseded();
+
+-- Phase 4.3 证据失效联动：引用该证据的修订标记 stale_evidence；章节当前主版本受影响时撤销批准并降级；
+-- 要求项记录证据缺口。失效证据不能继续支撑定稿。
+CREATE OR REPLACE FUNCTION proposal_evidence_invalidated() RETURNS trigger AS $$
+BEGIN
+    IF NEW.status <> 'stale' OR OLD.status = 'stale' THEN
+        RETURN NULL;
+    END IF;
+    UPDATE section_revisions SET status = 'stale_evidence', updated_by = 'system'
+        WHERE tenant_id = NEW.tenant_id AND evidence_ids @> ARRAY[NEW.id]
+          AND status IN ('draft','reviewing','approved');
+    UPDATE proposal_sections s SET status = 'stale_evidence', approved_rev_no = NULL, updated_by = 'system'
+        FROM section_revisions r
+        WHERE r.tenant_id = NEW.tenant_id AND r.section_id = s.id AND r.rev_no = s.current_rev_no
+          AND r.evidence_ids @> ARRAY[NEW.id] AND s.tenant_id = NEW.tenant_id AND s.status <> 'stale_outline';
+    UPDATE requirement_items
+        SET evidence_gap = btrim(evidence_gap || E'\n' || format('evidence %s stale: %s', NEW.id, NEW.reason))
+        WHERE tenant_id = NEW.tenant_id AND evidence_ids @> ARRAY[NEW.id];
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_proposal_evidence_invalidated ON retrieval_evidence;
+CREATE TRIGGER trg_proposal_evidence_invalidated AFTER UPDATE OF status ON retrieval_evidence
+    FOR EACH ROW EXECUTE FUNCTION proposal_evidence_invalidated();

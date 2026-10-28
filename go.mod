@@ -5,6 +5,7 @@ go 1.24
 require (
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/jackc/pgx/v5 v5.7.1
+	golang.org/x/text v0.27.0
 )
 
 require (
@@ -29,5 +30,4 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/crypto v0.40.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/text v0.27.0 // indirect
 )

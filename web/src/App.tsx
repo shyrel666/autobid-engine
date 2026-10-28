@@ -12,8 +12,10 @@ import TasksPage from './pages/TasksPage'
 import TaskWorkspace from './pages/TaskWorkspace'
 import InterceptsPage from './pages/InterceptsPage'
 import CredentialsPage from './pages/CredentialsPage'
+import KnowledgePage from './pages/KnowledgePage'
 import LLMPage from './pages/LLMPage'
 import RoadmapPage from './pages/RoadmapPage'
+import ProposalEntryPage from './pages/ProposalEntryPage'
 
 function NavItem({ to, icon, label, active, badge, muted }:
   { to: string; icon: ReactNode; label: string; active: boolean; badge?: ReactNode; muted?: boolean }) {
@@ -128,7 +130,9 @@ export default function App() {
     case 'task': page = <TaskWorkspace key={route.id} id={route.id} tab={route.tab} onInterceptsChanged={pollPending} />; break
     case 'intercepts': page = <InterceptsPage onChanged={pollPending} />; break
     case 'credentials': page = <CredentialsPage />; break
+    case 'knowledge': page = <KnowledgePage />; break
     case 'llm': page = <LLMPage />; break
+    case 'proposal': page = <ProposalEntryPage />; break
     case 'roadmap': page = <RoadmapPage phase={route.phase} />; break
     default: page = <div className="p-8 text-slate-500">页面不存在。<a className="text-blue-600" href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>返回任务列表</a></div>
   }
@@ -147,23 +151,24 @@ export default function App() {
         <nav className="flex-1 space-y-4 overflow-y-auto px-3 pb-4">
           <div className="space-y-0.5">
             <div className="px-3 pb-1 text-xs font-medium text-slate-400">审查工作区</div>
-            <NavItem to="/tasks" icon={<LayoutList className="size-4" />} label="任务与招标文档" active={route.name === 'tasks' || route.name === 'task'} />
+            <NavItem to="/tasks" icon={<LayoutList className="size-4" />} label="任务与招标文档" active={route.name === 'tasks' || (route.name === 'task' && route.tab !== 'proposal')} />
+            <NavItem to="/proposal" icon={<PenTool className="size-4" />} label="技术标大纲与写作"
+              active={route.name === 'proposal' || (route.name === 'task' && route.tab === 'proposal')} />
             <NavItem to="/intercepts" icon={<ClipboardList className="size-4" />} label="工具调用审批" active={route.name === 'intercepts'}
               badge={pendingCount > 0 ? <Badge tone="red">{pendingCount}</Badge> : undefined} />
           </div>
           <div className="space-y-0.5">
             <div className="px-3 pb-1 text-xs font-medium text-slate-400">资料与配置</div>
             <NavItem to="/credentials" icon={<Building2 className="size-4" />} label="企业资信库" active={route.name === 'credentials'} />
+            <NavItem to="/knowledge" icon={<BookOpen className="size-4" />} label="企业方案知识库" active={route.name === 'knowledge'} />
             <NavItem to="/llm" icon={<Cpu className="size-4" />} label="LLM 配置" active={route.name === 'llm'} />
           </div>
           <div className="space-y-0.5">
             <div className="px-3 pb-1 text-xs font-medium text-slate-400">规划中模块</div>
-            <NavItem to="/roadmap/phase4" icon={<BookOpen className="size-4" />} label="企业方案知识库" muted active={isRoadmap('phase4')} badge={<Badge>P4</Badge>} />
-            <NavItem to="/roadmap/phase5" icon={<PenTool className="size-4" />} label="技术标大纲与写作" muted active={isRoadmap('phase5')} badge={<Badge>P5</Badge>} />
             <NavItem to="/roadmap/phase6" icon={<FileOutput className="size-4" />} label="成稿套版导出" muted active={isRoadmap('phase6')} badge={<Badge>P6</Badge>} />
           </div>
         </nav>
-        <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-400">Phase 3 · 单团队版</div>
+        <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-400">Phase 5 · 单团队版</div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center justify-end border-b border-slate-200 bg-white px-4">

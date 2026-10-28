@@ -1,0 +1,674 @@
+{
+  "version": "synthetic-v1",
+  "synthetic": true,
+  "snapshot": "generated-fixtures-v1-no-business-documents",
+  "source_permission": "Project-authored synthetic regression fixtures; no external/private documents.",
+  "documents": [
+    {
+      "key": "recovery",
+      "family": "recovery",
+      "title": "恢复能力",
+      "category": "product_spec",
+      "extra": {
+        "product": "SYN-1",
+        "version": "v1"
+      },
+      "chunks": [
+        "恢复时间：30秒",
+        "备份周期：24小时"
+      ]
+    },
+    {
+      "key": "warranty",
+      "family": "warranty",
+      "title": "质保服务",
+      "category": "product_spec",
+      "extra": {
+        "product": "SYN-2",
+        "version": "v1"
+      },
+      "chunks": [
+        "质保期：2年",
+        "响应时间：15分钟"
+      ]
+    },
+    {
+      "key": "storage",
+      "family": "storage",
+      "title": "存储规格",
+      "category": "product_spec",
+      "extra": {
+        "product": "SYN-3",
+        "version": "v1"
+      },
+      "chunks": [
+        "存储容量：2TB",
+        "录像保存：30天"
+      ]
+    },
+    {
+      "key": "camera",
+      "family": "camera",
+      "title": "摄像机规格",
+      "category": "product_spec",
+      "extra": {
+        "product": "SYN-4",
+        "version": "v1"
+      },
+      "chunks": [
+        "分辨率：400万像素",
+        "接入数量：64路"
+      ]
+    },
+    {
+      "key": "compute",
+      "family": "compute",
+      "title": "计算资源",
+      "category": "product_spec",
+      "extra": {
+        "product": "SYN-5",
+        "version": "v1"
+      },
+      "chunks": [
+        "处理器：16核",
+        "内存容量：64GB"
+      ]
+    },
+    {
+      "key": "availability",
+      "family": "availability",
+      "title": "服务可用性",
+      "category": "product_spec",
+      "extra": {
+        "product": "SYN-6",
+        "version": "v1"
+      },
+      "chunks": [
+        "可用性：99.9%",
+        "维护周期：1个月"
+      ]
+    },
+    {
+      "key": "conditions",
+      "family": "conditions",
+      "title": "实验环境限制",
+      "category": "product_spec",
+      "extra": {
+        "product": "SYN-7",
+        "version": "v1"
+      },
+      "chunks": [
+        "仅限实验环境\n恢复时间：10秒",
+        "恢复时间：60秒"
+      ]
+    },
+    {
+      "key": "legacy",
+      "family": "legacy",
+      "title": "历史承诺",
+      "category": "historical_bid",
+      "extra": {
+        "product": "SYN-8",
+        "version": "v1"
+      },
+      "chunks": [
+        "质保期：5年",
+        "响应时间：1分钟"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "recovery-0",
+      "family": "recovery",
+      "split": "heldout",
+      "category": "exact",
+      "query": "恢复时间",
+      "must_terms": [
+        "SYN-1"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "recovery:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "recovery-1",
+      "family": "recovery",
+      "split": "heldout",
+      "category": "paraphrase",
+      "query": "故障后半分钟恢复",
+      "must_terms": [
+        "SYN-1"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "recovery:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "recovery-2",
+      "family": "recovery",
+      "split": "heldout",
+      "category": "numeric",
+      "query": "备份周期",
+      "must_terms": [
+        "SYN-1"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "recovery:1"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "recovery-missing",
+      "family": "recovery",
+      "split": "heldout",
+      "category": "unanswerable",
+      "query": "量子纠错能力",
+      "must_terms": [
+        "SYN-1"
+      ],
+      "evidence": [],
+      "unanswerable": true
+    },
+    {
+      "id": "warranty-0",
+      "family": "warranty",
+      "split": "heldout",
+      "category": "exact",
+      "query": "质保期",
+      "must_terms": [
+        "SYN-2"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "warranty:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "warranty-1",
+      "family": "warranty",
+      "split": "heldout",
+      "category": "paraphrase",
+      "query": "两年保修",
+      "must_terms": [
+        "SYN-2"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "warranty:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "warranty-2",
+      "family": "warranty",
+      "split": "heldout",
+      "category": "numeric",
+      "query": "响应时间",
+      "must_terms": [
+        "SYN-2"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "warranty:1"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "warranty-missing",
+      "family": "warranty",
+      "split": "heldout",
+      "category": "unanswerable",
+      "query": "量子纠错能力",
+      "must_terms": [
+        "SYN-2"
+      ],
+      "evidence": [],
+      "unanswerable": true
+    },
+    {
+      "id": "storage-0",
+      "family": "storage",
+      "split": "heldout",
+      "category": "exact",
+      "query": "存储容量",
+      "must_terms": [
+        "SYN-3"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "storage:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "storage-1",
+      "family": "storage",
+      "split": "heldout",
+      "category": "paraphrase",
+      "query": "磁盘空间",
+      "must_terms": [
+        "SYN-3"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "storage:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "storage-2",
+      "family": "storage",
+      "split": "heldout",
+      "category": "numeric",
+      "query": "录像保存",
+      "must_terms": [
+        "SYN-3"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "storage:1"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "storage-missing",
+      "family": "storage",
+      "split": "heldout",
+      "category": "unanswerable",
+      "query": "量子纠错能力",
+      "must_terms": [
+        "SYN-3"
+      ],
+      "evidence": [],
+      "unanswerable": true
+    },
+    {
+      "id": "camera-0",
+      "family": "camera",
+      "split": "heldout",
+      "category": "exact",
+      "query": "分辨率",
+      "must_terms": [
+        "SYN-4"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "camera:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "camera-1",
+      "family": "camera",
+      "split": "heldout",
+      "category": "paraphrase",
+      "query": "图像清晰度",
+      "must_terms": [
+        "SYN-4"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "camera:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "camera-2",
+      "family": "camera",
+      "split": "heldout",
+      "category": "numeric",
+      "query": "接入数量",
+      "must_terms": [
+        "SYN-4"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "camera:1"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "camera-missing",
+      "family": "camera",
+      "split": "heldout",
+      "category": "unanswerable",
+      "query": "量子纠错能力",
+      "must_terms": [
+        "SYN-4"
+      ],
+      "evidence": [],
+      "unanswerable": true
+    },
+    {
+      "id": "compute-0",
+      "family": "compute",
+      "split": "heldout",
+      "category": "exact",
+      "query": "处理器",
+      "must_terms": [
+        "SYN-5"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "compute:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "compute-1",
+      "family": "compute",
+      "split": "heldout",
+      "category": "paraphrase",
+      "query": "CPU核数",
+      "must_terms": [
+        "SYN-5"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "compute:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "compute-2",
+      "family": "compute",
+      "split": "heldout",
+      "category": "numeric",
+      "query": "内存容量",
+      "must_terms": [
+        "SYN-5"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "compute:1"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "compute-missing",
+      "family": "compute",
+      "split": "heldout",
+      "category": "unanswerable",
+      "query": "量子纠错能力",
+      "must_terms": [
+        "SYN-5"
+      ],
+      "evidence": [],
+      "unanswerable": true
+    },
+    {
+      "id": "availability-0",
+      "family": "availability",
+      "split": "heldout",
+      "category": "exact",
+      "query": "可用性",
+      "must_terms": [
+        "SYN-6"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "availability:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "availability-1",
+      "family": "availability",
+      "split": "heldout",
+      "category": "paraphrase",
+      "query": "在线率",
+      "must_terms": [
+        "SYN-6"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "availability:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "availability-2",
+      "family": "availability",
+      "split": "heldout",
+      "category": "numeric",
+      "query": "维护周期",
+      "must_terms": [
+        "SYN-6"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "availability:1"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "availability-missing",
+      "family": "availability",
+      "split": "heldout",
+      "category": "unanswerable",
+      "query": "量子纠错能力",
+      "must_terms": [
+        "SYN-6"
+      ],
+      "evidence": [],
+      "unanswerable": true
+    },
+    {
+      "id": "conditions-0",
+      "family": "conditions",
+      "split": "heldout",
+      "category": "exact",
+      "query": "恢复时间",
+      "must_terms": [
+        "SYN-7"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "conditions:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "conditions-1",
+      "family": "conditions",
+      "split": "heldout",
+      "category": "paraphrase",
+      "query": "恢复时间 条件",
+      "must_terms": [
+        "SYN-7"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "conditions:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "conditions-2",
+      "family": "conditions",
+      "split": "heldout",
+      "category": "numeric",
+      "query": "恢复时间 60秒",
+      "must_terms": [
+        "SYN-7"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "conditions:1"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "conditions-missing",
+      "family": "conditions",
+      "split": "heldout",
+      "category": "unanswerable",
+      "query": "量子纠错能力",
+      "must_terms": [
+        "SYN-7"
+      ],
+      "evidence": [],
+      "unanswerable": true
+    },
+    {
+      "id": "legacy-0",
+      "family": "legacy",
+      "split": "tune",
+      "category": "exact",
+      "query": "质保期",
+      "must_terms": [
+        "SYN-8"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "legacy:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "legacy-1",
+      "family": "legacy",
+      "split": "tune",
+      "category": "paraphrase",
+      "query": "质保承诺",
+      "must_terms": [
+        "SYN-8"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "legacy:0"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "legacy-2",
+      "family": "legacy",
+      "split": "tune",
+      "category": "numeric",
+      "query": "响应时间",
+      "must_terms": [
+        "SYN-8"
+      ],
+      "evidence": [
+        {
+          "ids": [
+            "legacy:1"
+          ],
+          "grade": 3
+        }
+      ],
+      "unanswerable": false
+    },
+    {
+      "id": "legacy-missing",
+      "family": "legacy",
+      "split": "tune",
+      "category": "unanswerable",
+      "query": "量子纠错能力",
+      "must_terms": [
+        "SYN-8"
+      ],
+      "evidence": [],
+      "unanswerable": true
+    }
+  ]
+}

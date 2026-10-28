@@ -7,9 +7,11 @@ const (
 	SkillQualificationAudit = "qualification-audit"
 	SkillScoringSimulation  = "scoring-simulation"
 	SkillCommercialPricing  = "commercial-pricing"
+	SkillKnowledgeReuse     = "knowledge-reuse"
+	SkillProposalWriting    = "proposal-writing"
 )
 
-// Skills 返回内置招投标专业技能；每个技能解锁一个延迟工具（§4.3 阶段 B）。
+// Skills 返回内置招投标专业技能；每个技能解锁其所属的延迟工具（§4.3 阶段 B）。
 func Skills() []tool.Skill {
 	return []tool.Skill{
 		{
@@ -52,6 +54,40 @@ func Skills() []tool.Skill {
    declared_total（投标总价）与 cost_estimate（成本测算，可选）。该工具受审批拦截，可能需要等待人工批准。
 4. 每个 severity 为 critical/high 的 issue 都要 report_finding（category=pricing；超最高限价、低于成本属于废标风险，severity=critical），
    evidence 引用相关 fact，source_refs 附限价条款原文出处；验算通过也 record_fact 记录结论。`,
+		},
+		{
+			Name:        SkillKnowledgeReuse,
+			Description: "企业方案知识库复用：检索历史标书、标准技术方案、产品规格书与白皮书中可复用的段落与参数表，并强制附带来源引用。",
+			Tools:       []string{ToolKBSearchProposals, ToolKBSearchProducts, ToolKBReadChunk},
+			Body: `# 企业方案知识库复用
+
+1. 先用 search_document / read_chunk 读清招标技术要求（含 ★/▲ 参数），把每条要求拆成检索关键词与行业标签。
+2. 方案类内容（总体架构、实施方案、运维保障、类似项目经验）：先 SearchExtraTools("select:kb_search_proposals") 取 Schema，
+   再调用 kb_search_proposals（query 为技术需求关键词，tags 为行业标签如 ["智慧园区"]），在历史标书与标准方案中找可复用段落。
+3. 产品与技术指标：SearchExtraTools("select:kb_search_products") 后调用 kb_search_products（product 为产品/型号名，必须出现在命中文档中；
+   specs 为指标关键词如 ["分辨率","400万像素"]），优先命中含参数表的分块。
+4. 复用或比对前必须 SearchExtraTools("select:kb_read_chunk") 并调用 kb_read_chunk(doc_id, seq) 读取完整正文与 tables 表格 JSON，
+   逐项核对指标值是否满足招标要求（数值门槛按 ≥ / ≤ 比较），不得凭检索摘要下结论。
+5. 记录结论时 record_fact 的 summary 写明“知识库出处：<cite>”，source_ref 原样写入工具返回的 citation
+   {doc_id, doc_title, category, section_code, section_path, page_start, page_end, seq}；没有出处的知识库内容不得写入事实或结论。
+6. 知识库中找不到满足 ★ 参数的产品或方案时，report_finding（category=risk）说明缺口，提示人工补充资料。`,
+		},
+		{
+			Name:        SkillProposalWriting,
+			Description: "技术标章节写作：在已批准大纲下读取章节写作上下文（要求原文、前置章节摘要、证据有效性），撰写或重写章节草稿并经数据库门禁写回。",
+			Tools:       []string{ToolSectionReadContext, ToolSectionWriteDraft},
+			Body: `# 技术标章节写作
+
+1. 先 SearchExtraTools("select:section_read_context") 取 Schema，调用 section_read_context（section_id 或已批准大纲中的 section_code）。
+   writable=false 时停止写作并 record_fact 说明 blocked_reason（大纲未批准 / 已被取代 / 前置章节尚无有效稿），不得绕过。
+2. 逐条对照 requirements：★/▲ 条款逐条明确响应；评分项按评分点组织内容；source_excerpt 是招标原文，引用时保持一致。
+3. 事实性内容只能来自 usable_evidence（verified + supports），并把引用的证据 id 写入 evidence_ids；unusable_evidence 与没有证据的指标、
+   资质、业绩只能写成待确认事项并列入 gaps，严禁改写成已证实承诺。需要补证据时先用 knowledge-reuse 技能检索与核验。
+4. 与 dependencies 中前置章节的 summary_note 保持术语与承诺一致；在 summary_note 中写 3~6 句衔接摘要供后续章节读取。
+5. SearchExtraTools("select:section_write_draft") 后调用 section_write_draft，base_rev_no 与 based_on_outline_version 必须原样使用
+   section_read_context 的返回值（派发时给了 lease_token 也一并传入）。
+6. outcome 为 stale_outline（大纲已在你写作期间被修改）或 conflict_candidate（他人已保存新版本）时，草稿只是候选稿，没有覆盖当前版本：
+   不要换个版本号强行重试，重新读取上下文并报告结果，由人工决定是否采用。`,
 		},
 	}
 }

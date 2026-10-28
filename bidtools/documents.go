@@ -29,15 +29,19 @@ type SourceRef struct {
 	SectionCode  string `json:"section_code"`
 	SectionTitle string `json:"section_title,omitempty"`
 	PageNo       int    `json:"page_no"`
+	PageStart    int    `json:"page_start,omitempty"`
+	PageEnd      int    `json:"page_end,omitempty"`
 	TenderNo     string `json:"tender_no,omitempty"`
+	FileName     string `json:"file_name,omitempty"`
 	LotNo        string `json:"lot_no,omitempty"`
 	DocTitle     string `json:"doc_title,omitempty"`
 }
 
 func refOf(c *db.DocumentChunk, doc *db.TenderDocument) SourceRef {
-	r := SourceRef{DocID: c.DocID, ChunkID: c.ID, SectionCode: c.SectionCode, SectionTitle: c.SectionTitle, PageNo: c.PageNo}
+	r := SourceRef{DocID: c.DocID, ChunkID: c.ID, SectionCode: c.SectionCode, SectionTitle: c.SectionTitle, PageNo: c.PageNo,
+		PageStart: c.PageStart, PageEnd: c.PageEnd}
 	if doc != nil {
-		r.TenderNo, r.LotNo, r.DocTitle = doc.TenderNo, doc.LotNo, doc.Title
+		r.TenderNo, r.LotNo, r.DocTitle, r.FileName = doc.TenderNo, doc.LotNo, doc.Title, doc.FileName
 	}
 	return r
 }
@@ -45,8 +49,8 @@ func refOf(c *db.DocumentChunk, doc *db.TenderDocument) SourceRef {
 func (k *Kit) documentOutlineTool() tool.CoreTool {
 	return readTool(tool.Spec{
 		Name: ToolDocumentOutline,
-		Description: "List the section outline of this task's tender documents (doc_id, chunk_id, section_code, section_title, page_no, level). " +
-			"mandatory=true marks ★/*/废标/否决 clauses. Use it to decide which chunks to read.",
+		Description: "List the section outline of this task's tender documents (doc_id, chunk_id, section_code, section_title, page_no, page_end, level). " +
+			"mandatory=true marks ★/*/废标/否决 clauses; tables>0 marks chunks with structured tables (read_chunk returns them). Use it to decide which chunks to read.",
 		Schema: obj(map[string]any{
 			"doc_id":    integer("only this document; omit for all documents"),
 			"max_level": integer("only headings up to this level (1 chapter, 2 section, 3+ numbered clauses); omit for all"),
@@ -77,7 +81,9 @@ func (k *Kit) documentOutlineTool() tool.CoreTool {
 			SectionCode  string `json:"section_code"`
 			SectionTitle string `json:"section_title"`
 			PageNo       int    `json:"page_no"`
+			PageEnd      int    `json:"page_end,omitempty"`
 			Mandatory    bool   `json:"mandatory,omitempty"`
+			Tables       int    `json:"tables,omitempty"`
 		}
 		entries := []entry{}
 		omitted := 0
@@ -89,19 +95,25 @@ func (k *Kit) documentOutlineTool() tool.CoreTool {
 				omitted++
 				continue
 			}
-			entries = append(entries, entry{c.DocID, c.ID, c.Level, c.SectionCode, truncate(c.SectionTitle, 60), c.PageNo, c.IsMandatory})
+			pageEnd := 0
+			if c.PageEnd > c.PageNo {
+				pageEnd = c.PageEnd
+			}
+			entries = append(entries, entry{c.DocID, c.ID, c.Level, c.SectionCode, truncate(c.SectionTitle, 60), c.PageNo, pageEnd, c.IsMandatory, c.TableCount})
 		}
 		type docRow struct {
 			DocID    int64  `json:"doc_id"`
 			Title    string `json:"title"`
 			TenderNo string `json:"tender_no"`
 			LotNo    string `json:"lot_no,omitempty"`
+			FileName string `json:"file_name,omitempty"`
+			Pages    int    `json:"pages,omitempty"`
 			Chunks   int    `json:"chunks"`
 		}
 		docRows := make([]docRow, 0, len(docs))
 		for _, d := range docs {
 			if req.DocID == 0 || d.ID == req.DocID {
-				docRows = append(docRows, docRow{d.ID, d.Title, d.TenderNo, d.LotNo, d.ChunkCount})
+				docRows = append(docRows, docRow{d.ID, d.Title, d.TenderNo, d.LotNo, d.FileName, d.PageCount, d.ChunkCount})
 			}
 		}
 		out := map[string]any{"documents": docRows, "outline": entries}
@@ -255,7 +267,8 @@ func (k *Kit) readChunkTool() tool.CoreTool {
 	return readTool(tool.Spec{
 		Name: ToolReadChunk,
 		Description: "Read the full text of one tender document chunk, optionally with up to 3 neighbouring chunks before/after it. " +
-			"Returns source_ref {doc_id, chunk_id, section_code, page_no, ...}: copy it verbatim into insert_assets.source_ref, " +
+			"Structured tables (rows/cols/merged cells/grid/markdown, page_start-page_end) are returned under chunk.tables. " +
+			"Returns source_ref {doc_id, chunk_id, section_code, page_no, page_start, page_end, ...}: copy it verbatim into insert_assets.source_ref, " +
 			"record_fact.source_ref or report_finding.source_refs so every conclusion cites its origin.",
 		Schema: obj(map[string]any{
 			"chunk_id": integer("chunk id from document_outline / search_document"),
@@ -301,8 +314,9 @@ func (k *Kit) readChunkTool() tool.CoreTool {
 		out := map[string]any{
 			"chunk": map[string]any{
 				"chunk_id": target.ID, "doc_id": target.DocID, "section_code": target.SectionCode,
-				"section_title": target.SectionTitle, "page_no": target.PageNo, "level": target.Level,
-				"mandatory": target.IsMandatory, "content": target.Content,
+				"section_title": target.SectionTitle, "page_no": target.PageNo, "page_start": target.PageStart, "page_end": target.PageEnd,
+				"level": target.Level, "mandatory": target.IsMandatory, "content": target.Content,
+				"tables": json.RawMessage(nonNullJSON(target.Tables, "[]")),
 			},
 			"source_ref": refOf(target, doc),
 		}

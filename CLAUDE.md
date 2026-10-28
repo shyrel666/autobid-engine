@@ -12,7 +12,7 @@
   - **Phase 1**：PostgreSQL 存储与幂等迁移（`db/schema.sql`）、双图状态与租约争抢（`db/exploration.go`, `db/assets.go`）、冷节点折叠与有界概览（`db/digest.go`, `db/overview.go`）、LLM 连接池与审计录制（`llmpool`, `llmrec`）、工具调用级拦截与计数（`intercept`, `guard`）及 HTTP/SSE 服务层（`server/http.go`）。
   - **Phase 2**：纯文本/Markdown 招标文档章节切分（`ingest/splitter.go`）、企业资信库（`company_credentials`）、标书核验工具与技能（`bidtools/`：`document_outline`、`search_document`、`read_chunk`、`query_company_credentials`、`simulate_scoring_table`、`verify_commercial_bid`）及结构化审查报告（`db/report.go`）。
 - **待演进阶段（详见 [`ROADMAP.md`](./ROADMAP.md) 第四节）**：
-  - **Phase 3**：单团队标书合规审查工作台前端（`web/`，对应缺口 #9）+ 轻量配套后端接口（资信删除、报告 Markdown 导出、静态资源托管）
+  - **Phase 3**：单团队标书合规审查工作台前端（`web/`，对应缺口 #9）+ 轻量配套后端接口（资信按 ID 全量更新与删除、报告 Markdown 导出、静态资源托管）
   - **Phase 4**：PDF/DOCX/扫描件 OCR 深度解析与 PostgreSQL 企业方案知识库 RAG（对应缺口 #1、#4）
   - **Phase 5**：可复核要求清单、持久化大纲审批状态机、带依赖门禁的章节写作与乐观锁多版本修订（对应缺口 #2、#3、#5）
   - **Phase 6**：标书图表生成、双层覆盖率与全文一致性核验、锁定版本集合的 DOCX/PDF 套版导出（对应缺口 #6、#7、#8）
@@ -47,7 +47,7 @@
    - 实施 [`ROADMAP.md`](./ROADMAP.md) 中的任一阶段时，必须按该功能的实际架构落点补齐对应的 PostgreSQL 表结构（`db/schema.sql`）、数据访问层（`db/`）、业务状态机/工具（`bidtools/`）、API 路由（`server/`）或前端视图（`web/`），切勿仅靠修改 Prompt 宣称功能完成，也无需为纯展示功能强行堆砌无用的表或拦截规则。
 2. **多租户与并发安全前置设计**：
    - Phase 4 ~ 6 新增的所有业务表必须预留 `tenant_id TEXT NOT NULL DEFAULT 'default'` 及操作人字段（`created_by`, `updated_by`, `approved_by`），唯一索引须包含 `tenant_id`。
-   - 涉及大纲审批与章节正文修订时，必须实现 PostgreSQL 持久化审批状态机与基于 `base_rev_no` 的乐观锁并发校验。
+   - 涉及大纲审批与章节正文修订时，必须实现 PostgreSQL 持久化审批状态机，并在派发入口与在途 Worker 写回双端同时校验 `based_on_outline_version` 与 `base_rev_no` 乐观锁。
 3. **可执行验证与进度同步**：
    - Go 后端改动必须通过 `go vet ./...` 与 `go test -race ./...`；涉及数据库层的改动必须配置 `AUTOBID_TEST_DATABASE_URL` 连接真实 PostgreSQL 执行集成测试（避免 `openTestDB` 因未设置环境变量而 `t.Skip`）。
    - 前端改动（`web/`）必须通过 `npm run build` 零错误且与真实后端路由契约严格对齐。

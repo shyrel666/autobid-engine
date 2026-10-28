@@ -56,12 +56,12 @@
 
 | 缺口编号 | 用户侧目标能力 | 当前真实状态 | 目标阶段 | 核心工程落点（PostgreSQL Schema / Tools / API / 状态机） |
 | :--- | :--- | :--- | :--- | :--- |
-| **#9** | **投标人员使用的网页工作台** | 未实现前端；后端已有核心审查接口，缺少量配套接口 | **Phase 3** | 新增 `web/` 单团队审查工作台（对接真实 `/api/tasks/{id}/*` 路由）；本阶段同步补齐企业资料删除与报告 Markdown 导出等配套能力 |
+| **#9** | **投标人员使用的网页工作台** | 未实现前端；后端已有核心审查接口，缺少量配套接口 | **Phase 3** | 新增 `web/` 单团队审查工作台（对接真实 `/api/tasks/{id}/*` 路由）；本阶段同步补齐企业资料按 ID 全量更新/删除与报告 Markdown 导出等配套能力 |
 | **#1** | **上传 PDF、Word、扫描件并准确解析** | `POST /api/tasks/{id}/documents` 仅接收纯文本 `text` | **Phase 4** | 扩展 `ingest/` 与文档上传接口：支持 `multipart/form-data` 上传 `.docx`/`.pdf`/扫描件、OCR 接口、跨页表格结构化还原（Markdown + JSON）及页码/坐标溯源 |
 | **#4** | **复用企业方案、历史标书、产品资料** | 仅有结构化 `company_credentials` 表 | **Phase 4** | 在 `db/schema.sql` 新增 PostgreSQL `knowledge_documents` / `knowledge_chunks`（基于 `tsvector` GIN 全文索引 + `pgvector`/向量检索）；新增 `kb_search_*` 工具与管理 API |
 | **#2** | **根据评分标准生成技术标目录** | 无要求清单汇总表，无大纲结构与持久化确认流程 | **Phase 5** | 新增 `requirement_items`（可复核要求清单）与 `proposal_outlines` / `proposal_sections` 表；实现版本化大纲持久化审批状态机（非 `intercept` 临时挂起） |
-| **#3** | **根据项目需求编写技术方案章节** | 无章节写作工作流，无前置章节依赖门禁 | **Phase 5** | 后端写作入口强制校验大纲已批准版本；实现章节依赖调度门禁；新增 `section_write_draft` / `section_read_context` 工具与长文分段生成机制 |
-| **#5** | **管理章节草稿、修订、人工确认** | 无正文版本表、无并发写冲突保护与审批失效规则 | **Phase 5** | 新增 `section_revisions` 表；实现基于 `base_rev_no` 的乐观锁并发校验、人工/AI 写冲突保护、绑定具体版本的章节批准及重写自动撤销批准规则 |
+| **#3** | **根据项目需求编写技术方案章节** | 无章节写作工作流，无前置章节依赖门禁 | **Phase 5** | 后端写作派发入口与在途写回双端强制校验大纲已批准版本（`based_on_outline_version`）；实现章节依赖调度门禁；新增 `section_write_draft` / `section_read_context` 工具 |
+| **#5** | **管理章节草稿、修订、人工确认** | 无正文版本表、无并发写冲突保护与审批失效规则 | **Phase 5** | 新增 `section_revisions` 表；实现 `base_rev_no` + `based_on_outline_version` 联合并发校验、人工/AI 写冲突保护、绑定具体版本的章节批准及重写自动撤销批准规则 |
 | **#7** | **生成架构图、进度表及其他标书图表** | 未实现图表生成与章节挂载 | **Phase 6** | 新增 `proposal_charts` 表与 `chart_generate` 工具（生成 Mermaid/SVG 架构图、甘特图、组织架构图、设备选型表），绑定至具体章节版本 |
 | **#6** | **检查全文前后一致性与逐条响应** | 无点对点应答表，无跨章节一致性核验与失效重检机制 | **Phase 6** | 新增 `compliance_matrix` 表与 `fulltext_consistency_check` 工具；分别验收“大纲章节映射率”与“正文实质响应率”，条款或正文变更自动触发重检 |
 | **#8** | **套模板、生成目录页码、导出 DOCX/PDF** | `GET /api/tasks/{id}/report` 仅返回审查 JSON | **Phase 6** | 新增 `export/` 模块与 `export_jobs` 表：锁定已批准章节版本快照，套用 `.docx` 模板，渲染图表、多级标题、TOC 目录域与页码，导出 `.docx`/`.pdf` |
@@ -82,7 +82,7 @@
      - 审批与 LLM 配置：`GET /api/intercepts`、`POST /api/intercepts/{pendingID}/decide`、`GET /api/tasks/{id}/intercept-audit`、`GET/POST/PUT/DELETE /api/llm/profiles...`、`GET /api/llm/health`。
      - 单任务实时事件流：`GET /api/tasks/{id}/events`（开启鉴权时支持 `?token=`；前端解析 `event: activity` 展示工具调用 `tool`、工具错误 `tool_error`、阶段结论文本 `text` 与审批请求 `intercept_request`，并处理 `event: dropped` 与断线重连后重新拉取 `overview`/`intercepts` 状态恢复）。
   2. **本阶段同步补充的轻量后端能力**：
-     - 在 `db/documents.go` 与 `server/http.go` 补充 `DELETE /api/company/credentials/{id}`，闭环企业资信库增删改查。
+     - 在 `db/documents.go` 与 `server/http.go` 补充按主键 ID 的全量更新接口 `PUT /api/company/credentials/{id}`（支持修改任意记录的 `category`、`code`、`title`、`valid_until`，并对 `attributes` 执行完整 JSONB 替换而非增量合并，以支持删除旧属性或编辑无编号记录；若新 `(category, code)` 冲突则返回 409）与删除接口 `DELETE /api/company/credentials/{id}`，真正闭环企业资信库增删改查。
      - 支持审查报告导出为 Markdown（可在 `GET /api/tasks/{id}/report?format=markdown` 或前端基于 `TaskReport` JSON 生成标准 Markdown/JSON 下载）。
      - 在 `cmd/server` 或 `server/` 支持托管 `web/dist` 静态产物（带 SPA History 路由回退）。
 - **可执行验收标准**：
@@ -119,20 +119,23 @@
      - 新增 `proposal_outlines`（字段：`id`, `task_id`, `tenant_id`, `version`, `status IN ('draft','pending_approval','approved','superseded')`, `approved_by`, `approved_at`）与 `proposal_sections` 表（包含与 `requirement_items` 的多对多映射关系及前置依赖章节 `depends_on_section_ids BIGINT[]`）。
      - **不依赖短时工具 `intercept` 挂起**：大纲生成后落库为 `pending_approval` 并暂停写作派发，即使服务重启或等待数天，状态依然持久化在 PostgreSQL 中。
      - 人工调整目录结构或要求清单变更时，自动递增 `outline.version` 并使旧批准失效（置为 `superseded`）。
-     - **后端强制门禁**：章节写作调度入口在 DB 层强制校验 `outline.status = 'approved'` 且绑定当前批准的 `outline.version`，未批准版本拒绝启动任何章节写作任务。
+     - **后端双端强制门禁（派发入口 + 在途写回）**：
+       - **派发前校验**：章节写作调度入口在 DB 层强制校验 `outline.status = 'approved'` 且将当前批准的 `outline.version` 作为任务的 `based_on_outline_version` 传入，未批准版本拒绝启动任何章节写作任务。
+       - **写回时二次校验（防在途大纲过期）**：若 Worker 运行期间人工修改了要求清单或目录，导致大纲升级为新版本且原批准失效，即使该章节的 `current_rev_no` 尚未变化，在途 Worker 返回结果时 DB 事务也会校验 `based_on_outline_version == current_approved_outline.version`。若大纲版本已过期或未处于 `approved` 状态，严禁将该写回直接设为当前有效主版本（必须拒绝升为主稿，仅以 `status = 'stale_outline'` 候选记录归档留存，待新大纲批准后重新调度）。
   3. **带依赖门禁的章节写作工作流（缺口 #3）**：
      - 扩展调度器支持检查 `proposal_sections.depends_on_section_ids`：仅当前置依赖章节已有初稿/定稿时，才将后续依赖章节的写作任务置为可领取状态。
      - 新增 `section_write_draft`、`section_read_context` 工具与分段生成/摘要衔接机制，防止长标书超出单次上下文窗口。
   4. **乐观锁版本控制与审批失效规则（缺口 #5）**：
-     - 新增 `section_revisions` 表（字段：`id`, `section_id`, `rev_no`, `base_rev_no`, `source IN ('ai_initial','ai_rewrite','human_edit')`, `content_md`, `diff_summary`, `status IN ('draft','reviewing','approved','rejected')`, `created_by`, `approved_by`），并在 `proposal_sections` 记录 `current_rev_no` 与 `approved_rev_no`。
-     - **并发写入校验**：无论是人工保存还是在途 AI Worker 写回，均须携带 `base_rev_no`。若提交时 `base_rev_no != current_rev_no`（例如人工已修改到第 3 版，基于第 2 版运行的 AI 才返回），严禁覆盖当前主版本，必须拒绝覆盖或存为待合并候选稿。
+     - 新增 `section_revisions` 表（字段：`id`, `section_id`, `rev_no`, `base_rev_no`, `based_on_outline_version`, `source IN ('ai_initial','ai_rewrite','human_edit')`, `content_md`, `diff_summary`, `status IN ('draft','reviewing','approved','rejected','stale_outline')`, `created_by`, `approved_by`），并在 `proposal_sections` 记录 `current_rev_no` 与 `approved_rev_no`。
+     - **并发写入校验**：无论是人工保存还是在途 AI Worker 写回，均须同时校验 `base_rev_no == current_rev_no` 与 `based_on_outline_version` 有效性。若提交时 `base_rev_no != current_rev_no`（例如人工已修改到第 3 版，基于第 2 版运行的 AI 才返回），严禁覆盖当前主版本，必须拒绝覆盖或存为待合并候选稿。
      - **批准绑定版本与自动撤销**：章节批准严格绑定具体的 `approved_rev_no`；一旦对该章节执行局部 AI 重写或人工编辑产生新版本，自动将章节状态从 `approved` 重置为 `draft/reviewing`，直至新版本再次通过审核。
 - **可执行验收标准**：
-  - 集成测试覆盖（真實 PostgreSQL + `-race`）：
+  - 集成测试覆盖（真实 PostgreSQL + `-race`）：
     1. 未批准大纲时调用写作派发必定被后端拒绝；
     2. 模拟服务重启后，待审批大纲恢复并可在批准后正常派发章节写作；
-    3. 模拟“人工先保存 `rev 3`、滞后 AI 携带 `base_rev_no=2` 写回”，验证人工修改绝对不被覆盖；
-    4. 验证已批准章节被修改后自动撤销批准状态，且支持一键回滚至历史版本。
+    3. **模拟 Worker 运行期间大纲批准失效**：大纲 `v1` 批准后启动章节 Worker -> 人工修改要求使大纲升至 `v2`（`v1` 失效）且章节 `current_rev_no` 未变 -> 旧 Worker 返回写回时被 `based_on_outline_version` 门禁拦截，不会成为新大纲下的有效主版本；
+    4. 模拟“人工先保存 `rev 3`、滞后 AI 携带 `base_rev_no=2` 写回”，验证人工修改绝对不被覆盖；
+    5. 验证已批准章节被修改后自动撤销批准状态，且支持一键回滚至历史版本。
 
 ---
 
@@ -155,7 +158,10 @@
 - **可执行验收标准**：
   - 构造含人为矛盾（如第一章写工期 90 天、第五章写工期 180 天，以及漏答某条 `★` 条款）的测试标书样本，验证 `fulltext_consistency_check` 100% 检出矛盾与漏项；
   - 验证章节正文更新后，原审核状态自动变为 `stale` 并阻止直接按“全部已审”导出；
-  - 验证导出的 `.docx` 文件包含完整多级标题、TOC 目录、表格、架构图与点对点应答表。
+  - **DOCX 与 PDF 双格式排版渲染验收**：
+    1. 验证导出的 `.docx` 与 `.pdf` 均能成功生成、文件结构合法且可正常打开解析；
+    2. 验证渲染后的 `.pdf` / `.docx` 中自动目录（TOC）页码已实际刷新，且目录条目页码与各章节标题在成稿中的真实落位页码完全一致；
+    3. 验证宽表格、系统架构图、甘特图及《点对点应答及偏离表》在页面版芯内自适应排版，无横向截断、元素重叠遮挡或异常空白分页。
 
 ---
 

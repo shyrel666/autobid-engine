@@ -1070,3 +1070,244 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_proposal_evidence_invalidated ON retrieval_evidence;
 CREATE TRIGGER trg_proposal_evidence_invalidated AFTER UPDATE OF status ON retrieval_evidence
     FOR EACH ROW EXECUTE FUNCTION proposal_evidence_invalidated();
+
+-- ---------------------------------------------------------------------------
+-- Phase 6A（标书正文域，与 explorations/findings 推演域严格隔离）：双层响应核验矩阵与全文一致性核验。
+--   compliance_matrix     要求 × 已批准大纲章节的逐条正文实质响应核验结果，绑定被核验的具体修订（section_rev_id + rev_no）
+--                         与段落锚点；行只能挂在 proposal_section_requirements 已有映射上（第一层映射不另建）。
+--   consistency_runs      一次全文一致性核验：输入快照（section_id -> rev_no）与汇总结论。
+--   consistency_findings  矛盾 / 漏项结论，记录双方章节、rev_no、原文片段与处理人；version 为处理乐观锁。
+-- 失效全部在 DB 层：要求实质变更、章节产生新有效修订、引用证据 stale、大纲 superseded -> 矩阵行 / 结论 stale；
+-- 写入守卫保证不会把旧正文的结论写到新修订上（修订已变、大纲非 approved、证据 stale 的写入一律落为 stale）。
+-- 6B 的导出门禁与点对点应答偏离表直接读取这三张表。
+-- ---------------------------------------------------------------------------
+CREATE UNIQUE INDEX IF NOT EXISTS uq_section_revisions_section_rev ON section_revisions(tenant_id, section_id, id, rev_no);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_proposal_sections_outline_id ON proposal_sections(tenant_id, outline_id, id);
+
+CREATE TABLE IF NOT EXISTS compliance_matrix (
+    id                  BIGSERIAL PRIMARY KEY,
+    tenant_id           TEXT NOT NULL DEFAULT 'default',
+    task_id             BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    outline_id          BIGINT NOT NULL,
+    outline_version     INT NOT NULL CHECK (outline_version > 0),
+    requirement_item_id BIGINT NOT NULL,
+    section_id          BIGINT NOT NULL,
+    section_rev_id      BIGINT,
+    rev_no              INT,
+    anchor              TEXT NOT NULL DEFAULT '',
+    anchor_excerpt      TEXT NOT NULL DEFAULT '',
+    response_summary    TEXT NOT NULL DEFAULT '',
+    deviation           TEXT NOT NULL DEFAULT 'none' CHECK (deviation IN ('none','positive','negative')),
+    verify_status       TEXT NOT NULL DEFAULT 'pending' CHECK (verify_status IN ('pending','verified','stale','failed')),
+    failure_reason      TEXT NOT NULL DEFAULT '',
+    stale_reason        TEXT NOT NULL DEFAULT '',
+    evidence_ids        BIGINT[] NOT NULL DEFAULT '{}',
+    checks              JSONB NOT NULL DEFAULT '[]',
+    verifier            TEXT NOT NULL DEFAULT 'rule' CHECK (verifier IN ('rule','llm')),
+    verified_at         TIMESTAMPTZ,
+    created_by          TEXT NOT NULL DEFAULT '',
+    updated_by          TEXT NOT NULL DEFAULT '',
+    approved_by         TEXT NOT NULL DEFAULT '',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_compliance_matrix_pair UNIQUE (tenant_id, section_id, requirement_item_id),
+    CONSTRAINT uq_compliance_matrix_task_id UNIQUE (tenant_id, task_id, id),
+    CONSTRAINT ck_compliance_matrix_rev CHECK ((section_rev_id IS NULL) = (rev_no IS NULL)),
+    CONSTRAINT ck_compliance_matrix_bound CHECK (verify_status IN ('pending','stale') OR section_rev_id IS NOT NULL),
+    CONSTRAINT fk_compliance_matrix_outline FOREIGN KEY (tenant_id, task_id, outline_id)
+        REFERENCES proposal_outlines(tenant_id, task_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_compliance_matrix_section FOREIGN KEY (tenant_id, outline_id, section_id)
+        REFERENCES proposal_sections(tenant_id, outline_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_compliance_matrix_requirement FOREIGN KEY (tenant_id, task_id, requirement_item_id)
+        REFERENCES requirement_items(tenant_id, task_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_compliance_matrix_mapping FOREIGN KEY (tenant_id, section_id, requirement_item_id)
+        REFERENCES proposal_section_requirements(tenant_id, section_id, requirement_id) ON DELETE CASCADE,
+    CONSTRAINT fk_compliance_matrix_revision FOREIGN KEY (tenant_id, section_id, section_rev_id, rev_no)
+        REFERENCES section_revisions(tenant_id, section_id, id, rev_no) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_compliance_matrix_task ON compliance_matrix(tenant_id, task_id, outline_id, verify_status);
+CREATE INDEX IF NOT EXISTS idx_compliance_matrix_req ON compliance_matrix(tenant_id, requirement_item_id);
+CREATE INDEX IF NOT EXISTS idx_compliance_matrix_evidence ON compliance_matrix USING GIN(evidence_ids);
+DROP TRIGGER IF EXISTS trg_compliance_matrix_upd ON compliance_matrix;
+CREATE TRIGGER trg_compliance_matrix_upd BEFORE UPDATE ON compliance_matrix
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS consistency_runs (
+    id              BIGSERIAL PRIMARY KEY,
+    tenant_id       TEXT NOT NULL DEFAULT 'default',
+    task_id         BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    outline_id      BIGINT NOT NULL,
+    outline_version INT NOT NULL CHECK (outline_version > 0),
+    snapshot        JSONB NOT NULL DEFAULT '{}',
+    status          TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','stale')),
+    stale_reason    TEXT NOT NULL DEFAULT '',
+    contradictions  INT NOT NULL DEFAULT 0 CHECK (contradictions >= 0),
+    omissions       INT NOT NULL DEFAULT 0 CHECK (omissions >= 0),
+    summary         JSONB NOT NULL DEFAULT '{}',
+    created_by      TEXT NOT NULL DEFAULT '',
+    updated_by      TEXT NOT NULL DEFAULT '',
+    approved_by     TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_consistency_runs_task_id UNIQUE (tenant_id, task_id, id),
+    CONSTRAINT fk_consistency_runs_outline FOREIGN KEY (tenant_id, task_id, outline_id)
+        REFERENCES proposal_outlines(tenant_id, task_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_consistency_runs_task ON consistency_runs(tenant_id, task_id, id DESC);
+DROP TRIGGER IF EXISTS trg_consistency_runs_upd ON consistency_runs;
+CREATE TRIGGER trg_consistency_runs_upd BEFORE UPDATE ON consistency_runs
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS consistency_findings (
+    id                  BIGSERIAL PRIMARY KEY,
+    tenant_id           TEXT NOT NULL DEFAULT 'default',
+    task_id             BIGINT NOT NULL,
+    run_id              BIGINT NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN ('contradiction','omission')),
+    metric              TEXT NOT NULL DEFAULT '',
+    metric_label        TEXT NOT NULL DEFAULT '',
+    requirement_item_id BIGINT,
+    section_ids         BIGINT[] NOT NULL DEFAULT '{}',
+    a_section_id        BIGINT,
+    a_rev_no            INT,
+    a_value             TEXT NOT NULL DEFAULT '',
+    a_excerpt           TEXT NOT NULL DEFAULT '',
+    b_section_id        BIGINT,
+    b_rev_no            INT,
+    b_value             TEXT NOT NULL DEFAULT '',
+    b_excerpt           TEXT NOT NULL DEFAULT '',
+    detail              TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','stale')),
+    stale_reason        TEXT NOT NULL DEFAULT '',
+    resolution_kind     TEXT NOT NULL DEFAULT '' CHECK (resolution_kind IN ('','fixed','accepted','false_positive')),
+    resolution_note     TEXT NOT NULL DEFAULT '',
+    resolved_by         TEXT NOT NULL DEFAULT '',
+    resolved_at         TIMESTAMPTZ,
+    version             INT NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_by          TEXT NOT NULL DEFAULT '',
+    updated_by          TEXT NOT NULL DEFAULT '',
+    approved_by         TEXT NOT NULL DEFAULT '',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ck_consistency_findings_shape CHECK (
+        (kind = 'contradiction' AND a_section_id IS NOT NULL AND b_section_id IS NOT NULL AND a_rev_no IS NOT NULL AND b_rev_no IS NOT NULL)
+        OR (kind = 'omission' AND requirement_item_id IS NOT NULL)),
+    CONSTRAINT fk_consistency_findings_run FOREIGN KEY (tenant_id, task_id, run_id)
+        REFERENCES consistency_runs(tenant_id, task_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_consistency_findings_requirement FOREIGN KEY (tenant_id, task_id, requirement_item_id)
+        REFERENCES requirement_items(tenant_id, task_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_consistency_findings_a FOREIGN KEY (tenant_id, task_id, a_section_id)
+        REFERENCES proposal_sections(tenant_id, task_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_consistency_findings_b FOREIGN KEY (tenant_id, task_id, b_section_id)
+        REFERENCES proposal_sections(tenant_id, task_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_consistency_findings_run ON consistency_findings(tenant_id, run_id, kind, id);
+CREATE INDEX IF NOT EXISTS idx_consistency_findings_sections ON consistency_findings USING GIN(section_ids);
+DROP TRIGGER IF EXISTS trg_consistency_findings_upd ON consistency_findings;
+CREATE TRIGGER trg_consistency_findings_upd BEFORE UPDATE ON consistency_findings
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 写入守卫：非 stale 的矩阵行必须对应章节当前主版本、所属大纲仍为 approved、引用证据均未失效，否则强制落为 stale。
+-- PL/pgSQL 查询在 READ COMMITTED 下每条语句取新快照，因此等锁后写入也能看到并发提交的修订 / 证据失效。
+CREATE OR REPLACE FUNCTION compliance_matrix_guard() RETURNS trigger AS $$
+DECLARE cur INT; ost TEXT;
+BEGIN
+    IF NEW.verify_status = 'stale' THEN
+        RETURN NEW;
+    END IF;
+    SELECT s.current_rev_no, o.status INTO cur, ost
+        FROM proposal_sections s JOIN proposal_outlines o ON o.tenant_id = s.tenant_id AND o.id = s.outline_id
+        WHERE s.tenant_id = NEW.tenant_id AND s.id = NEW.section_id;
+    IF ost IS DISTINCT FROM 'approved' THEN
+        NEW.verify_status := 'stale';
+        NEW.stale_reason := 'outline is no longer the approved version';
+    ELSIF NEW.rev_no IS DISTINCT FROM NULLIF(cur, 0) THEN
+        NEW.verify_status := 'stale';
+        NEW.stale_reason := format('verified rev %s but section current_rev_no is %s', COALESCE(NEW.rev_no::text, 'none'), cur);
+    ELSIF EXISTS (SELECT 1 FROM unnest(NEW.evidence_ids) AS e(id)
+                  LEFT JOIN retrieval_evidence x ON x.tenant_id = NEW.tenant_id AND x.id = e.id
+                  WHERE x.id IS NULL OR x.status = 'stale') THEN
+        NEW.verify_status := 'stale';
+        NEW.stale_reason := 'referenced evidence is stale or missing';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_compliance_matrix_guard ON compliance_matrix;
+CREATE TRIGGER trg_compliance_matrix_guard BEFORE INSERT OR UPDATE ON compliance_matrix
+    FOR EACH ROW EXECUTE FUNCTION compliance_matrix_guard();
+
+-- 失效路径 1：要求实质变更 -> 该要求的矩阵行与漏项结论 stale（触发器名排在 trg_requirement_items_changed 之前，先记录要求原因）。
+CREATE OR REPLACE FUNCTION compliance_requirement_changed() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.code, NEW.category, NEW.title, NEW.description, NEW.is_mandatory, NEW.score_weight,
+        NEW.source_doc_id, NEW.source_chunk_id, NEW.source_hash, NEW.source_loc)
+       IS NOT DISTINCT FROM
+       (OLD.code, OLD.category, OLD.title, OLD.description, OLD.is_mandatory, OLD.score_weight,
+        OLD.source_doc_id, OLD.source_chunk_id, OLD.source_hash, OLD.source_loc) THEN
+        RETURN NULL;
+    END IF;
+    UPDATE compliance_matrix SET verify_status = 'stale', stale_reason = format('requirement %s changed', NEW.code), updated_by = NEW.updated_by
+        WHERE tenant_id = NEW.tenant_id AND requirement_item_id = NEW.id AND verify_status <> 'stale';
+    UPDATE consistency_findings SET status = 'stale', stale_reason = format('requirement %s changed', NEW.code), version = version + 1, updated_by = NEW.updated_by
+        WHERE tenant_id = NEW.tenant_id AND requirement_item_id = NEW.id AND status <> 'stale';
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_compliance_requirement_changed ON requirement_items;
+CREATE TRIGGER trg_compliance_requirement_changed AFTER UPDATE ON requirement_items
+    FOR EACH ROW EXECUTE FUNCTION compliance_requirement_changed();
+
+-- 失效路径 2：章节产生新的有效修订（current_rev_no 变化；候选稿不推进 current_rev_no，不触发）。
+CREATE OR REPLACE FUNCTION compliance_section_revised() RETURNS trigger AS $$
+DECLARE why TEXT := format('section %s revised: rev %s -> %s', NEW.section_code, OLD.current_rev_no, NEW.current_rev_no);
+BEGIN
+    UPDATE compliance_matrix SET verify_status = 'stale', stale_reason = why, updated_by = NEW.updated_by
+        WHERE tenant_id = NEW.tenant_id AND section_id = NEW.id AND verify_status <> 'stale';
+    UPDATE consistency_runs SET status = 'stale', stale_reason = why, updated_by = NEW.updated_by
+        WHERE tenant_id = NEW.tenant_id AND outline_id = NEW.outline_id AND status = 'completed'
+          AND (snapshot ->> NEW.id::text) IS DISTINCT FROM NEW.current_rev_no::text;
+    UPDATE consistency_findings SET status = 'stale', stale_reason = why, version = version + 1, updated_by = NEW.updated_by
+        WHERE tenant_id = NEW.tenant_id AND section_ids @> ARRAY[NEW.id] AND status <> 'stale';
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_proposal_sections_compliance ON proposal_sections;
+CREATE TRIGGER trg_proposal_sections_compliance AFTER UPDATE OF current_rev_no ON proposal_sections
+    FOR EACH ROW WHEN (NEW.current_rev_no IS DISTINCT FROM OLD.current_rev_no)
+    EXECUTE FUNCTION compliance_section_revised();
+
+-- 失效路径 3：Phase 4.3 证据变为 stale -> 引用它的矩阵行 stale（名字排在 trg_proposal_evidence_invalidated 之后：
+-- 先锁章节再锁矩阵行，与核验事务「章节 -> 矩阵行」的顺序一致，避免死锁）。
+CREATE OR REPLACE FUNCTION compliance_evidence_stale() RETURNS trigger AS $$
+BEGIN
+    IF NEW.status <> 'stale' OR OLD.status = 'stale' THEN
+        RETURN NULL;
+    END IF;
+    UPDATE compliance_matrix SET verify_status = 'stale', stale_reason = format('evidence %s stale: %s', NEW.id, NEW.reason), updated_by = 'system'
+        WHERE tenant_id = NEW.tenant_id AND evidence_ids @> ARRAY[NEW.id] AND verify_status <> 'stale';
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_proposal_evidence_matrix_stale ON retrieval_evidence;
+CREATE TRIGGER trg_proposal_evidence_matrix_stale AFTER UPDATE OF status ON retrieval_evidence
+    FOR EACH ROW EXECUTE FUNCTION compliance_evidence_stale();
+
+-- 失效路径 4：大纲被取代 -> 该大纲下的矩阵行、一致性运行与其结论 stale。
+CREATE OR REPLACE FUNCTION compliance_outline_superseded() RETURNS trigger AS $$
+DECLARE why TEXT := format('outline v%s superseded', NEW.version);
+BEGIN
+    UPDATE compliance_matrix SET verify_status = 'stale', stale_reason = why, updated_by = NEW.updated_by
+        WHERE tenant_id = NEW.tenant_id AND outline_id = NEW.id AND verify_status <> 'stale';
+    UPDATE consistency_runs SET status = 'stale', stale_reason = why, updated_by = NEW.updated_by
+        WHERE tenant_id = NEW.tenant_id AND outline_id = NEW.id AND status <> 'stale';
+    UPDATE consistency_findings f SET status = 'stale', stale_reason = why, version = f.version + 1, updated_by = NEW.updated_by
+        FROM consistency_runs r
+        WHERE r.tenant_id = NEW.tenant_id AND r.outline_id = NEW.id AND f.tenant_id = r.tenant_id AND f.run_id = r.id AND f.status <> 'stale';
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_proposal_outline_compliance_stale ON proposal_outlines;
+CREATE TRIGGER trg_proposal_outline_compliance_stale AFTER UPDATE OF status ON proposal_outlines
+    FOR EACH ROW WHEN (NEW.status = 'superseded' AND OLD.status <> 'superseded')
+    EXECUTE FUNCTION compliance_outline_superseded();

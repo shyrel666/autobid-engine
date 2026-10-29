@@ -6,8 +6,8 @@ import {
 } from 'lucide-react'
 import { ApiError, api, errorText } from '../../api/client'
 import type {
-  OutlineDetail, RequirementCategory, RequirementInput, RequirementItem, RequirementsView, SaveRevisionResult,
-  SectionInput, SectionRevision,
+  OutlineDetail, RequirementCategory, RequirementInput, RequirementItem, RequirementsView, SaveRevisionResult, ScoreGroup,
+  ScoringSummary, SectionInput, SectionRevision,
 } from '../../api/types'
 import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Pre, Select, Spinner, Stat, TextArea, cx, useToast } from '../../components/ui'
 import type { Tone } from '../../components/ui'
@@ -17,12 +17,17 @@ import { ConsistencyPanel, MatrixPanel } from './ReviewPanels'
 import { ChartsCard, ExportPanel } from './ExportPanels'
 import {
   fmtTime, manifestStatusLabel, outlineStatusLabel, pageRange, requirementCategoryLabel, reviewStatusLabel, revisionSourceLabel,
-  revisionStatusLabel, sectionStatusLabel,
+  revisionStatusLabel, scoreGroupLabel, sectionStatusLabel,
 } from '../../lib/format'
 
 type View = 'requirements' | 'outline' | 'writing' | 'matrix' | 'consistency' | 'export'
 
 const categories: RequirementCategory[] = ['mandatory_clause', 'scoring_item', 'non_scoring_required', 'format_attachment']
+const scoreGroups: ScoreGroup[] = ['technical', 'commercial', 'price', '']
+
+function scoreGroupTone(g: ScoreGroup): Tone {
+  return g === 'technical' ? 'blue' : g === 'commercial' ? 'purple' : g === 'price' ? 'slate' : 'amber'
+}
 
 function outlineTone(s: string): Tone {
   return s === 'approved' ? 'green' : s === 'pending_approval' ? 'amber' : s === 'superseded' ? 'slate' : 'blue'
@@ -115,9 +120,11 @@ function RequirementsPanel({ taskID, tick }: { taskID: number; tick: number }) {
         <Stat label="原文变更待复核" value={s.needs_revision} tone={s.needs_revision ? 'red' : undefined} />
         <Stat label="已绑定证据" value={s.with_evidence} hint={`已记录缺口 ${s.evidence_gaps}`} />
         <Stat label="尚未检索/复核证据" value={s.no_evidence} tone={s.no_evidence ? 'amber' : undefined} />
-        <Stat label="大纲映射" value={`${s.mapped}/${s.total}`} hint={s.outline_version ? `依据大纲 v${s.outline_version}` : '尚无大纲'}
+        <Stat label="大纲映射" value={`${s.mapped}/${s.total - s.out_of_scope}`}
+          hint={`${s.outline_version ? `依据大纲 v${s.outline_version}` : '尚无大纲'}${s.out_of_scope ? ` · 价格分 ${s.out_of_scope} 项由报价文件响应` : ''}`}
           tone={s.unmapped.length ? 'amber' : s.total ? 'green' : undefined} />
       </div>
+      {v.scoring.length > 0 && <ScoringSummaryCard scoring={v.scoring} />}
 
       <Card title={<>要求清单 <Badge tone={v.manifest.status === 'confirmed' ? 'green' : v.manifest.status === 'stale' ? 'red' : 'amber'}>
         {manifestStatusLabel[v.manifest.status]} · epoch {v.manifest.epoch}</Badge>
@@ -126,7 +133,9 @@ function RequirementsPanel({ taskID, tick }: { taskID: number; tick: number }) {
           <Button size="sm" icon={<FileSearch className="size-3.5" />} loading={busy === 'extract'}
             onClick={() => run('extract', async () => {
               const r = await api.extractRequirements(taskID)
-              toast('info', `遍历 ${r.result.scanned_chunks} 个原文分块：新增 ${r.result.created}，原文变更 ${r.result.updated}，未变 ${r.result.unchanged}`)
+              toast('info', `遍历 ${r.result.scanned_chunks} 个原文分块：评分表评分项 ${r.result.scoring_items}，新增 ${r.result.created}，` +
+                `原文变更 ${r.result.updated}，未变 ${r.result.unchanged}` +
+                (r.result.orphaned ? `；${r.result.orphaned} 条旧提取项本次未再产出，已标记需复核（确认后删除）` : ''))
             }, '提取完成')}>从招标文件提取</Button>
           <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setEditing('new')}>新增要求</Button>
           <Button size="sm" variant="success" icon={<ShieldCheck className="size-3.5" />} loading={busy === 'confirm'}
@@ -157,7 +166,8 @@ function RequirementsPanel({ taskID, tick }: { taskID: number; tick: number }) {
                 {items.map((it) => (
                   <tr key={it.id} className="border-b border-slate-100 align-top">
                     <td className="py-2 pr-2 font-mono text-xs">{it.code}{it.origin === 'manual' && <div><Badge>人工</Badge></div>}</td>
-                    <td className="pr-2"><Badge tone={it.category === 'mandatory_clause' ? 'red' : it.category === 'scoring_item' ? 'blue' : 'slate'}>{requirementCategoryLabel[it.category]}</Badge></td>
+                    <td className="pr-2"><Badge tone={it.category === 'mandatory_clause' ? 'red' : it.category === 'scoring_item' ? 'blue' : 'slate'}>{requirementCategoryLabel[it.category]}</Badge>
+                      {it.category === 'scoring_item' && <div className="mt-1"><Badge tone={scoreGroupTone(it.score_group)}>{scoreGroupLabel[it.score_group]}</Badge></div>}</td>
                     <td className="max-w-md pr-2">
                       <div className="font-medium">{it.is_mandatory && <span className="text-red-600">★ </span>}{it.title}
                         {it.score_weight > 0 && <span className="ml-1 text-xs text-blue-600">{it.score_weight} 分</span>}</div>
@@ -176,7 +186,9 @@ function RequirementsPanel({ taskID, tick }: { taskID: number; tick: number }) {
                         : !it.evidence_gap && <span className="text-amber-600">未检索</span>}
                       {it.evidence_gap && <p className="whitespace-pre-wrap text-amber-700">缺口：{it.evidence_gap}</p>}
                     </td>
-                    <td className="pr-2 text-xs">{it.mapped_section_codes.length ? it.mapped_section_codes.join('、') : <span className="text-amber-600">未映射</span>}</td>
+                    <td className="pr-2 text-xs">{it.mapped_section_codes.length ? it.mapped_section_codes.join('、')
+                      : it.category === 'scoring_item' && it.score_group === 'price' ? <span className="text-slate-400">报价文件响应</span>
+                        : <span className="text-amber-600">未映射</span>}</td>
                     <td className="pr-2"><Badge tone={it.review_status === 'confirmed' ? 'green' : it.review_status === 'needs_revision' ? 'red' : 'amber'}>{reviewStatusLabel[it.review_status]}</Badge></td>
                     <td className="whitespace-nowrap">
                       {it.review_status === 'needs_revision' && <Button size="sm" variant="ghost" title="已核对原文变更"
@@ -192,11 +204,39 @@ function RequirementsPanel({ taskID, tick }: { taskID: number; tick: number }) {
             </table>
           </div>
         )}
-        <p className="mt-3 text-xs text-slate-400">完整清单来自逐分块遍历与人工复核，不以检索 Top-K 代替；检索不到证据的要求请记录缺口，不要删除。修改编码、类别、标题、描述、强制性、分值或原文来源会使清单 epoch 递增并使大纲失效；仅绑定证据不会。</p>
+        <p className="mt-3 text-xs text-slate-400">完整清单来自逐分块遍历与人工复核，不以检索 Top-K 代替；检索不到证据的要求请记录缺口，不要删除。修改编码、类别、标题、描述、强制性、分值、评分分组或原文来源会使清单 epoch 递增并使大纲失效；仅绑定证据不会。
+          评分项按招标评分表结构化提取并分为技术 / 商务 / 价格分，价格分由报价文件响应、不进入技术标大纲；分组、分包与分值请对照原文复核。</p>
       </Card>
       {evidenceRun && <RetrievalEvidence key={evidenceRun} runID={evidenceRun} />}
       <RequirementEditor taskID={taskID} item={editing} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); void data.reload() }} />
     </div>
+  )
+}
+
+// ScoringSummaryCard 按分包展示评分表提取的分值合计与校验提示（合计不是 100 或与类别声明分值不符时提示漏提 / 重复）。
+function ScoringSummaryCard({ scoring }: { scoring: ScoringSummary[] }) {
+  return (
+    <Card title="评分表分值核对">
+      <div className="space-y-2">
+        {scoring.map((s) => (
+          <div key={s.lot} className="rounded-md border border-slate-200 px-3 py-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{s.lot ? `包${s.lot}` : '评分表'}</span>
+              <Badge tone={s.total === 100 && s.warnings.length === 0 ? 'green' : 'amber'}>合计 {s.total} 分 · {s.items} 项</Badge>
+              <span className="text-xs text-slate-500">技术 {s.technical} · 商务 {s.commercial} · 价格 {s.price}{s.unclassified ? ` · 未分类 ${s.unclassified}` : ''}</span>
+              {s.groups.filter((g) => g.declared > 0).map((g) => (
+                <span key={g.group} className={cx('text-xs', Math.abs(g.declared - g.extracted) > 0.05 ? 'text-amber-700' : 'text-slate-400')}>
+                  {g.group} {g.extracted}/{g.declared}</span>
+              ))}
+            </div>
+            {s.warnings.map((w) => (
+              <div key={w} className="mt-1 flex items-start gap-1.5 text-xs text-amber-700"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{w}</div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-slate-400">评分项由规则从评分表提取，未经人工标注评测；请对照原文复核名称、分值与分组。多分包招标请删除本次不投分包的评分项。</p>
+    </Card>
   )
 }
 
@@ -209,14 +249,14 @@ function RequirementEditor({ taskID, item, onClose, onSaved }:
   { taskID: number; item?: RequirementItem | 'new'; onClose: () => void; onSaved: () => void }) {
   const toast = useToast()
   const blank = { code: '', category: 'non_scoring_required' as RequirementCategory, title: '', description: '', is_mandatory: false, score_weight: '0',
-    source_chunk_id: '', evidence_run_id: '', evidence_ids: '', evidence_gap: '', review_status: 'draft' }
+    score_group: '' as ScoreGroup, source_chunk_id: '', evidence_run_id: '', evidence_ids: '', evidence_gap: '', review_status: 'draft' }
   const [f, setF] = useState(blank)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (!item) return
     if (item === 'new') { setF(blank); return }
     setF({ code: item.code, category: item.category, title: item.title, description: item.description, is_mandatory: item.is_mandatory,
-      score_weight: String(item.score_weight), source_chunk_id: item.source_chunk_id ? String(item.source_chunk_id) : '',
+      score_weight: String(item.score_weight), score_group: item.score_group, source_chunk_id: item.source_chunk_id ? String(item.source_chunk_id) : '',
       evidence_run_id: item.evidence_run_id ? String(item.evidence_run_id) : '', evidence_ids: item.evidence_ids.join(', '),
       evidence_gap: item.evidence_gap, review_status: item.review_status })
   }, [item]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -224,7 +264,8 @@ function RequirementEditor({ taskID, item, onClose, onSaved }:
   const save = async () => {
     const req: RequirementInput = {
       code: f.code.trim(), category: f.category, title: f.title.trim(), description: f.description, is_mandatory: f.is_mandatory,
-      score_weight: Number(f.score_weight) || 0, source_chunk_id: f.source_chunk_id ? Number(f.source_chunk_id) : 0,
+      score_weight: Number(f.score_weight) || 0, score_group: f.category === 'scoring_item' ? f.score_group : '',
+      source_chunk_id: f.source_chunk_id ? Number(f.source_chunk_id) : 0,
       evidence_run_id: f.evidence_run_id ? Number(f.evidence_run_id) : 0, evidence_ids: parseIDs(f.evidence_ids), evidence_gap: f.evidence_gap,
       review_status: f.review_status,
     }
@@ -245,7 +286,10 @@ function RequirementEditor({ taskID, item, onClose, onSaved }:
         <Field label="类别"><Select value={f.category} onChange={set('category')}>
           {categories.map((c) => <option key={c} value={c}>{requirementCategoryLabel[c]}</option>)}</Select></Field>
         <Field label="分值"><Input type="number" min={0} value={f.score_weight} onChange={set('score_weight')} /></Field>
-        <Field label="标题" className="md:col-span-3"><Input value={f.title} onChange={set('title')} /></Field>
+        <Field label="评分分组" hint="价格分不进入技术标大纲">
+          <Select value={f.score_group} onChange={set('score_group')} disabled={f.category !== 'scoring_item'}>
+            {scoreGroups.map((g) => <option key={g} value={g}>{scoreGroupLabel[g]}</option>)}</Select></Field>
+        <Field label="标题" className="md:col-span-2"><Input value={f.title} onChange={set('title')} /></Field>
         <Field label="要求原文 / 说明" className="md:col-span-3"><TextArea rows={3} value={f.description} onChange={set('description')} /></Field>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.is_mandatory} onChange={(e) => setF({ ...f, is_mandatory: e.target.checked })} />★/▲ 实质性（废标）条款</label>
         <Field label="原文分块 ID" hint="须属于本任务的招标原文；0 / 空为解除绑定"><Input value={f.source_chunk_id} onChange={set('source_chunk_id')} /></Field>
@@ -321,7 +365,8 @@ function OutlinePanel({ taskID, tick, onOpenSection }: { taskID: number; tick: n
               onClick={() => act('approve', () => api.approveOutline(taskID, d.outline.version), '大纲已批准，可派发章节写作')}>批准大纲</Button>}
           </>}>
           <div className="mb-3 grid gap-3 md:grid-cols-4">
-            <Stat label="要求映射覆盖" value={`${d.coverage.mapped}/${d.coverage.total}`} tone={d.coverage.unmapped.length ? 'red' : 'green'} />
+            <Stat label="要求映射覆盖" value={`${d.coverage.mapped}/${d.coverage.total}`} tone={d.coverage.unmapped.length ? 'red' : 'green'}
+              hint={d.coverage.out_of_scope ? `另有价格分 ${d.coverage.out_of_scope} 项由报价文件响应` : undefined} />
             <Stat label="章节数" value={d.sections.length} />
             <Stat label="清单状态" value={<span className="text-base">{manifestStatusLabel[d.manifest.status]}</span>}
               hint={`清单 epoch ${d.manifest.epoch} · 大纲基于 ${d.outline.requirements_epoch}`} tone={d.manifest.status === 'confirmed' && d.requirements_epoch_current ? 'green' : 'amber'} />

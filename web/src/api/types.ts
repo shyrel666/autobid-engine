@@ -605,7 +605,8 @@ export type RequirementCategory = 'scoring_item' | 'mandatory_clause' | 'non_sco
 
 export interface RequirementItem {
   id: number; tenant_id: string; task_id: number; code: string; category: RequirementCategory
-  title: string; description: string; is_mandatory: boolean; score_weight: number; origin: 'extracted' | 'manual'
+  title: string; description: string; is_mandatory: boolean; score_weight: number; score_group: ScoreGroup
+  origin: 'extracted' | 'manual'
   source_asset_id?: number; source_doc_id?: number; source_chunk_id?: number; source_hash: string
   source_loc: { doc_id?: number; chunk_id?: number; section_code?: string; section_title?: string; page_start?: number; page_end?: number; doc_title?: string; table?: number; row?: number; [k: string]: unknown }
   evidence_run_id?: number; evidence_ids: number[]; evidence_gap: string
@@ -620,11 +621,24 @@ export interface RequirementManifest {
 export interface RequirementStats {
   total: number; by_category: Record<string, number>; mandatory: number; confirmed: number; needs_revision: number
   with_evidence: number; evidence_gaps: number; no_evidence: number; outline_version: number; mapped: number; unmapped: string[]
+  out_of_scope: number
 }
-export interface RequirementsView { manifest: RequirementManifest; items: RequirementItem[]; stats: RequirementStats }
-export interface ExtractResult { created: number; updated: number; unchanged: number; skipped_manual: number; scanned_chunks: number; codes: string[] }
+/** 评分项分组：technical 技术 / commercial 商务 / price 价格（由报价文件响应，不进入技术标大纲）；空串为未分类。 */
+export type ScoreGroup = '' | 'technical' | 'commercial' | 'price'
+export interface ScoringGroupSummary { group: string; score_group: ScoreGroup; declared: number; extracted: number; items: number }
+/** 按分包汇总的评分分值；warnings 提示合计不是 100 分或与类别声明分值不符。 */
+export interface ScoringSummary {
+  lot: string; items: number; total: number; technical: number; commercial: number; price: number; unclassified: number
+  groups: ScoringGroupSummary[]; warnings: string[]
+}
+export interface RequirementsView { manifest: RequirementManifest; items: RequirementItem[]; stats: RequirementStats; scoring: ScoringSummary[] }
+export interface ExtractResult {
+  created: number; updated: number; unchanged: number; skipped_manual: number; scanned_chunks: number; codes: string[]
+  scoring_items: number; orphaned: number; orphan_codes: string[]
+}
 export interface RequirementInput {
   code?: string; category?: RequirementCategory; title?: string; description?: string; is_mandatory?: boolean; score_weight?: number
+  score_group?: ScoreGroup
   source_chunk_id?: number; evidence_run_id?: number; evidence_ids?: number[]; evidence_gap?: string; review_status?: string
 }
 
@@ -644,7 +658,7 @@ export interface ProposalSection {
 export interface RequirementRef { id: number; code: string; title: string; category: string; is_mandatory: boolean }
 export interface OutlineDetail {
   outline: ProposalOutline; sections: ProposalSection[]
-  coverage: { total: number; mapped: number; unmapped: RequirementRef[] }
+  coverage: { total: number; mapped: number; unmapped: RequirementRef[]; out_of_scope: number }
   manifest: RequirementManifest; approved_version: number; requirements_epoch_current: boolean
 }
 export interface OutlineList { outlines: ProposalOutline[]; approved_version: number; open_version: number; manifest: RequirementManifest }

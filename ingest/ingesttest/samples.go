@@ -154,9 +154,36 @@ type Text struct {
 }
 
 // Page 是一页：Texts 为文字；JPEG 非空时页面只绘制一张 DCT 图像（模拟扫描件）。
+// Rules 为描边线段（x0, y0, x1, y1），Fills 为填充矩形（x, y, w, h，细长矩形即 Word 导出常见的单元格边框），
+// Ops 为原样追加的内容流操作（如白色线条）。
 type Page struct {
 	Texts []Text
 	JPEG  []byte
+	Rules [][4]float64
+	Fills [][4]float64
+	Ops   string
+}
+
+// GridRules 返回 xs × ys 网格的全部边线（描边线段）；skip 中的 [x0, y, x1] 表示省略 y 处 x0..x1 段的水平线（纵向合并）。
+func GridRules(xs, ys []float64, skip ...[3]float64) [][4]float64 {
+	var out [][4]float64
+	for _, x := range xs {
+		out = append(out, [4]float64{x, ys[len(ys)-1], x, ys[0]})
+	}
+	for _, y := range ys {
+		for i := 0; i+1 < len(xs); i++ {
+			omit := false
+			for _, s := range skip {
+				if s[1] == y && xs[i] >= s[0] && xs[i+1] <= s[2] {
+					omit = true
+				}
+			}
+			if !omit {
+				out = append(out, [4]float64{xs[i], y, xs[i+1], y})
+			}
+		}
+	}
+	return out
 }
 
 // PageHeight 是样本页面高度（A4 竖版）。
@@ -241,6 +268,13 @@ func BuildPDF(title string, pages ...Page) []byte {
 			img := add(stream("/Type /XObject /Subtype /Image /Width 100 /Height 140 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode", p.JPEG, false))
 			res = fmt.Sprintf("<< /XObject << /Im1 %d 0 R >> >>", img)
 			content.WriteString("q 595 0 0 842 0 0 cm /Im1 Do Q\n")
+		}
+		content.WriteString(p.Ops)
+		for _, r := range p.Rules {
+			fmt.Fprintf(&content, "0.5 w %.2f %.2f m %.2f %.2f l S\n", r[0], r[1], r[2], r[3])
+		}
+		for _, f := range p.Fills {
+			fmt.Fprintf(&content, "%.2f %.2f %.2f %.2f re f\n", f[0], f[1], f[2], f[3])
 		}
 		for _, t := range p.Texts {
 			var hex strings.Builder

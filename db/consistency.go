@@ -323,7 +323,7 @@ func omissionsTx(ctx context.Context, q queryer, tenant string, taskID, outlineI
 	var out []omission
 	for _, r := range reqs {
 		kind := compliance.RequirementKind(r.Category, r.Title, r.Description, r.IsMandatory)
-		if kind != compliance.KindStar && kind != compliance.KindTriangle {
+		if !r.InTechnicalScope() || kind != compliance.KindStar && kind != compliance.KindTriangle {
 			continue
 		}
 		label := map[string]string{compliance.KindStar: "★ 条款漏项", compliance.KindTriangle: "▲ 条款漏项"}[kind]

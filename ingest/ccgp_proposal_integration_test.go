@@ -95,6 +95,7 @@ func TestCCGPRealTendersRequirementsAndOutline(t *testing.T) {
 			if res.Mandatory > 0 && by[db.ReqMandatoryClause] == 0 {
 				t.Fatalf("%d mandatory chunks but no mandatory_clause requirement", res.Mandatory)
 			}
+			price := 0
 			for _, it := range view.Items {
 				if it.SourceChunkID == nil || it.SourceHash == "" || it.Origin != "extracted" {
 					t.Fatalf("requirement without versioned source: %+v", it)
@@ -102,6 +103,22 @@ func TestCCGPRealTendersRequirementsAndOutline(t *testing.T) {
 				if it.Category == db.ReqScoringItem && strings.Contains(it.Description, "序号") && strings.Contains(it.Description, "分值") {
 					t.Fatalf("scoring table header row extracted as a requirement: %q", it.Description)
 				}
+				if it.Category == db.ReqScoringItem && (it.ScoreGroup == "" || it.ScoreWeight <= 0) {
+					t.Fatalf("scoring item without group or score: %+v", it)
+				}
+				if !it.InTechnicalScope() {
+					price++
+				}
+			}
+			// 评分表结构化提取：每个分包都有价格分，评分项合计恰为 100 分（本语料全部满足；类别声明分值与提取不符时仅提示）。
+			if len(view.Scoring) == 0 || price != len(view.Scoring) {
+				t.Fatalf("expected one price item per lot: price=%d scoring=%+v", price, view.Scoring)
+			}
+			for _, s := range view.Scoring {
+				if s.Total != 100 || s.Price <= 0 || s.Technical <= 0 || s.Other != 0 {
+					t.Fatalf("lot %q scoring total %+v", s.Lot, s)
+				}
+				t.Logf("%s: lot %q items=%d technical=%.4g commercial=%.4g price=%.4g warnings=%v", name, s.Lot, s.Items, s.Technical, s.Commercial, s.Price, s.Warnings)
 			}
 			// 幂等：原文未变时重提不新增、不递增 epoch。
 			again, err := d.ExtractRequirements(ctx, db.DefaultTenant, task.ID, "ccgp-test")
@@ -116,8 +133,10 @@ func TestCCGPRealTendersRequirementsAndOutline(t *testing.T) {
 			if err != nil {
 				t.Fatalf("create outline: %v", err)
 			}
-			if outline.Coverage.Total != view.Stats.Total || len(outline.Coverage.Unmapped) != 0 || len(outline.Sections) < 2 {
-				t.Fatalf("default outline must map every requirement: sections=%d coverage=%+v", len(outline.Sections), outline.Coverage)
+			// 价格评分项由报价文件响应，不进入技术标目录；其余要求全部映射。
+			if outline.Coverage.Total+outline.Coverage.OutOfScope != view.Stats.Total || outline.Coverage.OutOfScope != price ||
+				len(outline.Coverage.Unmapped) != 0 || len(outline.Sections) < 2 {
+				t.Fatalf("default outline must map every in-scope requirement: sections=%d coverage=%+v", len(outline.Sections), outline.Coverage)
 			}
 			if _, err := d.SubmitOutline(ctx, db.DefaultTenant, task.ID, outline.Outline.Version, "ccgp-test"); err != nil {
 				t.Fatalf("submit: %v", err)

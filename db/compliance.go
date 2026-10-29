@@ -526,6 +526,9 @@ func complianceCoverageTx(ctx context.Context, q queryer, tenant string, taskID 
 	}
 	byID := map[int64]*RequirementCompliance{}
 	for _, r := range reqs {
+		if !r.InTechnicalScope() {
+			continue // 价格评分项由报价文件响应，不计入技术标两层覆盖
+		}
 		rc := &RequirementCompliance{ID: r.ID, Code: r.Code, Title: r.Title, Category: r.Category, IsMandatory: r.IsMandatory,
 			Kind: compliance.RequirementKind(r.Category, r.Title, r.Description, r.IsMandatory), SectionCodes: []string{}, Status: "unmapped",
 			Deviation: compliance.DeviationNone}

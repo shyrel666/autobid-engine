@@ -83,7 +83,10 @@ export const requirementCategoryLabel: Record<string, string> = {
   scoring_item: '评分项', mandatory_clause: '★ 强制条款', non_scoring_required: '非评分必答项', format_attachment: '格式与附件',
 }
 
-export const reviewStatusLabel: Record<string, string> = { draft: '待复核', confirmed: '已确认', needs_revision: '原文已变·需复核' }
+/** 评分项分组：价格分由报价文件响应，不进入技术标大纲。 */
+export const scoreGroupLabel: Record<string, string> = { '': '未分类', technical: '技术分', commercial: '商务分', price: '价格分' }
+
+export const reviewStatusLabel: Record<string, string> = { draft: '待复核', confirmed: '已确认', needs_revision: '原文变更或未再提取·需复核' }
 
 export const manifestStatusLabel: Record<string, string> = { draft: '未确认', confirmed: '已确认完整', stale: '已变更·需重新确认' }
 

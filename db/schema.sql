@@ -810,6 +810,9 @@ CREATE TABLE IF NOT EXISTS requirement_items (
     CONSTRAINT fk_requirement_items_run FOREIGN KEY (tenant_id, evidence_run_id)
         REFERENCES retrieval_runs(tenant_id, id) ON DELETE SET NULL (evidence_run_id)
 );
+-- 评分项分组（评分表结构化提取）：technical / commercial / price，空串为未分类。price 由报价文件响应，不进入技术标大纲与响应覆盖。
+ALTER TABLE requirement_items ADD COLUMN IF NOT EXISTS score_group TEXT NOT NULL DEFAULT ''
+    CHECK (score_group IN ('','technical','commercial','price'));
 CREATE INDEX IF NOT EXISTS idx_requirement_items_task ON requirement_items(tenant_id, task_id, category, id);
 CREATE INDEX IF NOT EXISTS idx_requirement_items_chunk ON requirement_items(source_chunk_id) WHERE source_chunk_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_requirement_items_evidence ON requirement_items USING GIN(evidence_ids);
@@ -992,10 +995,10 @@ BEGIN
         RETURN NULL;
     END IF;
     IF TG_OP = 'UPDATE' AND
-       (NEW.code, NEW.category, NEW.title, NEW.description, NEW.is_mandatory, NEW.score_weight,
+       (NEW.code, NEW.category, NEW.title, NEW.description, NEW.is_mandatory, NEW.score_weight, NEW.score_group,
         NEW.source_doc_id, NEW.source_chunk_id, NEW.source_hash, NEW.source_loc)
        IS NOT DISTINCT FROM
-       (OLD.code, OLD.category, OLD.title, OLD.description, OLD.is_mandatory, OLD.score_weight,
+       (OLD.code, OLD.category, OLD.title, OLD.description, OLD.is_mandatory, OLD.score_weight, OLD.score_group,
         OLD.source_doc_id, OLD.source_chunk_id, OLD.source_hash, OLD.source_loc) THEN
         RETURN NULL; -- 证据绑定与复核状态变化不改变清单内容
     END IF;
@@ -1240,10 +1243,10 @@ CREATE TRIGGER trg_compliance_matrix_guard BEFORE INSERT OR UPDATE ON compliance
 -- 失效路径 1：要求实质变更 -> 该要求的矩阵行与漏项结论 stale（触发器名排在 trg_requirement_items_changed 之前，先记录要求原因）。
 CREATE OR REPLACE FUNCTION compliance_requirement_changed() RETURNS trigger AS $$
 BEGIN
-    IF (NEW.code, NEW.category, NEW.title, NEW.description, NEW.is_mandatory, NEW.score_weight,
+    IF (NEW.code, NEW.category, NEW.title, NEW.description, NEW.is_mandatory, NEW.score_weight, NEW.score_group,
         NEW.source_doc_id, NEW.source_chunk_id, NEW.source_hash, NEW.source_loc)
        IS NOT DISTINCT FROM
-       (OLD.code, OLD.category, OLD.title, OLD.description, OLD.is_mandatory, OLD.score_weight,
+       (OLD.code, OLD.category, OLD.title, OLD.description, OLD.is_mandatory, OLD.score_weight, OLD.score_group,
         OLD.source_doc_id, OLD.source_chunk_id, OLD.source_hash, OLD.source_loc) THEN
         RETURN NULL;
     END IF;

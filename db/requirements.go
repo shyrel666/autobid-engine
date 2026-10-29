@@ -61,6 +61,7 @@ type RequirementItem struct {
 	Description        string          `json:"description"`
 	IsMandatory        bool            `json:"is_mandatory"`
 	ScoreWeight        float64         `json:"score_weight"`
+	ScoreGroup         string          `json:"score_group"` // 评分项分组：technical / commercial / price，空串为未分类
 	Origin             string          `json:"origin"`
 	SourceAssetID      *int64          `json:"source_asset_id,omitempty"`
 	SourceDocID        *int64          `json:"source_doc_id,omitempty"`
@@ -104,22 +105,24 @@ type RequirementStats struct {
 	OutlineVersion int            `json:"outline_version"` // 映射统计所依据的最新大纲版本，0 表示尚无大纲
 	Mapped         int            `json:"mapped"`
 	Unmapped       []string       `json:"unmapped"`
+	OutOfScope     int            `json:"out_of_scope"` // 价格评分项：由报价文件响应，不进入技术标大纲
 }
 
 type RequirementsView struct {
 	Manifest *RequirementManifest `json:"manifest"`
 	Items    []*RequirementItem   `json:"items"`
 	Stats    RequirementStats     `json:"stats"`
+	Scoring  []ScoringSummary     `json:"scoring"` // 按分包汇总的评分分值与合计校验提示
 }
 
-const reqCols = `id, tenant_id, task_id, code, category, title, description, is_mandatory, score_weight, origin,
+const reqCols = `id, tenant_id, task_id, code, category, title, description, is_mandatory, score_weight, score_group, origin,
 	source_asset_id, source_doc_id, source_chunk_id, source_hash, source_loc, evidence_run_id, to_jsonb(evidence_ids),
 	evidence_gap, review_status, created_by, updated_by, approved_by, created_at, updated_at`
 
 func scanRequirement(r rowScanner) (*RequirementItem, error) {
 	var x RequirementItem
 	var loc, ev []byte
-	err := r.Scan(&x.ID, &x.TenantID, &x.TaskID, &x.Code, &x.Category, &x.Title, &x.Description, &x.IsMandatory, &x.ScoreWeight, &x.Origin,
+	err := r.Scan(&x.ID, &x.TenantID, &x.TaskID, &x.Code, &x.Category, &x.Title, &x.Description, &x.IsMandatory, &x.ScoreWeight, &x.ScoreGroup, &x.Origin,
 		&x.SourceAssetID, &x.SourceDocID, &x.SourceChunkID, &x.SourceHash, &loc, &x.EvidenceRunID, &ev,
 		&x.EvidenceGap, &x.ReviewStatus, &x.CreatedBy, &x.UpdatedBy, &x.ApprovedBy, &x.CreatedAt, &x.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -132,6 +135,16 @@ func scanRequirement(r rowScanner) (*RequirementItem, error) {
 	x.EvidenceIDs = int64sJSON(ev)
 	x.MappedSectionCodes = []string{}
 	return &x, nil
+}
+
+// pgTextArray 把字符串列表编码为 PostgreSQL 数组字面量（配合 $n::text[] 使用），元素一律加引号转义。
+func pgTextArray(vals []string) string {
+	esc := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		parts[i] = `"` + esc.Replace(v) + `"`
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }
 
 // pgInt64Array 把 ID 列表编码为 PostgreSQL 数组字面量（配合 $n::bigint[] 使用）。
@@ -235,6 +248,7 @@ func (d *DB) ListRequirements(ctx context.Context, tenant string, taskID int64) 
 			return nil, err
 		}
 	}
+	view.Scoring = summarizeScoring(items)
 	s := &view.Stats
 	for _, it := range items {
 		s.Total++
@@ -247,6 +261,10 @@ func (d *DB) ListRequirements(ctx context.Context, tenant string, taskID int64) 
 			s.Confirmed++
 		case ReviewNeedsRevision:
 			s.NeedsRevision++
+		}
+		if codes := mapped[it.ID]; !it.InTechnicalScope() && len(codes) == 0 {
+			s.OutOfScope++ // 价格评分项：不需要证据与大纲映射
+			continue
 		}
 		switch {
 		case len(it.EvidenceIDs) > 0:
@@ -298,6 +316,7 @@ type RequirementInput struct {
 	Description   *string          `json:"description"`
 	IsMandatory   *bool            `json:"is_mandatory"`
 	ScoreWeight   *float64         `json:"score_weight"`
+	ScoreGroup    *string          `json:"score_group"`
 	SourceChunkID *int64           `json:"source_chunk_id"`
 	SourceLoc     *json.RawMessage `json:"source_loc"`
 	EvidenceRunID *int64           `json:"evidence_run_id"`
@@ -396,11 +415,11 @@ func (d *DB) CreateRequirement(ctx context.Context, tenant string, taskID int64,
 		}
 		out, err = scanRequirement(tx.QueryRowContext(ctx, `INSERT INTO requirement_items(tenant_id, task_id, code, category, title, description,
 			is_mandatory, score_weight, origin, source_doc_id, source_chunk_id, source_hash, source_loc, evidence_run_id, evidence_ids,
-			evidence_gap, review_status, created_by, updated_by)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'manual',$9,$10,$11,$12::jsonb,$13,$14::bigint[],$15,$16,$17,$17)
+			evidence_gap, review_status, created_by, updated_by, score_group)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'manual',$9,$10,$11,$12::jsonb,$13,$14::bigint[],$15,$16,$17,$17,$18)
 			ON CONFLICT (tenant_id, task_id, code) DO NOTHING RETURNING `+reqCols,
 			tenant, taskID, x.Code, x.Category, x.Title, x.Description, x.IsMandatory, x.ScoreWeight, x.SourceDocID, x.SourceChunkID,
-			x.SourceHash, string(x.SourceLoc), x.EvidenceRunID, pgInt64Array(x.EvidenceIDs), x.EvidenceGap, x.ReviewStatus, actor))
+			x.SourceHash, string(x.SourceLoc), x.EvidenceRunID, pgInt64Array(x.EvidenceIDs), x.EvidenceGap, x.ReviewStatus, actor, x.ScoreGroup))
 		if errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("%w: requirement code %q already exists", ErrProposalConflict, x.Code)
 		}
@@ -437,6 +456,15 @@ func applyRequirementInput(ctx context.Context, q queryer, tenant string, taskID
 			return fmt.Errorf("%w: score_weight must be >= 0", ErrInvalidRequirement)
 		}
 		x.ScoreWeight = *in.ScoreWeight
+	}
+	if in.ScoreGroup != nil {
+		if !validScoreGroup(*in.ScoreGroup) {
+			return fmt.Errorf("%w: invalid score_group %q", ErrInvalidRequirement, *in.ScoreGroup)
+		}
+		x.ScoreGroup = *in.ScoreGroup
+	}
+	if x.Category != ReqScoringItem {
+		x.ScoreGroup = ""
 	}
 	if in.SourceChunkID != nil {
 		if *in.SourceChunkID <= 0 {
@@ -518,8 +546,8 @@ func (d *DB) UpdateRequirement(ctx context.Context, tenant string, taskID, id in
 			return err
 		}
 		substantive := old.Code != x.Code || old.Category != x.Category || old.Title != x.Title || old.Description != x.Description ||
-			old.IsMandatory != x.IsMandatory || old.ScoreWeight != x.ScoreWeight || !sameInt64Ptr(old.SourceChunkID, x.SourceChunkID) ||
-			string(old.SourceLoc) != string(x.SourceLoc)
+			old.IsMandatory != x.IsMandatory || old.ScoreWeight != x.ScoreWeight || old.ScoreGroup != x.ScoreGroup ||
+			!sameInt64Ptr(old.SourceChunkID, x.SourceChunkID) || string(old.SourceLoc) != string(x.SourceLoc)
 		if substantive && in.ReviewStatus == nil {
 			x.ReviewStatus = ReviewDraft
 		}
@@ -529,10 +557,12 @@ func (d *DB) UpdateRequirement(ctx context.Context, tenant string, taskID, id in
 		}
 		out, err = scanRequirement(tx.QueryRowContext(ctx, `UPDATE requirement_items SET code = $4, category = $5, title = $6, description = $7,
 			is_mandatory = $8, score_weight = $9, source_doc_id = $10, source_chunk_id = $11, source_hash = $12, source_loc = $13::jsonb,
-			evidence_run_id = $14, evidence_ids = $15::bigint[], evidence_gap = $16, review_status = $17, approved_by = $18, updated_by = $19
+			evidence_run_id = $14, evidence_ids = $15::bigint[], evidence_gap = $16, review_status = $17, approved_by = $18, updated_by = $19,
+			score_group = $20
 			WHERE tenant_id = $1 AND task_id = $2 AND id = $3 RETURNING `+reqCols,
 			tenant, taskID, id, x.Code, x.Category, x.Title, x.Description, x.IsMandatory, x.ScoreWeight, x.SourceDocID, x.SourceChunkID,
-			x.SourceHash, string(x.SourceLoc), x.EvidenceRunID, pgInt64Array(x.EvidenceIDs), x.EvidenceGap, x.ReviewStatus, approvedBy, actor))
+			x.SourceHash, string(x.SourceLoc), x.EvidenceRunID, pgInt64Array(x.EvidenceIDs), x.EvidenceGap, x.ReviewStatus, approvedBy, actor,
+			x.ScoreGroup))
 		if err != nil {
 			if isUniqueViolation(err) {
 				return fmt.Errorf("%w: requirement code %q already exists", ErrProposalConflict, x.Code)
@@ -618,19 +648,26 @@ func (d *DB) ConfirmRequirements(ctx context.Context, tenant string, taskID int6
 
 // ExtractResult 汇总一次幂等提取：同编码且原文未变的要求保持不变；原文已变的提取项更新并标记 needs_revision；
 // 人工维护（origin=manual）的同编码要求不被覆盖。
+// ScoringItems 为本次从评分表结构化解析出的评分项数；Orphaned 为本次未再产出的旧提取项（规则升级或原文变化），
+// 它们被标记为 needs_revision，须人工确认后删除或保留。
 type ExtractResult struct {
-	Created   int      `json:"created"`
-	Updated   int      `json:"updated"`
-	Unchanged int      `json:"unchanged"`
-	Skipped   int      `json:"skipped_manual"`
-	Scanned   int      `json:"scanned_chunks"`
-	Codes     []string `json:"codes"`
+	Created      int      `json:"created"`
+	Updated      int      `json:"updated"`
+	Unchanged    int      `json:"unchanged"`
+	Skipped      int      `json:"skipped_manual"`
+	Scanned      int      `json:"scanned_chunks"`
+	ScoringItems int      `json:"scoring_items"`
+	Orphaned     int      `json:"orphaned"`
+	Codes        []string `json:"codes"`
+	OrphanCodes  []string `json:"orphan_codes"`
 }
 
 type reqCandidate struct {
 	code, category, title, description string
 	mandatory                          bool
 	score                              float64
+	scoreGroup                         string
+	tableItem                          bool // 来自结构化评分表
 	assetID                            *int64
 	src                                *chunkSource
 	loc                                map[string]any
@@ -639,17 +676,9 @@ type reqCandidate struct {
 var (
 	reFormat     = regexp.MustCompile(`格式|附件|装订|签字|签章|盖章|密封|封面|份数|正本|副本|电子版|投标文件组成`)
 	reScoring    = regexp.MustCompile(`评分|评审标准|评审因素|评标标准|评标办法|得分|分值`)
-	reTableScore = regexp.MustCompile(`得\s*[0-9]+(?:\.[0-9]+)?\s*分|满分|[（(]\s*[0-9]+(?:\.[0-9]+)?\s*分\s*[）)]`)
-	reHeader     = regexp.MustCompile(`评审|评分|因素|分值|满分|权重|项目|内容|要求|标准|序号|类别`)
 	reObligation = regexp.MustCompile(`必须|须提供|应提供|应满足|须满足|不得|应具备|须具备|须承诺|应承诺|要求提供`)
 	reScore      = regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?)\s*分`)
-	reNumber     = regexp.MustCompile(`^\s*([0-9]+(?:\.[0-9]+)?)\s*(?:分)?\s*$`)
 )
-
-type extractTable struct {
-	HeaderRows int        `json:"header_rows"`
-	Grid       [][]string `json:"grid"`
-}
 
 func firstLine(s string, n int) string {
 	s = strings.TrimSpace(s)
@@ -685,95 +714,6 @@ func cloneLoc(loc map[string]any, kv ...any) map[string]any {
 	return out
 }
 
-// scoringRows 把评分表的数据行展开为逐行评分项。只有带「分值」列表头或含「得 N 分 / 满分 / （N 分）」行的表格才视为评分表，
-// 因此不依赖章节标题（真实 PDF 的评分表常落在「评标（续1）」或被错切的段落中）。
-func scoringRows(cs *chunkSource, docKey string) []reqCandidate {
-	var tables []extractTable
-	if json.Unmarshal(cs.Tables, &tables) != nil {
-		return nil
-	}
-	var out []reqCandidate
-	for ti, tb := range tables {
-		if len(tb.Grid) <= tb.HeaderRows {
-			continue
-		}
-		// 跨页拆开的评分表（PDF 常见）续表没有真正的表头：首行不像表头时把它当数据行。
-		start := tb.HeaderRows
-		if start > 0 && !reHeader.MatchString(strings.Join(tb.Grid[start-1], " ")) {
-			start = 0
-		}
-		// 解析器未识别表头（header_rows=0）但首行是「序号 | 评分因素 | 分值」式表头时，按表头处理，避免把表头当评分项。
-		if first := strings.Join(tb.Grid[0], " "); start == 0 && reHeader.MatchString(first) && !reTableScore.MatchString(first) && !reScore.MatchString(first) {
-			start = 1
-		}
-		scoreCol := -1
-		if start > 0 {
-			for ci, h := range tb.Grid[start-1] {
-				if strings.Contains(h, "分值") || strings.Contains(h, "满分") || strings.Contains(h, "分数") || strings.Contains(h, "权重") {
-					scoreCol = ci
-				}
-			}
-		}
-		if scoreCol < 0 {
-			scoring := false
-			for _, row := range tb.Grid {
-				if reTableScore.MatchString(strings.Join(row, " ")) {
-					scoring = true
-					break
-				}
-			}
-			if !scoring {
-				continue
-			}
-		}
-		for ri := start; ri < len(tb.Grid); ri++ {
-			row := tb.Grid[ri]
-			text := strings.TrimSpace(strings.Join(row, " | "))
-			if strings.Trim(text, " |") == "" {
-				continue
-			}
-			score := 0.0
-			if scoreCol >= 0 && scoreCol < len(row) {
-				if m := reNumber.FindStringSubmatch(row[scoreCol]); m != nil {
-					score, _ = strconv.ParseFloat(m[1], 64)
-				}
-			}
-			if score == 0 && scoreCol < 0 { // 无分值列表头时，分值通常是末列的纯数字
-				for ci := len(row) - 1; ci > 0; ci-- {
-					if c := strings.TrimSpace(row[ci]); c != "" {
-						if m := reNumber.FindStringSubmatch(c); m != nil {
-							score, _ = strconv.ParseFloat(m[1], 64)
-						}
-						break
-					}
-				}
-			}
-			if score == 0 { // 退而取「得 N 分」档位中的最高分作为满分
-				for _, m := range reScore.FindAllStringSubmatch(text, -1) {
-					if v, _ := strconv.ParseFloat(m[1], 64); v > score {
-						score = v
-					}
-				}
-			}
-			title := ""
-			for _, c := range row {
-				if c = strings.TrimSpace(c); c != "" && !reNumber.MatchString(c) {
-					title = c
-					break
-				}
-			}
-			if title == "" {
-				title = text
-			}
-			mandatory := strings.ContainsAny(text, "★▲")
-			out = append(out, reqCandidate{code: fmt.Sprintf("SC-%s-T%dR%d", docKey, ti+1, ri+1), category: ReqScoringItem,
-				title: firstLine(title, 60), description: text, mandatory: mandatory, score: score, src: cs,
-				loc: cloneLoc(cs.Loc, "table", ti, "row", ri)})
-		}
-	}
-	return out
-}
-
 func extractCandidatesTx(ctx context.Context, q queryer, tenant string, taskID int64) ([]reqCandidate, int, error) {
 	chunks := map[int64]*chunkSource{}
 	var order []*chunkSource
@@ -795,7 +735,8 @@ func extractCandidatesTx(ctx context.Context, q queryer, tenant string, taskID i
 		return nil, 0, err
 	}
 
-	var out []reqCandidate
+	// 评分表优先结构化解析；有结构化评分项时，招标要素中的评分项与按段落猜测的评分项都不再产出（避免重复计分）。
+	out, scoringChunks, scoringDocs := scoringCandidates(order)
 	covered := map[int64]bool{} // 已由招标要素覆盖的原文分块
 	arows, err := q.QueryContext(ctx, `SELECT a.id, a.type, a.code, a.title, a.content, a.is_mandatory, COALESCE(a.score_max, 0)::float8, a.source_ref
 		FROM assets a WHERE a.type IN ('scoring_item','qualification','clause','commercial_item')
@@ -820,6 +761,9 @@ func extractCandidatesTx(ctx context.Context, q queryer, tenant string, taskID i
 			ChunkID int64 `json:"chunk_id"`
 		}
 		_ = json.Unmarshal(ref, &sr)
+		if typ == AssetScoringItem && len(scoringDocs) > 0 {
+			continue
+		}
 		c := reqCandidate{title: title, description: content, mandatory: mandatory, loc: map[string]any{"asset_id": id, "asset_code": code}}
 		if c.title == "" {
 			c.title = firstLine(content, 60)
@@ -831,7 +775,7 @@ func extractCandidatesTx(ctx context.Context, q queryer, tenant string, taskID i
 		c.assetID = &assetID
 		switch typ {
 		case AssetScoringItem:
-			c.code, c.category, c.score = "SC-"+code, ReqScoringItem, score
+			c.code, c.category, c.score, c.scoreGroup = "SC-"+code, ReqScoringItem, score, classifyScoreGroup("", c.title)
 		case AssetQualification:
 			c.code, c.category = "QA-"+code, ReqNonScoringRequired
 		case AssetClause:
@@ -858,26 +802,26 @@ func extractCandidatesTx(ctx context.Context, q queryer, tenant string, taskID i
 		if covered[cs.ChunkID] || strings.TrimSpace(cs.Content) == "" {
 			continue
 		}
-		docKey := fmt.Sprintf("D%d-%04d", cs.DocID, cs.Loc["seq"])
+		docKey := chunkKey(cs)
 		head := cs.SectionTitle + " " + firstLine(cs.Content, 80)
-		if len(cs.Tables) > 2 {
-			if rows := scoringRows(cs, docKey); len(rows) > 0 {
-				out = append(out, rows...)
-				if cs.Mandatory { // 评分表所在段落本身含 ★/废标条款时仍单列强制项
-					out = append(out, reqCandidate{code: "MC-" + docKey, category: ReqMandatoryClause, title: chunkTitle(cs), description: cs.Content,
-						mandatory: true, src: cs, loc: cs.Loc})
-				}
-				continue
+		scoringText := reScoring.MatchString(head) && reScore.MatchString(cs.Content)
+		if scoringChunks[cs.ChunkID] || (scoringText && scoringDocs[cs.DocID]) {
+			// 评分表所在段落与评分办法说明已由结构化评分项覆盖；段落本身含 ★/废标条款时仍单列强制项
+			if cs.Mandatory {
+				out = append(out, reqCandidate{code: "MC-" + docKey, category: ReqMandatoryClause, title: chunkTitle(cs), description: cs.Content,
+					mandatory: true, src: cs, loc: cs.Loc})
 			}
+			continue
 		}
 		switch {
-		case reScoring.MatchString(head) && reScore.MatchString(cs.Content):
+		case scoringText:
 			score := 0.0
 			if m := reScore.FindStringSubmatch(cs.Content); m != nil {
 				score, _ = strconv.ParseFloat(m[1], 64)
 			}
-			out = append(out, reqCandidate{code: "SC-" + docKey, category: ReqScoringItem, title: chunkTitle(cs), description: cs.Content,
-				mandatory: cs.Mandatory, score: score, src: cs, loc: cs.Loc})
+			title := chunkTitle(cs)
+			out = append(out, reqCandidate{code: "SC-" + docKey, category: ReqScoringItem, title: title, description: cs.Content,
+				mandatory: cs.Mandatory, score: score, scoreGroup: classifyScoreGroup(cs.SectionTitle, title), src: cs, loc: cs.Loc})
 		case cs.Mandatory:
 			out = append(out, reqCandidate{code: "MC-" + docKey, category: ReqMandatoryClause, title: chunkTitle(cs), description: cs.Content,
 				mandatory: true, src: cs, loc: cs.Loc})
@@ -915,6 +859,9 @@ func (d *DB) ExtractRequirements(ctx context.Context, tenant string, taskID int6
 				continue
 			}
 			seen[c.code] = true
+			if c.tableItem {
+				res.ScoringItems++
+			}
 			var docID, chunkID *int64
 			hash := ContentHash(c.title + "\x00" + c.description)
 			if c.src != nil {
@@ -927,9 +874,10 @@ func (d *DB) ExtractRequirements(ctx context.Context, tenant string, taskID int6
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 				if _, err := tx.ExecContext(ctx, `INSERT INTO requirement_items(tenant_id, task_id, code, category, title, description, is_mandatory,
-					score_weight, origin, source_asset_id, source_doc_id, source_chunk_id, source_hash, source_loc, created_by, updated_by)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'extracted',$9,$10,$11,$12,$13::jsonb,$14,$14)`,
-					tenant, taskID, c.code, c.category, c.title, c.description, c.mandatory, c.score, c.assetID, docID, chunkID, hash, string(loc), actor); err != nil {
+					score_weight, origin, source_asset_id, source_doc_id, source_chunk_id, source_hash, source_loc, created_by, updated_by, score_group)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'extracted',$9,$10,$11,$12,$13::jsonb,$14,$14,$15)`,
+					tenant, taskID, c.code, c.category, c.title, c.description, c.mandatory, c.score, c.assetID, docID, chunkID, hash, string(loc), actor,
+					c.scoreGroup); err != nil {
 					return fmt.Errorf("insert requirement %s: %w", c.code, err)
 				}
 				res.Created++
@@ -943,13 +891,43 @@ func (d *DB) ExtractRequirements(ctx context.Context, tenant string, taskID int6
 			default:
 				if _, err := tx.ExecContext(ctx, `UPDATE requirement_items SET category = $4, title = $5, description = $6, is_mandatory = $7,
 					score_weight = $8, source_asset_id = $9, source_doc_id = $10, source_chunk_id = $11, source_hash = $12, source_loc = $13::jsonb,
-					review_status = 'needs_revision', updated_by = $14 WHERE tenant_id = $1 AND task_id = $2 AND code = $3`,
-					tenant, taskID, c.code, c.category, c.title, c.description, c.mandatory, c.score, c.assetID, docID, chunkID, hash, string(loc), actor); err != nil {
+					review_status = 'needs_revision', updated_by = $14, score_group = $15 WHERE tenant_id = $1 AND task_id = $2 AND code = $3`,
+					tenant, taskID, c.code, c.category, c.title, c.description, c.mandatory, c.score, c.assetID, docID, chunkID, hash, string(loc), actor,
+					c.scoreGroup); err != nil {
 					return err
 				}
 				res.Updated++
 				res.Codes = append(res.Codes, c.code)
 			}
+		}
+		// 本次未再产出的旧提取项（提取规则升级、原文已删改）不自动删除：标记待复核，由人工确认删除或保留。
+		rows, err := tx.QueryContext(ctx, `SELECT code FROM requirement_items WHERE tenant_id = $1 AND task_id = $2 AND origin = 'extracted'
+			AND review_status <> 'needs_revision' ORDER BY code`, tenant, taskID)
+		if err != nil {
+			return err
+		}
+		var orphans []string
+		for rows.Next() {
+			var code string
+			if err := rows.Scan(&code); err != nil {
+				rows.Close()
+				return err
+			}
+			if !seen[code] {
+				orphans = append(orphans, code)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		res.OrphanCodes = []string{}
+		if len(orphans) > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE requirement_items SET review_status = 'needs_revision', updated_by = $4
+				WHERE tenant_id = $1 AND task_id = $2 AND code = ANY($3::text[])`, tenant, taskID, pgTextArray(orphans), actor); err != nil {
+				return err
+			}
+			res.Orphaned, res.OrphanCodes = len(orphans), orphans
 		}
 		return afterRequirementChangeTx(ctx, tx, tenant, taskID, actor, before)
 	})

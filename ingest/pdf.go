@@ -1,9 +1,11 @@
 package ingest
 
 // PDF 文本与版面还原：
-//  1. 内容流解释（BT/ET、Tf、Td/TD/Tm/T*、Tj/TJ/'/"、q/Q/cm、Form XObject 递归）得到每个字形的设备坐标与字宽；
-//  2. 按基线聚类为版面行，行内按大于约 1.2 倍字号的水平间隙切成列段；
-//  3. 连续的多列段行（列起点对齐）还原为表格：首列为空且行距宽松的行视为首列纵向合并，
+//  1. 内容流解释（BT/ET、Tf、Td/TD/Tm/T*、Tj/TJ/'/"、q/Q/cm、Form XObject 递归）得到每个字形的设备坐标与字宽，
+//     路径绘制（m/l/re/h + S/f/B/n，忽略白色）记录轴对齐的框线；
+//  2. 有框线的表格按框线网格还原单元格（见 pdfruled.go），其余字形按基线聚类为版面行，
+//     行内按大于约 1.2 倍字号的水平间隙切成列段；
+//  3. 无框线时，连续的多列段行（列起点对齐）还原为表格：首列为空且行距宽松的行视为首列纵向合并，
 //     行距紧凑的行视为上一行单元格的折行续写，跨越下一列起点且下一列为空的列段视为横向合并；
 //  4. 页尾表格与下一页页首表格列数一致时合并为跨页表格，下一页重复的表头行只保留一次；
 //  5. 去除页码行与跨页重复的页眉页脚；无文本层的页面取其图像交给 OCR。
@@ -39,6 +41,8 @@ type pdfGState struct {
 	ctm                      pdfMat
 	font                     *pdfFont
 	size, tc, tw, th, tl, ts float64
+	// 当前描边 / 填充颜色为白色（白线、白底不是表格框线）。
+	strokeWhite, fillWhite bool
 }
 
 type glyphPos struct {
@@ -60,6 +64,69 @@ type pdfPageOut struct {
 	glyphs        []glyphPos
 	images        []pdfImage
 	unsupportedIm int
+	rules         []pdfRule
+}
+
+// pdfRule 是一条轴对齐框线（页面坐标）：水平线 y0 == y1，垂直线 x0 == x1。
+type pdfRule struct{ x0, y0, x1, y1 float64 }
+
+// maxPageRules 限制单页记录的框线数，避免矢量图密集的页面拖慢解析。
+const maxPageRules = 20000
+
+// addRule 记录描边线段：只保留近似水平 / 垂直且长度不小于 2pt 的线段。
+func (o *pdfPageOut) addRule(p, q [2]float64) {
+	if len(o.rules) >= maxPageRules {
+		return
+	}
+	dx, dy := math.Abs(p[0]-q[0]), math.Abs(p[1]-q[1])
+	switch {
+	case dy <= 0.6 && dx >= 2:
+		y := (p[1] + q[1]) / 2
+		o.rules = append(o.rules, pdfRule{min(p[0], q[0]), y, max(p[0], q[0]), y})
+	case dx <= 0.6 && dy >= 2:
+		x := (p[0] + q[0]) / 2
+		o.rules = append(o.rules, pdfRule{x, min(p[1], q[1]), x, max(p[1], q[1])})
+	}
+}
+
+// addThin 记录填充的细长子路径（Word / WPS 常把单元格边框画成细长填充矩形）。
+func (o *pdfPageOut) addThin(sp [][2]float64) {
+	if len(sp) < 2 || len(o.rules) >= maxPageRules {
+		return
+	}
+	x0, y0, x1, y1 := sp[0][0], sp[0][1], sp[0][0], sp[0][1]
+	for _, p := range sp[1:] {
+		x0, y0, x1, y1 = min(x0, p[0]), min(y0, p[1]), max(x1, p[0]), max(y1, p[1])
+	}
+	w, h := x1-x0, y1-y0
+	switch {
+	case h <= 2.5 && w >= 3:
+		o.rules = append(o.rules, pdfRule{x0, (y0 + y1) / 2, x1, (y0 + y1) / 2})
+	case w <= 2.5 && h >= 3:
+		o.rules = append(o.rules, pdfRule{(x0 + x1) / 2, y0, (x0 + x1) / 2, y1})
+	}
+}
+
+// whiteColor 判断颜色操作数是否为白色：1 个分量为灰度，3 个为 RGB，4 个为 CMYK；其他（图案名等）不视为白色。
+func whiteColor(ops []any) bool {
+	vals := make([]float64, 0, len(ops))
+	for _, v := range ops {
+		switch v.(type) {
+		case int64, float64:
+			vals = append(vals, pdfNum(v))
+		default:
+			return false
+		}
+	}
+	switch len(vals) {
+	case 1:
+		return vals[0] >= 0.95
+	case 3:
+		return vals[0] >= 0.95 && vals[1] >= 0.95 && vals[2] >= 0.95
+	case 4:
+		return vals[0] <= 0.05 && vals[1] <= 0.05 && vals[2] <= 0.05 && vals[3] <= 0.05
+	}
+	return false
 }
 
 type pdfInterp struct {
@@ -97,11 +164,14 @@ func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err
 	}
 
 	pageLines := make([][]layoutLine, len(outs))
+	ruled := make([][]*pdfTable, len(outs))
 	textPages := 0
 	var ocrErr error
 	for i, out := range outs {
 		if countText(out.glyphs) >= 5 {
-			pageLines[i] = buildLayoutLines(out)
+			var used []bool
+			ruled[i], used = ruledTables(out)
+			pageLines[i] = buildLayoutLines(withoutGlyphs(out, used))
 			textPages++
 			continue
 		}
@@ -145,7 +215,7 @@ func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err
 		return nil, fmt.Errorf("%w: PDF has no text layer", ErrNoText)
 	}
 	removeRunningLines(pageLines, outs)
-	p.Lines = pdfBlocks(pageLines)
+	p.Lines = pdfBlocks(pageLines, ruled)
 	return p, nil
 }
 
@@ -260,6 +330,40 @@ func (in *pdfInterp) run(content []byte, res pdfDict, gs pdfGState, out *pdfPage
 		}
 	)
 	num := func(v any) float64 { return pdfNum(v) }
+	// 当前路径：子路径的页面坐标点序列（构造时即按 CTM 变换，PDF 不允许在路径构造中改变 CTM）。
+	var (
+		subpaths [][][2]float64
+		closed   []bool
+	)
+	pt := func(x, y any) [2]float64 {
+		m, fx, fy := gs.ctm, num(x), num(y)
+		return [2]float64{m[0]*fx + m[2]*fy + m[4], m[1]*fx + m[3]*fy + m[5]}
+	}
+	lineTo := func(p [2]float64) {
+		if n := len(subpaths); n > 0 {
+			subpaths[n-1] = append(subpaths[n-1], p)
+			return
+		}
+		subpaths, closed = append(subpaths, [][2]float64{p}), append(closed, false)
+	}
+	paint := func(stroke, fill, closeAll bool) {
+		if stroke && !gs.strokeWhite {
+			for i, sp := range subpaths {
+				for k := 1; k < len(sp); k++ {
+					out.addRule(sp[k-1], sp[k])
+				}
+				if (closed[i] || closeAll) && len(sp) > 2 {
+					out.addRule(sp[len(sp)-1], sp[0])
+				}
+			}
+		}
+		if fill && !gs.fillWhite {
+			for _, sp := range subpaths {
+				out.addThin(sp)
+			}
+		}
+		subpaths, closed = subpaths[:0], closed[:0]
+	}
 	td := func(tx, ty float64) {
 		tlm = pdfMat{1, 0, 0, 1, tx, ty}.mul(tlm)
 		tm = tlm
@@ -390,6 +494,52 @@ func (in *pdfInterp) run(content []byte, res pdfDict, gs pdfGState, out *pdfPage
 			}
 		case "BI":
 			skipInlineImage(l)
+		case "m":
+			if o := operands(2); o != nil {
+				subpaths, closed = append(subpaths, [][2]float64{pt(o[0], o[1])}), append(closed, false)
+			}
+		case "l":
+			if o := operands(2); o != nil {
+				lineTo(pt(o[0], o[1]))
+			}
+		case "c":
+			if o := operands(6); o != nil {
+				lineTo(pt(o[4], o[5]))
+			}
+		case "v", "y":
+			if o := operands(4); o != nil {
+				lineTo(pt(o[2], o[3]))
+			}
+		case "h":
+			if n := len(closed); n > 0 {
+				closed[n-1] = true
+			}
+		case "re":
+			if o := operands(4); o != nil {
+				x, y, w, h := num(o[0]), num(o[1]), num(o[2]), num(o[3])
+				subpaths = append(subpaths, [][2]float64{pt(x, y), pt(x+w, y), pt(x+w, y+h), pt(x, y+h)})
+				closed = append(closed, true)
+			}
+		case "S":
+			paint(true, false, false)
+		case "s":
+			paint(true, false, true)
+		case "f", "F", "f*":
+			paint(false, true, false)
+		case "B", "B*":
+			paint(true, true, false)
+		case "b", "b*":
+			paint(true, true, true)
+		case "n":
+			paint(false, false, false)
+		case "G", "RG", "K", "SC", "SCN":
+			gs.strokeWhite = whiteColor(stack)
+		case "g", "rg", "k", "sc", "scn":
+			gs.fillWhite = whiteColor(stack)
+		case "CS":
+			gs.strokeWhite = false
+		case "cs":
+			gs.fillWhite = false
 		}
 		stack = stack[:0]
 	}
@@ -637,7 +787,8 @@ func ocrLayoutLines(page *OCRPage, pageNo int) []layoutLine {
 
 var reDigits = regexp.MustCompile(`\d+`)
 
-// removeRunningLines 去除页码行，以及在页面顶部/底部 8% 区域内、跨至少两页且过半页面重复出现的页眉页脚；
+// removeRunningLines 去除页码行，在页面顶部/底部 8% 区域内、跨至少两页且过半页面重复出现的页眉页脚，
+// 以及顶部/底部 15% 区域内与相邻页同一位置文字相同的章节级页眉；
 // 保留下来的页眉/页脚带文字标记为 margin，跨页续表判断时跳过它们。
 func removeRunningLines(pages [][]layoutLine, outs []*pdfPageOut) {
 	edge := func(l layoutLine, out *pdfPageOut) bool {
@@ -665,11 +816,42 @@ func removeRunningLines(pages [][]layoutLine, outs []*pdfPageOut) {
 			}
 		}
 	}
+	// 章节级页眉（如每页顶部的「评标方法和评标标准」）只在本章各页重复，达不到过半页面：
+	// 页面顶部 / 底部 15% 内、与相邻页同一位置文字相同的行同样视为页眉页脚。
+	type posKey struct {
+		text string
+		y    int
+	}
+	band := func(l layoutLine, out *pdfPageOut) bool {
+		return !l.ocr && l.height > 0 && (l.y > out.box[3]-l.height*0.15 || l.y < out.box[1]+l.height*0.15)
+	}
+	keys := make([]map[posKey]bool, len(pages))
+	for i, ls := range pages {
+		keys[i] = map[posKey]bool{}
+		for _, l := range ls {
+			if band(l, outs[i]) {
+				keys[i][posKey{reDigits.ReplaceAllString(l.text(), "#"), int(math.Round(l.y / 2))}] = true
+			}
+		}
+	}
+	repeatedNearby := func(i int, l layoutLine) bool {
+		if !band(l, outs[i]) {
+			return false
+		}
+		t := reDigits.ReplaceAllString(l.text(), "#")
+		y := int(math.Round(l.y / 2))
+		for _, j := range []int{i - 1, i + 1} {
+			if j >= 0 && j < len(keys) && (keys[j][posKey{t, y}] || keys[j][posKey{t, y - 1}] || keys[j][posKey{t, y + 1}]) {
+				return true
+			}
+		}
+		return false
+	}
 	for i, ls := range pages {
 		kept := ls[:0]
 		for _, l := range ls {
 			t := strings.TrimSpace(l.text())
-			if rePageMark.MatchString(t) {
+			if rePageMark.MatchString(t) || repeatedNearby(i, l) {
 				continue
 			}
 			if edge(l, outs[i]) && textPages >= 2 {
@@ -688,6 +870,7 @@ type pdfTable struct {
 	t    *Table
 	cols []float64
 	box  []BBox
+	top  float64 // 表格上沿（PDF 坐标），用于与版面行排序
 }
 
 type pdfItem struct {
@@ -695,11 +878,41 @@ type pdfItem struct {
 	table *pdfTable
 }
 
-// pdfBlocks 识别各页表格、合并跨页表格并输出切分器输入行。
-func pdfBlocks(pages [][]layoutLine) []Line {
+func (it pdfItem) top() float64 {
+	if it.table != nil {
+		return it.table.top
+	}
+	return it.line.y + it.line.size*0.85
+}
+
+// mergeRuled 按自上而下的位置把有框线表格插入文字推断出的版面项序列。
+func mergeRuled(items []pdfItem, ruled []*pdfTable) []pdfItem {
+	if len(ruled) == 0 {
+		return items
+	}
+	out := make([]pdfItem, 0, len(items)+len(ruled))
+	k := 0
+	for _, it := range items {
+		for k < len(ruled) && ruled[k].top >= it.top() {
+			out = append(out, pdfItem{table: ruled[k]})
+			k++
+		}
+		out = append(out, it)
+	}
+	for ; k < len(ruled); k++ {
+		out = append(out, pdfItem{table: ruled[k]})
+	}
+	return out
+}
+
+// pdfBlocks 识别各页表格（ruled 为各页有框线表格）、合并跨页表格并输出切分器输入行。
+func pdfBlocks(pages [][]layoutLine, ruled [][]*pdfTable) []Line {
 	items := make([][]pdfItem, len(pages))
 	for i, ls := range pages {
 		items[i] = detectTables(ls)
+		if i < len(ruled) {
+			items[i] = mergeRuled(items[i], ruled[i])
+		}
 	}
 	// 跨页续表：上一页正文以表格结束、下一页正文以列数一致的表格开始（页眉/页脚带文字不计）。
 	marginal := func(it pdfItem) bool { return it.line != nil && it.line.margin }
@@ -861,7 +1074,7 @@ func joinCell(a, b string) string {
 func buildPDFTable(lines []layoutLine, cols []float64, tol float64) *pdfTable {
 	n := len(cols)
 	var rows []pdfRow
-	pt := &pdfTable{cols: cols}
+	pt := &pdfTable{cols: cols, top: lines[0].y + lines[0].size*0.85}
 	boxes := map[int]*BBox{}
 	var order []int
 	for k, l := range lines {

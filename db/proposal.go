@@ -558,10 +558,12 @@ type OutlineInput struct {
 	Sections    []SectionInput `json:"sections"`
 }
 
+// OutlineCoverage 统计技术标范围内要求的映射情况；OutOfScope 为由报价文件响应的价格评分项（不要求映射）。
 type OutlineCoverage struct {
-	Total    int              `json:"total"`
-	Mapped   int              `json:"mapped"`
-	Unmapped []RequirementRef `json:"unmapped"`
+	Total      int              `json:"total"`
+	Mapped     int              `json:"mapped"`
+	Unmapped   []RequirementRef `json:"unmapped"`
+	OutOfScope int              `json:"out_of_scope"`
 }
 
 type RequirementRef struct {
@@ -618,7 +620,7 @@ func (d *DB) ListOutlines(ctx context.Context, tenant string, taskID int64) (*Ou
 
 func outlineCoverageTx(ctx context.Context, q queryer, tenant string, taskID, outlineID int64) (OutlineCoverage, error) {
 	cov := OutlineCoverage{Unmapped: []RequirementRef{}}
-	rows, err := q.QueryContext(ctx, `SELECT r.id, r.code, r.title, r.category, r.is_mandatory,
+	rows, err := q.QueryContext(ctx, `SELECT r.id, r.code, r.title, r.category, r.is_mandatory, r.score_group,
 		EXISTS (SELECT 1 FROM proposal_section_requirements m JOIN proposal_sections s ON s.tenant_id = m.tenant_id AND s.id = m.section_id
 		        WHERE m.tenant_id = r.tenant_id AND m.requirement_id = r.id AND s.outline_id = $3)
 		FROM requirement_items r WHERE r.tenant_id = $1 AND r.task_id = $2 ORDER BY r.code`, tenant, taskID, outlineID)
@@ -628,9 +630,14 @@ func outlineCoverageTx(ctx context.Context, q queryer, tenant string, taskID, ou
 	defer rows.Close()
 	for rows.Next() {
 		var ref RequirementRef
+		var group string
 		var mapped bool
-		if err := rows.Scan(&ref.ID, &ref.Code, &ref.Title, &ref.Category, &ref.IsMandatory, &mapped); err != nil {
+		if err := rows.Scan(&ref.ID, &ref.Code, &ref.Title, &ref.Category, &ref.IsMandatory, &group, &mapped); err != nil {
 			return cov, err
+		}
+		if !inTechnicalScope(ref.Category, group) && !mapped {
+			cov.OutOfScope++
+			continue
 		}
 		cov.Total++
 		if mapped {
@@ -949,12 +956,23 @@ func insertSectionsTx(ctx context.Context, tx *sql.Tx, tenant string, taskID int
 	return nil
 }
 
-// DefaultOutlineSections 按要求清单生成默认技术标目录：总体方案（其余章节的前置依赖）+ 逐评分项章节 +
-// ★实质性条款响应 + 其他必答项 + 格式与附件，所有要求均被映射。
+// DefaultOutlineSections 按要求清单生成默认技术标目录：总体方案（其余章节的前置依赖）+ 按招标评分表顺序逐个技术评分项成节 +
+// 商务评分项响应（资信与证明材料索引）+ ★实质性条款响应 + 其他必答项 + 格式与附件。价格评分项由报价文件响应，不进入技术标目录；
+// 其余要求均被映射。
 func DefaultOutlineSections(reqs []*RequirementItem) []SectionInput {
 	by := map[string][]*RequirementItem{}
+	var commercial []*RequirementItem
 	for _, r := range reqs {
-		by[r.Category] = append(by[r.Category], r)
+		switch {
+		case !r.InTechnicalScope():
+		case r.Category == ReqScoringItem && r.ScoreGroup == ScoreGroupCommercial:
+			commercial = append(commercial, r)
+		default:
+			by[r.Category] = append(by[r.Category], r)
+		}
+	}
+	byOrder := func(items []*RequirementItem) {
+		sort.SliceStable(items, func(i, j int) bool { return items[i].ID < items[j].ID }) // 提取顺序即招标评分表顺序
 	}
 	ids := func(items []*RequirementItem) []int64 {
 		out := make([]int64, 0, len(items))
@@ -969,14 +987,26 @@ func DefaultOutlineSections(reqs []*RequirementItem) []SectionInput {
 	if items := by[ReqScoringItem]; len(items) > 0 {
 		n++
 		chap := fmt.Sprint(n)
-		out = append(out, SectionInput{Code: chap, Title: "评分项逐项响应", Level: 1, DependsOn: []string{"1"},
-			WritingGuide: "本章为评分项索引，概述各评分点的响应策略。"})
-		sort.SliceStable(items, func(i, j int) bool { return items[i].ScoreWeight > items[j].ScoreWeight })
+		out = append(out, SectionInput{Code: chap, Title: "技术评分项逐项响应", Level: 1, DependsOn: []string{"1"},
+			WritingGuide: "本章为技术评分项索引，按招标评分表顺序概述各评分点的响应策略。"})
+		byOrder(items)
 		for i, r := range items {
 			out = append(out, SectionInput{Code: fmt.Sprintf("%s.%d", chap, i+1), Title: r.Title, Level: 2, TargetWords: 1500,
 				RequirementIDs: []int64{r.ID}, DependsOn: []string{"1"},
-				WritingGuide: fmt.Sprintf("逐条响应评分项 %s（分值 %.4g）；只陈述有核验证据支撑的能力，缺证据处写明缺口。", r.Code, r.ScoreWeight)})
+				WritingGuide: fmt.Sprintf("按评分标准逐点响应评分项 %s（分值 %.4g）；评分标准列出的每个要点都要有对应内容，"+
+					"只陈述有核验证据支撑的能力，缺证据处写明缺口。", r.Code, r.ScoreWeight)})
 		}
+	}
+	if len(commercial) > 0 {
+		n++
+		byOrder(commercial)
+		ids := make([]int64, 0, len(commercial))
+		for _, r := range commercial {
+			ids = append(ids, r.ID)
+		}
+		out = append(out, SectionInput{Code: fmt.Sprint(n), Title: "商务评分项响应（资信与证明材料）", Level: 1, RequirementIDs: ids,
+			DependsOn: []string{"1"}, TargetWords: 800,
+			WritingGuide: "逐条列明满足商务评分项的资质、业绩、人员与认证证明材料及其在投标文件中的位置，材料从企业资信库选取，不得编造。"})
 	}
 	for _, g := range []struct{ cat, title, guide string }{
 		{ReqMandatoryClause, "★ 实质性条款逐条响应", "逐条对应 ★/▲/废标条款给出明确响应与证明材料索引，不得遗漏或模糊表述。"},

@@ -1,0 +1,811 @@
+package db
+
+// 评分表结构化解析（纯规则，不访问数据库）：把招标原文中的评分办法表格还原为逐个评分因素。
+//   - 按表头识别列角色：序号 / 评分类别 / 评分因素 / 分值 / 评分标准 / 说明；两个“因素类”列时前一列为类别；
+//   - 评分类别（「技术部分（50%）」「商务部分（13分）」）纵向合并或跨页后留空时沿用上一行，并解析其声明分值；
+//   - 评分因素名取自因素列，因素列实为类别时取分值列标签（「基础服务20」「项目的认识（10分）」）或评分标准首行；
+//   - 同一因素的多行（纵向合并的因素单元格、跨页续行、同名分项）合并为一项，分项分值相加，同一分值单元格只计一次；
+//   - 按类别与因素名分为技术 / 商务 / 价格三组；履约考核表、资格 / 符合性审查表和只有类别合计的汇总表不产出评分项。
+// 规则对真实招标文件的召回 / 准确率未经人工标注评测，提取结果须人工复核；分值合计校验用于提示漏提或重复。
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+)
+
+// 评分项分组（requirement_items.score_group）。空串表示未分类（人工新增或非评分项）。
+const (
+	ScoreGroupTechnical  = "technical"
+	ScoreGroupCommercial = "commercial"
+	ScoreGroupPrice      = "price"
+)
+
+func validScoreGroup(g string) bool {
+	switch g {
+	case "", ScoreGroupTechnical, ScoreGroupCommercial, ScoreGroupPrice:
+		return true
+	}
+	return false
+}
+
+// InTechnicalScope 报告要求是否需要在技术标中作答：价格评分项由报价文件响应，不进入技术标大纲与响应覆盖。
+func (r *RequirementItem) InTechnicalScope() bool { return inTechnicalScope(r.Category, r.ScoreGroup) }
+
+func inTechnicalScope(category, scoreGroup string) bool {
+	return !(category == ReqScoringItem && scoreGroup == ScoreGroupPrice)
+}
+
+// scoreTable 是 document_chunks.tables_json 中一张表格的解析视图。
+type scoreTable struct {
+	Rows      int         `json:"rows"`
+	Cols      int         `json:"cols"`
+	PageStart int         `json:"page_start"`
+	Cells     []scoreCell `json:"cells"`
+	Grid      [][]string  `json:"grid"`
+	Markdown  string      `json:"markdown"`
+}
+
+type scoreCell struct {
+	Row     int    `json:"row"`
+	Col     int    `json:"col"`
+	RowSpan int    `json:"row_span"`
+	ColSpan int    `json:"col_span"`
+	Text    string `json:"text"`
+	Page    int    `json:"page"`
+}
+
+// origins 返回每个网格位置所属原始单元格下标（-1 表示无单元格）。
+func (t *scoreTable) origins() [][]int {
+	out := make([][]int, len(t.Grid))
+	for r := range out {
+		out[r] = make([]int, len(t.Grid[r]))
+		for c := range out[r] {
+			out[r][c] = -1
+		}
+	}
+	for i, c := range t.Cells {
+		for r := c.Row; r < c.Row+max(c.RowSpan, 1) && r < len(out); r++ {
+			for cc := c.Col; cc < c.Col+max(c.ColSpan, 1) && cc < len(out[r]); cc++ {
+				out[r][cc] = i
+			}
+		}
+	}
+	return out
+}
+
+// scoreSchema 是评分表的列角色（-1 表示不存在）；header 为表头行下标，-1 表示沿用前表表头的续表。
+type scoreSchema struct {
+	header                                    int
+	cols                                      int
+	seq, group, factor, score, criteria, note int
+}
+
+// ScoredItem 是从评分表解析出的一个评分因素。
+type ScoredItem struct {
+	Lot         string  `json:"lot,omitempty"`
+	Group       string  `json:"group,omitempty"`        // 评分类别原文（去掉声明分值），如「技术部分」
+	GroupWeight float64 `json:"group_weight,omitempty"` // 类别声明分值 / 权重（百分比按 100 分制折算）
+	ScoreGroup  string  `json:"score_group"`
+	Name        string  `json:"name"`
+	Score       float64 `json:"score"`
+	Criteria    string  `json:"criteria"`
+	Note        string  `json:"note,omitempty"`
+	Mandatory   bool    `json:"mandatory,omitempty"`
+	Rows        []int   `json:"rows"`
+	Page        int     `json:"page,omitempty"`
+}
+
+var (
+	reWS           = regexp.MustCompile(`\s+`)
+	reAssessTable  = regexp.MustCompile(`考核|扣分标准|加分标准`)
+	reReviewOnly   = regexp.MustCompile(`审查|资格|符合性`)
+	reRangeScore   = regexp.MustCompile(`^(\d+(?:\.\d+)?)分?[-—–~～至](\d+(?:\.\d+)?)分?$`)
+	reBareScore    = regexp.MustCompile(`^(\d+(?:\.\d+)?)分?(?:[（(][^）)]*[）)])?$`)
+	reParenScore   = regexp.MustCompile(`^(.*?)[（(](?:满分|最高|分值)?[:：]?(\d+(?:\.\d+)?)分[）)]$`)
+	reTailScore    = regexp.MustCompile(`^(.*?[^\d.\-（(])(\d+(?:\.\d+)?)分?$`)
+	reGroupWeight  = regexp.MustCompile(`[（(]?\s*(\d+(?:\.\d+)?)\s*(%|％|分)\s*[）)]?\s*$`)
+	reCritScore    = regexp.MustCompile(`(?:满分|最高得|最多得|最高|本项|分值)\s*[:：为]?\s*(\d+(?:\.\d+)?)\s*分|(\d+(?:\.\d+)?)\s*分为满分`)
+	reNumbering    = regexp.MustCompile(`^(?:\d{1,2}[.、．)）]\s*|[（(]\d{1,2}[)）]\s*|[一二三四五六七八九十]{1,3}[、.．]\s*)`)
+	reGroupLike    = regexp.MustCompile(`部分|[%％]|^(?:价格|报价|商务|技术|服务|资信|客观|主观)(?:分|评分)`)
+	reSummaryName  = regexp.MustCompile(`^(?:价格|报价|商务|技术|服务|资信|投标报价)(?:部分|分|评分)?$`)
+	reTotalRow     = regexp.MustCompile(`^(?:合计|总计|总分|小计)`)
+	rePriceGroup   = regexp.MustCompile(`价格|报价`)
+	reBizGroup     = regexp.MustCompile(`商务|资信|信誉`)
+	reTechGroup    = regexp.MustCompile(`技术|服务|方案|质量|实施`)
+	rePriceName    = regexp.MustCompile(`^(?:投标)?(?:报价|价格)|价格分|价格评审|评标价`)
+	reBizName      = regexp.MustCompile(`业绩|资质|证书|认证|体系|信誉|财务|社保|纳税|荣誉|著作权|知识产权|商务|企业实力|投标人实力|中小企业|类似项目|合同`)
+	reMandatoryMrk = regexp.MustCompile(`[★▲]`)
+	reDatePrefix   = regexp.MustCompile(`^(?:自|从)?\d{4}\s*年`)
+)
+
+func normCell(s string) string { return reWS.ReplaceAllString(strings.TrimSpace(s), "") }
+
+var (
+	reHdrCriteria = regexp.MustCompile(`评分标准|评审标准|评标标准|评分细则|评审细则|评分说明|评分办法|具体要求|评分要求|评审要求`)
+	reHdrFactor   = regexp.MustCompile(`因素|评审项|评分项|评审内容|评分内容|考评项|^项目$|^内容$`)
+	reHdrScore    = regexp.MustCompile(`分值|分数|满分|标准分|最高分|^得分$|^权重$|^权值$`)
+	reHdrGroup    = regexp.MustCompile(`类别|类型|部分`)
+	reHdrWeakCrit = regexp.MustCompile(`标准|细则|说明|要求|办法`)
+)
+
+// headerRole 判定表头单元格的列角色。「评分标准说明（…★代表实质性指标…）」这类长表头先按评分标准识别。
+func headerRole(h string) string {
+	h = normCell(h)
+	switch {
+	case h == "":
+		return ""
+	case strings.Contains(h, "序号"):
+		return "seq"
+	case strings.Contains(h, "备注") || strings.Contains(h, "证明材料") || strings.Contains(h, "佐证"):
+		return "note"
+	case reHdrCriteria.MatchString(h):
+		return "criteria"
+	case reHdrFactor.MatchString(h):
+		return "factor"
+	case reHdrScore.MatchString(h):
+		return "score"
+	case reHdrGroup.MatchString(h):
+		return "group"
+	case reHdrWeakCrit.MatchString(h):
+		return "criteria"
+	}
+	return ""
+}
+
+// detectScoreSchema 在前 4 行中查找评分表表头。履约考核表与无分值的审查表返回 ok=false。
+// 横向合并的表头（如两列都是「评审因素」）按两列处理：前一列为评分类别，后一列为评分因素。
+func detectScoreSchema(t *scoreTable) (scoreSchema, bool) {
+	for r := 0; r < len(t.Grid) && r < 4; r++ {
+		row := t.Grid[r]
+		joined := normCell(strings.Join(row, "|"))
+		if reAssessTable.MatchString(joined) {
+			return scoreSchema{}, false
+		}
+		s := scoreSchema{header: r, cols: len(row), seq: -1, group: -1, factor: -1, score: -1, criteria: -1, note: -1}
+		for c, h := range row {
+			switch headerRole(h) {
+			case "seq":
+				if s.seq < 0 {
+					s.seq = c
+				}
+			case "note":
+				if s.note < 0 {
+					s.note = c
+				}
+			case "factor":
+				switch {
+				case s.factor < 0:
+					s.factor = c
+				case s.group < 0 && s.factor < c:
+					s.group, s.factor = s.factor, c // 两个因素类列：前一列为评分类别
+				}
+			case "score":
+				if s.score < 0 {
+					s.score = c
+				}
+			case "group":
+				if s.group < 0 {
+					s.group = c
+				}
+			case "criteria":
+				if s.criteria < 0 {
+					s.criteria = c
+				} else if s.note < 0 {
+					s.note = c
+				}
+			}
+		}
+		if s.factor < 0 && s.criteria < 0 {
+			continue
+		}
+		if s.score < 0 && !strings.Contains(joined, "评分") && !strings.Contains(joined, "评审") && !strings.Contains(joined, "评标") {
+			continue
+		}
+		if s.score < 0 && reReviewOnly.MatchString(joined) {
+			return scoreSchema{}, false
+		}
+		return s, true
+	}
+	return scoreSchema{}, false
+}
+
+// parseScoreText 解析分值单元格，返回标签（如「基础服务」）与分值；无法解析时 ok=false。
+func parseScoreText(s string) (label string, score float64, ok bool) {
+	s = normCell(s)
+	if s == "" {
+		return "", 0, false
+	}
+	num := func(x string) float64 { v, _ := strconv.ParseFloat(x, 64); return v }
+	if m := reRangeScore.FindStringSubmatch(s); m != nil {
+		return "", math.Max(num(m[1]), num(m[2])), true
+	}
+	if m := reBareScore.FindStringSubmatch(s); m != nil {
+		return "", num(m[1]), true
+	}
+	if m := reParenScore.FindStringSubmatch(s); m != nil {
+		return strings.TrimSpace(m[1]), num(m[2]), true
+	}
+	if m := reTailScore.FindStringSubmatch(s); m != nil && utf8.RuneCountInString(m[1]) <= 20 {
+		return strings.TrimSpace(m[1]), num(m[2]), true
+	}
+	return "", 0, false
+}
+
+// splitGroup 把类别单元格拆为类别名与声明分值（「技术部分（50%）」→ 技术部分, 50）。
+func splitGroup(s string) (string, float64) {
+	s = normCell(s)
+	w := 0.0
+	if m := reGroupWeight.FindStringSubmatch(s); m != nil {
+		w, _ = strconv.ParseFloat(m[1], 64)
+		s = s[:len(s)-len(m[0])]
+	}
+	return strings.Trim(s, ":："), w
+}
+
+// nameFromCriteria 在没有因素名时取评分标准首行作名称（「1. 项目理解⏎投标人…」→ 项目理解）。
+func nameFromCriteria(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "\n"); i > 0 {
+		s = s[:i]
+	}
+	s = reNumbering.ReplaceAllString(normCell(s), "")
+	if i := strings.IndexAny(s, "：:，,。；;（("); i > 0 && utf8.RuneCountInString(s[:i]) >= 2 {
+		// 以时间范围开头的短前缀（「2023年1月1日以来」）不足以表达评分点，延伸到下一个标点
+		if reDatePrefix.MatchString(s[:i]) {
+			if j := strings.IndexAny(s[i+1:], "：:，,。；;（("); j > 0 {
+				i += 1 + j
+			} else {
+				i = len(s)
+			}
+		}
+		s = s[:i]
+	}
+	return firstLine(s, 30)
+}
+
+// cleanName 去掉编号、括注分值与尾部标点，过长时截取到首个标点。
+func cleanName(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\n"); i > 0 {
+		s = s[:i]
+	}
+	s = normCell(s)
+	s = reNumbering.ReplaceAllString(s, "")
+	if m := reParenScore.FindStringSubmatch(s); m != nil {
+		s = m[1]
+	}
+	s = strings.TrimRight(s, "：:，,。；;")
+	if utf8.RuneCountInString(s) > 30 {
+		if i := strings.IndexAny(s, "：:，,。；;（("); i > 0 && utf8.RuneCountInString(s[:i]) >= 2 {
+			s = s[:i]
+		}
+	}
+	return firstLine(s, 40)
+}
+
+// classifyScoreGroup 依据评分类别与因素名分为技术 / 商务 / 价格。类别同时含商务与技术（如「客观分（商务、技术及服务部分）」）
+// 或缺失时按因素名判断，仍无法判断的视为技术。
+func classifyScoreGroup(group, name string) string {
+	if rePriceGroup.MatchString(group) {
+		return ScoreGroupPrice
+	}
+	biz, tech := reBizGroup.MatchString(group), reTechGroup.MatchString(group)
+	switch {
+	case biz && !tech:
+		return ScoreGroupCommercial
+	case tech && !biz:
+		return ScoreGroupTechnical
+	}
+	switch {
+	case rePriceName.MatchString(name):
+		return ScoreGroupPrice
+	case reBizName.MatchString(name):
+		return ScoreGroupCommercial
+	}
+	return ScoreGroupTechnical
+}
+
+// scoreCarry 是紧邻的上一张评分表留给续表的上下文：列角色（供无表头续表沿用）与末行评分类别
+// （跨页拆成两张表时，下一张表开头的类别单元格为空）。
+type scoreCarry struct {
+	schema scoreSchema
+	group  string
+	weight float64
+}
+
+// parseScoringTable 解析一张评分表。prev 非空时表示本表紧跟上一张评分表，可沿用其列角色与末行评分类别；
+// 返回的 carry 供下一张表使用。summary 非空表示该表只是类别分值汇总（如「商务部分 30 / 技术部分 60 / 合计 100」），不产出评分项。
+func parseScoringTable(t *scoreTable, prev *scoreCarry) (items []*ScoredItem, carry *scoreCarry, summary map[string]float64) {
+	var s scoreSchema
+	if found, ok := detectScoreSchema(t); ok {
+		s = found
+	} else if prev != nil && prev.schema.cols == len(firstRow(t.Grid)) {
+		s = prev.schema
+		s.header = -1
+	} else {
+		return nil, nil, nil
+	}
+	org := t.origins()
+	cell := func(r, c int) string {
+		if c < 0 || c >= len(t.Grid[r]) {
+			return ""
+		}
+		return strings.TrimSpace(t.Grid[r][c])
+	}
+	origin := func(r, c int) int {
+		if c < 0 || c >= len(org[r]) {
+			return -1
+		}
+		return org[r][c]
+	}
+	page := func(r int) int {
+		for c := range org[r] {
+			if i := org[r][c]; i >= 0 && t.Cells[i].Row == r {
+				return t.Cells[i].Page
+			}
+		}
+		return 0
+	}
+	var (
+		cur           *ScoredItem
+		group         string
+		groupWeight   float64
+		curFactor     = -1
+		factorIsGroup bool // 因素列实际填的是评分类别（名称取自分值列标签或评分标准）
+	)
+	if prev != nil {
+		group, groupWeight = prev.group, prev.weight
+	}
+	var (
+		counted   = map[int]bool{} // 已计入分值的分值单元格
+		lastScore = map[*ScoredItem]string{}
+		lastPage  = 0
+	)
+	headerText := ""
+	if s.header >= 0 {
+		headerText = strings.Join(t.Grid[s.header], "\x1f")
+	}
+	appendText := func(dst *string, txt string) {
+		txt = strings.TrimSpace(txt)
+		if txt == "" || strings.Contains(*dst, txt) {
+			return
+		}
+		if *dst != "" {
+			*dst += "\n"
+		}
+		*dst += txt
+	}
+	for r := s.header + 1; r < len(t.Grid); r++ {
+		row := t.Grid[r]
+		if strings.Join(row, "\x1f") == headerText {
+			continue // 跨页重复表头
+		}
+		nonEmpty, first, same := 0, "", true
+		for _, c := range row {
+			if c = strings.TrimSpace(c); c != "" {
+				if nonEmpty == 0 {
+					first = c
+				} else if c != first {
+					same = false
+				}
+				nonEmpty++
+			}
+		}
+		if nonEmpty == 0 || reTotalRow.MatchString(normCell(first)) || (same && nonEmpty > 1 && len(row) > 2) {
+			continue // 空行、合计行、整行合并的标题 / 注释行
+		}
+		pg := page(r)
+		newPage := lastPage > 0 && pg > lastPage
+		lastPage = max(lastPage, pg)
+
+		if g := cell(r, s.group); g != "" {
+			group, groupWeight = splitGroup(g)
+		}
+		factorText, crit := cell(r, s.factor), cell(r, s.criteria)
+		rawFactorEmpty := factorText == ""
+		if factorText != "" && factorText == crit {
+			factorText = "" // 因素与评分标准横向合并为一个单元格：没有独立的因素名
+		}
+		if s.group < 0 && factorText != "" && reGroupLike.MatchString(normCell(factorText)) {
+			group, groupWeight = splitGroup(factorText) // 因素列实为评分类别
+			factorText, factorIsGroup = "", true
+		}
+		scoreText := cell(r, s.score)
+		label, score, hasScore := parseScoreText(scoreText)
+		if f := normCell(factorText); !hasScore && f != "" && (reParenScore.MatchString(f) || reBareScore.MatchString(f)) {
+			_, score, hasScore = parseScoreText(f) // 分值写在因素名中，如「项目实施团队（16分）」
+		}
+		if !hasScore && s.score < 0 {
+			if m := reCritScore.FindStringSubmatch(crit); m != nil {
+				v := m[1]
+				if v == "" {
+					v = m[2]
+				}
+				score, _ = strconv.ParseFloat(v, 64)
+				hasScore = score > 0
+			}
+		}
+		so := origin(r, s.score)
+		fresh := hasScore && (so < 0 || !counted[so]) // 本行带有尚未计分的分值单元格
+		fo := origin(r, s.factor)
+		name := cleanName(factorText)
+		if name == "" && label != "" {
+			name = cleanName(label)
+		}
+
+		cont := false // 本行是否属于上一评分项
+		switch {
+		case cur == nil:
+		case factorText != "" && fo >= 0 && fo == curFactor:
+			cont = true // 纵向合并的因素单元格：同一评分因素的下一分项
+		case factorText == "" && label == "" && !fresh:
+			cont = true // 因素与分值都为空的续行（跨页拆开的单元格或分项细则）
+		case rawFactorEmpty && s.factor >= 0 && !factorIsGroup && label == "" && group == cur.Group:
+			cont = true // 因素单元格留空、自带分值的分项（因素单元格跨页拆开后留空）
+		case newPage && factorText != "" && scoreText == "" && fo != curFactor && !(s.score < 0 && hasScore && name != ""):
+			// 新页首行：上一页末尾被拆开的因素单元格续写（如「安全保密管理措施和技」+「术方案」、「管理体系」+「（8分）」）
+			cont = true
+			if frag := cleanName(factorText); frag != "" && utf8.RuneCountInString(frag) <= 8 && !reGroupLike.MatchString(frag) {
+				cur.Name += frag
+			}
+			curFactor = fo
+		case name != "" && name == cur.Name && group == cur.Group:
+			cont = true // 同名分项：分值单元格相同且带标签（如两行「人员配置24」）时不重复计分
+			if label != "" && normCell(scoreText) == lastScore[cur] {
+				fresh = false
+			}
+		}
+		if !cont {
+			switch {
+			case name != "":
+			case rePriceGroup.MatchString(group):
+				name = group
+			default:
+				name = nameFromCriteria(crit)
+			}
+			if name == "" {
+				name = group
+			}
+			if name == "" {
+				continue
+			}
+			cur = &ScoredItem{Group: group, GroupWeight: groupWeight, Name: name, Page: pg}
+			items = append(items, cur)
+			curFactor = fo
+		}
+		cur.Rows = append(cur.Rows, r)
+		if fresh {
+			if so >= 0 {
+				counted[so] = true
+			}
+			cur.Score += score
+			lastScore[cur] = normCell(scoreText)
+		}
+		appendText(&cur.Criteria, crit)
+		appendText(&cur.Note, cell(r, s.note))
+		if reMandatoryMrk.MatchString(factorText + crit) {
+			cur.Mandatory = true
+		}
+	}
+	// 只含类别名的表是分值汇总表
+	allGroups := len(items) > 0
+	for _, it := range items {
+		if !reSummaryName.MatchString(it.Name) || it.Group != "" && it.Group != it.Name {
+			allGroups = false
+			break
+		}
+	}
+	if allGroups {
+		summary = map[string]float64{}
+		for _, it := range items {
+			summary[it.Name] += it.Score
+		}
+		return nil, &scoreCarry{schema: s}, summary
+	}
+	scored := 0
+	for _, it := range items {
+		it.ScoreGroup = classifyScoreGroup(it.Group, it.Name)
+		if it.Score > 0 {
+			scored++
+		}
+	}
+	if scored == 0 {
+		return nil, nil, nil
+	}
+	return items, &scoreCarry{schema: s, group: group, weight: groupWeight}, nil
+}
+
+func firstRow(g [][]string) []string {
+	if len(g) == 0 {
+		return nil
+	}
+	return g[0]
+}
+
+// ---------------------------------------------------------------------------
+// 分包标识
+// ---------------------------------------------------------------------------
+
+var (
+	reLotBefore = regexp.MustCompile(`(?:第\s*)?([A-Za-z]|\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:包|分包|子包|标段|标包)(?:[：:\s（(]|评|详|初|采|$)`)
+	reLotAfter  = regexp.MustCompile(`(?:包|分包|标段|标包)\s*([A-Za-z]|\d{1,2}|[一二三四五六七八九十]{1,3})(?:[^0-9A-Za-z]|$)`)
+)
+
+var cnDigits = map[rune]int{'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+
+func normalizeLot(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	if r, _ := utf8.DecodeRuneInString(s); cnDigits[r] > 0 {
+		n := 0
+		for _, ch := range s {
+			v := cnDigits[ch]
+			switch {
+			case v == 10 && n == 0:
+				n = 10
+			case v == 10:
+				n *= 10
+			default:
+				n += v
+			}
+		}
+		return strconv.Itoa(n)
+	}
+	return s
+}
+
+// lastLotMarker 返回文本中最后一个分包标识（规范化为「1」「A」等），没有时返回空串。
+func lastLotMarker(text string) string {
+	best, pos := "", -1
+	for _, re := range []*regexp.Regexp{reLotBefore, reLotAfter} {
+		for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
+			if m[0] > pos {
+				pos, best = m[0], text[m[2]:m[3]]
+			}
+		}
+	}
+	return normalizeLot(best)
+}
+
+// LotLabel 是分包标识的展示文字。
+func LotLabel(lot string) string {
+	if lot == "" {
+		return ""
+	}
+	return "包" + lot
+}
+
+// ---------------------------------------------------------------------------
+// 分值汇总与校验
+// ---------------------------------------------------------------------------
+
+// ScoringGroupSummary 是一个评分类别的声明分值与已提取分值。
+type ScoringGroupSummary struct {
+	Group      string  `json:"group"`
+	ScoreGroup string  `json:"score_group"`
+	Declared   float64 `json:"declared"`
+	Extracted  float64 `json:"extracted"`
+	Items      int     `json:"items"`
+}
+
+// ScoringSummary 汇总一个分包（无分包时 lot 为空）的评分项分值，用于提示漏提 / 重复。
+type ScoringSummary struct {
+	Lot        string                `json:"lot"`
+	Items      int                   `json:"items"`
+	Total      float64               `json:"total"`
+	Technical  float64               `json:"technical"`
+	Commercial float64               `json:"commercial"`
+	Price      float64               `json:"price"`
+	Other      float64               `json:"unclassified"`
+	Groups     []ScoringGroupSummary `json:"groups"`
+	Warnings   []string              `json:"warnings"`
+}
+
+func round1(v float64) float64 { return math.Round(v*10) / 10 }
+
+// summarizeScoring 按分包汇总评分类要求的分值，并与类别声明分值及 100 分制对照。
+func summarizeScoring(items []*RequirementItem) []ScoringSummary {
+	byLot := map[string]*ScoringSummary{}
+	groups := map[string]map[string]*ScoringGroupSummary{}
+	var lots []string
+	for _, r := range items {
+		if r.Category != ReqScoringItem {
+			continue
+		}
+		var loc struct {
+			Lot         string  `json:"lot"`
+			Group       string  `json:"group"`
+			GroupWeight float64 `json:"group_weight"`
+		}
+		_ = json.Unmarshal(r.SourceLoc, &loc)
+		s := byLot[loc.Lot]
+		if s == nil {
+			s = &ScoringSummary{Lot: loc.Lot, Groups: []ScoringGroupSummary{}, Warnings: []string{}}
+			byLot[loc.Lot], groups[loc.Lot] = s, map[string]*ScoringGroupSummary{}
+			lots = append(lots, loc.Lot)
+		}
+		s.Items++
+		s.Total += r.ScoreWeight
+		switch r.ScoreGroup {
+		case ScoreGroupTechnical:
+			s.Technical += r.ScoreWeight
+		case ScoreGroupCommercial:
+			s.Commercial += r.ScoreWeight
+		case ScoreGroupPrice:
+			s.Price += r.ScoreWeight
+		default:
+			s.Other += r.ScoreWeight
+		}
+		if loc.Group != "" {
+			g := groups[loc.Lot][loc.Group]
+			if g == nil {
+				g = &ScoringGroupSummary{Group: loc.Group, ScoreGroup: r.ScoreGroup}
+				groups[loc.Lot][loc.Group] = g
+			}
+			g.Declared = math.Max(g.Declared, loc.GroupWeight)
+			g.Extracted += r.ScoreWeight
+			g.Items++
+		}
+	}
+	sort.Strings(lots)
+	out := make([]ScoringSummary, 0, len(lots))
+	for _, lot := range lots {
+		s := byLot[lot]
+		names := make([]string, 0, len(groups[lot]))
+		for n := range groups[lot] {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		declared := 0.0
+		for _, n := range names {
+			g := *groups[lot][n]
+			g.Extracted = round1(g.Extracted)
+			s.Groups = append(s.Groups, g)
+			declared += g.Declared
+			if g.Declared > 0 && math.Abs(g.Declared-g.Extracted) > 0.05 {
+				s.Warnings = append(s.Warnings, fmt.Sprintf("%s「%s」声明 %.4g 分，已提取 %.4g 分（%d 项），请核对是否漏提、重复或分值有误",
+					LotLabel(lot), n, g.Declared, g.Extracted, g.Items))
+			}
+		}
+		s.Total, s.Technical, s.Commercial, s.Price, s.Other = round1(s.Total), round1(s.Technical), round1(s.Commercial), round1(s.Price), round1(s.Other)
+		if math.Abs(s.Total-100) > 0.05 {
+			s.Warnings = append(s.Warnings, fmt.Sprintf("%s评分项合计 %.4g 分，不是 100 分，请核对评分表是否完整提取", strings.TrimSpace(LotLabel(lot)+" "), s.Total))
+		}
+		out = append(out, *s)
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// 提取：按原文顺序遍历分块中的评分表
+// ---------------------------------------------------------------------------
+
+func chunkKey(cs *chunkSource) string { return fmt.Sprintf("D%d-%04d", cs.DocID, cs.Loc["seq"]) }
+
+// scoringCandidates 按文档原文顺序解析全部评分表，返回评分项候选、含评分表的分块与含评分表的文档。
+// 分包标识取表格之前最近出现的「包1 / A包 / 第一包 / 标段2」等标记；同一文档的评分项只有一个分包时不标分包。
+// 没有表头的表格紧跟在评分表之后（中间只有标题级短文本）且列数一致时，视为跨页 / 跨段续表沿用前表列角色。
+func scoringCandidates(order []*chunkSource) ([]reqCandidate, map[int64]bool, map[int64]bool) {
+	type parsed struct {
+		cs    *chunkSource
+		table int
+		items []*ScoredItem
+	}
+	var (
+		all      []parsed
+		chunks   = map[int64]bool{}
+		docs     = map[int64]bool{}
+		docLots  = map[int64]map[string]bool{}
+		declared = map[int64]map[string]map[string]float64{} // 文档 -> 分包 -> 类别 -> 汇总表声明分值
+		lastDoc  = int64(-1)
+		lot      string
+		carry    *scoreCarry
+	)
+	for _, cs := range order {
+		if cs.DocID != lastDoc {
+			lastDoc, lot, carry = cs.DocID, "", nil
+		}
+		if m := lastLotMarker(cs.SectionCode + " " + cs.SectionTitle); m != "" {
+			lot = m
+		}
+		var tables []scoreTable
+		if len(cs.Tables) <= 2 || json.Unmarshal(cs.Tables, &tables) != nil || len(tables) == 0 {
+			if m := lastLotMarker(cs.Content); m != "" {
+				lot = m
+			}
+			if utf8.RuneCountInString(cs.Content) > 80 {
+				carry = nil
+			}
+			continue
+		}
+		pos := 0
+		for ti := range tables {
+			t := &tables[ti]
+			if len(t.Grid) == 0 {
+				continue
+			}
+			if at := strings.Index(cs.Content[pos:], t.Markdown); t.Markdown != "" && at >= 0 {
+				between := cs.Content[pos : pos+at]
+				if m := lastLotMarker(between); m != "" {
+					lot = m
+				}
+				if utf8.RuneCountInString(strings.TrimSpace(between)) > 40 {
+					carry = nil
+				}
+				pos += at + len(t.Markdown)
+			}
+			items, next, summary := parseScoringTable(t, carry)
+			carry = next
+			if summary != nil {
+				if declared[cs.DocID] == nil {
+					declared[cs.DocID] = map[string]map[string]float64{}
+				}
+				declared[cs.DocID][lot] = summary
+				continue
+			}
+			if len(items) == 0 {
+				continue
+			}
+			for _, it := range items {
+				it.Lot = lot
+			}
+			all = append(all, parsed{cs: cs, table: ti, items: items})
+			chunks[cs.ChunkID], docs[cs.DocID] = true, true
+			if docLots[cs.DocID] == nil {
+				docLots[cs.DocID] = map[string]bool{}
+			}
+			docLots[cs.DocID][lot] = true
+		}
+		if m := lastLotMarker(cs.Content[pos:]); m != "" {
+			lot = m
+		}
+	}
+	var out []reqCandidate
+	for _, p := range all {
+		docKey := chunkKey(p.cs)
+		for k, it := range p.items {
+			if len(docLots[p.cs.DocID]) <= 1 {
+				it.Lot = ""
+			}
+			if it.GroupWeight == 0 {
+				it.GroupWeight = declared[p.cs.DocID][it.Lot][it.Group]
+			}
+			title := it.Name
+			if it.Lot != "" {
+				title = "【" + LotLabel(it.Lot) + "】" + title
+			}
+			var desc strings.Builder
+			if it.Group != "" {
+				fmt.Fprintf(&desc, "评分类别：%s", it.Group)
+				if it.GroupWeight > 0 {
+					fmt.Fprintf(&desc, "（%.4g 分）", it.GroupWeight)
+				}
+				desc.WriteString("\n")
+			}
+			fmt.Fprintf(&desc, "分值：%.4g 分\n", it.Score)
+			if it.Criteria != "" {
+				desc.WriteString("评分标准：" + it.Criteria + "\n")
+			}
+			if it.Note != "" {
+				desc.WriteString("说明：" + it.Note + "\n")
+			}
+			loc := cloneLoc(p.cs.Loc, "table", p.table, "row", it.Rows[0], "rows", it.Rows, "lot", it.Lot, "group", it.Group,
+				"group_weight", it.GroupWeight)
+			if it.Page > 0 {
+				loc["item_page"] = it.Page
+			}
+			out = append(out, reqCandidate{code: fmt.Sprintf("SC-%s-T%d-%02d", docKey, p.table+1, k+1), category: ReqScoringItem,
+				title: firstLine(title, 60), description: strings.TrimSpace(desc.String()), mandatory: it.Mandatory, score: it.Score,
+				scoreGroup: it.ScoreGroup, tableItem: true, src: p.cs, loc: loc})
+		}
+	}
+	return out, chunks, docs
+}

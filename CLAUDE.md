@@ -21,6 +21,7 @@
   - [x] **Phase 6B**（2026-10-28 工程验收，Phase 6 整体 `[x]`）：标书图表与锁定版本 DOCX/PDF 套版导出（缺口 #7、#8）。`db/schema.sql` 新增 `proposal_charts`（绑定 `section_rev_id` + `rev_no`，查询时判定过期）、`export_templates`、`export_jobs`（`rev_snapshot` / 图表 / 偏离表 / 文档骨架快照不可修改，`lease_token` 围栏令牌）；`db/charts.go`、`db/exports.go`（`CreateExportJobs` 在同一 REPEATABLE READ 事务内加锁 + `exportReadinessTx` + 固化快照，未就绪返回 `*ExportBlockedError` → 422）；`export/`（结构化规格 → Mermaid / 设备表 JSON、mmdc 渲染、自研 WordprocessingML 套版、LibreOffice UNO 刷新目录并转 PDF、`Runner` 异步执行与回收重试、`CheckPDF` / `CheckDOCX` 回读自检）；`bidtools/charts.go`（`chart_generate`，经 `proposal-writing` 解锁）；`server/export.go`；前端「⑥ 导出成稿」与章节图表卡片；`db/dbtest` 构造可导出标书供跨包集成测试。
   - **Phase 6B 的完成边界**：本机 LibreOffice 26 上目录页码与 PDF 版式经回读验证；mermaid-cli 未安装、未验证（图表以源码占位导出，版式测试用测试替身 PNG）；模板占位符须在同一 `w:t` 内、标题为字面编号；真实招标 / 企业投标模板未逐份适配。
 - **增强工程与待验收阶段（详见 [`ROADMAP.md`](./ROADMAP.md) 第四节）**：
+  - **深化阶段 D0 ~ D5（2026-10-29 起的关键路径）**：D0 原始素材与评测协议 → D1 招标包效力 / 否决项 / 得分点 → D2 证据可采性与承诺台账 → D3 故事板与句子级落证 → D4 评分索引 / 全文件一致性 / 防雷同 → D5 回测与试点。状态分 E（工程实现）/ V（外部验证）/ P（生产启用）三级，上述 Phase 1 ~ 6B 的 `[x]` 均只到 E；合成样本、替身模型与自测不能支撑 V / P。旧版路线图（含 Phase 3 ~ 6B 交付记录）存档于 [`docs/archive/ROADMAP-2026-10-28.md`](./docs/archive/ROADMAP-2026-10-28.md)。
   - **Phase 4.1**：真实业务评测集、可复现基线与冻结的质量/性能/成本门槛。
   - **Phase 4.2**：共享混合检索服务、语义 embedding、RRF、reranker、版本化索引与降级；按部署条件和实测选择 pgvector/HNSW。
   - **Phase 4.3**：结构化证据、原文/型号/版本/数值核验、证据失效传播与单 Agent 有界补查。
@@ -70,7 +71,7 @@
 
 ## 4. 检索增强实施约束（Phase 4.1 ~ 4.4）
 
-1. **先评测，再增强，再决定协作范围**：依次落实业务基线、语义混合检索、证据核验/单 Agent 补查、多 Agent 对比。默认复用现有 PostgreSQL 和 Planner/Worker；不要为每个检索步骤创建一个 Agent，也不要把现有双图当成 GraphRAG 索引。详细交付、证据来源、消融组与验收清单以 `ROADMAP.md` 为准。
+1. **先评测，再增强，再决定协作范围**：依次落实业务基线、语义混合检索、证据核验/单 Agent 补查、多 Agent 对比。默认复用现有 PostgreSQL 和 Planner/Worker；不要为每个检索步骤创建一个 Agent，也不要把现有双图当成 GraphRAG 索引。详细交付、证据来源、消融组与验收清单以 `ROADMAP.md` 第四节及其引用的 [`docs/archive/ROADMAP-2026-10-28.md`](./docs/archive/ROADMAP-2026-10-28.md) 为准；业务评测样本取自 D0 语料。
 2. **模型与索引一致性**：通过既有 `Embedder` 接口接入服务，记录模型修订、维度、预处理和索引版本。新旧索引并存，重建校验后切换，允许回滚；不得只修改 `DefaultEmbedder()` 使旧数据静默退出召回。缓存/并发去重包含租户、权限、过滤条件与索引/策略版本，来源或权限变化须失效。Phase 7 前默认租户仍由服务端固定。
 3. **检索相关性与业务正确性分开**：RRF/reranker 用于候选排序；原文引用、产品型号/版本/有效期、单位/阈值与适用条件必须另行核验。LLM 派生上下文与原文分离，历史承诺不等于当前能力。模型故障返回带原因的降级状态；缺失、冲突和不可可靠解析的证据不得判满足。
 4. **完整性依赖全量要求**：Phase 5 从文档遍历及复核形成完整要求清单，检索只为每条要求找证据；不能用 Top-K 代替清单。4.3 先使用查询 ID 和版本化原文定位，5/6 再绑定要求、章节修订及响应矩阵；来源失效须传播为 `stale` 并参与导出门禁。

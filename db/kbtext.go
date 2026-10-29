@@ -145,6 +145,19 @@ type Embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float64, error)
 }
 
+// QueryEmbedder 由非对称模型实现：检索查询与被检索文档使用不同编码（如百炼 text_type=query/document），二者仍在同一向量空间。
+type QueryEmbedder interface {
+	EmbedQuery(ctx context.Context, texts []string) ([][]float64, error)
+}
+
+// EmbedQuery 为检索查询生成向量：模型提供查询编码时使用它，否则与文档编码相同。
+func EmbedQuery(ctx context.Context, e Embedder, texts []string) ([][]float64, error) {
+	if q, ok := e.(QueryEmbedder); ok {
+		return q.EmbedQuery(ctx, texts)
+	}
+	return e.Embed(ctx, texts)
+}
+
 // HashEmbedder 是无需外部服务的本地词袋哈希向量（hashing trick）：CJK 取双字、拉丁取词，
 // 按 FNV 哈希映射到 Dim 维并带符号累加（1+log 词频），再做 L2 归一化。
 // 它能在关键词不完全一致时（如“视频监控平台”与“监控视频平台”）提供部分重叠相似度，作为全文检索的补充召回。

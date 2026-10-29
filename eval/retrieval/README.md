@@ -1,13 +1,13 @@
 # Phase 4.1～4.4 实施与验证记录
 
-2026-10-28。工程能力已落地；**真实业务验收未完成，生产多 Agent 默认关闭**。用户确认尚无真实人工标注语料、embedding 或 reranker 服务。合成回归不能替代业务验收。
+2026-10-28。工程能力已落地；**真实业务验收未完成，生产多 Agent 默认关闭**。2026-10-29 起接入阿里云百炼托管的 `qwen3.7-text-embedding-flash` 与 `qwen3.7-text-rerank`（开发用临时授权，各 1M token 额度，2026-11-29 到期）；仍没有真实人工标注语料。合成回归不能替代业务验收。
 
 ## 已实现
 
 | 阶段 | 交付 | 未满足的业务条件 |
 | --- | --- | --- |
 | 4.1 | 数据集校验、家族隔离、等价证据分组、A/B/C/D/E 执行器、分层召回与排序指标、延迟、人工复核指标接口 | 至少 200 条真实人工标注题、独立复核、冻结部署规模/并发/质量/成本预算 |
-| 4.2 | 共享 PostgreSQL 词法/精确向量检索、RRF、HTTP embedding/reranker、索引构建/切换/回滚、缓存与降级 | 真实模型部署、B/C 对 A 的业务评测、领域同义词实验、目标负载测试 |
+| 4.2 | 共享 PostgreSQL 词法/精确向量检索、RRF、HTTP embedding/reranker（含百炼原生格式）、索引构建/切换/回滚、缓存与降级 | B/C 对 A 的业务评测（目前只有合成回归）、领域同义词实验、目标负载测试 |
 | 4.3 | 持久化证据、原文快照、来源失效、限定范围的数值核验、单 Worker 最多两轮补查、API 和页面回溯、长表格分页 | 复杂语义人工复核、D/C 的业务质量与成本对比 |
 | 4.4 | Planner/Worker 模型复用、独立调用上下文、最多 3 个证据 Worker、共享预算、持久化租约和幂等恢复、终态门禁、取消 | E/D 复杂问题集多次实验；有稳定收益前不开启 |
 
@@ -25,6 +25,8 @@ go run ./cmd/retrieval-eval -seed -groups A,B,C,D,E -repeat 3 \
 数据集 `synthetic.json` 共 32 题、8 个文档家族、16 个分块。7 个家族的 28 题为保留集，剩余 4 题为调参集；每次执行默认只跑保留集。**这是极小的合成工程回归集，型号过滤常将候选缩减至两个分块，因此 Recall@20 很容易达到 1，不构成语义质量证据。**
 
 已归档结果：[`reports/synthetic-local.json`](reports/synthetic-local.json)。未配置模型时 B 明确 skipped；D/E 未配置 `-profile-id` 时明确 skipped；C 记录 `semantic_model_unconfigured` / `reranker_unconfigured`，实质是词法降级路径。A 与 C 的耗时口径不同：C 包含运行和证据持久化。C 的排序指标未优于 A，不能据此声称方案已提升业务质量。不能以检索返回零条来自动推导无答案识别得分。
+
+2026-10-29 接入百炼后的同一合成集结果：[`reports/synthetic-dashscope.json`](reports/synthetic-dashscope.json)（`-groups A,B,C -repeat 1`；嵌入与重排结果确定，不需要重复）。保留集 28 题中 A / B / C 的 Recall@20 均为 1，nDCG@10 分别为 0.947 / 0.947 / 0.965；C 的 28 题都以 3 次调用（词法、嵌入、重排）完成，没有降级。单机顺序执行，P95 为 2 ms / 1.8 s / 2.4 s，主要是到百炼的网络往返。整次运行服务端报告的用量为嵌入 2360 token、重排 2732 token。和 2026-10-28 的结论一样，这个合成集太小，Recall@20 必然饱和，结果只证明语义通道和重排真实跑通，不证明质量提升。
 
 真实语料可使用相同清单结构，标明权限依据、不可变快照及 `synthetic:false`；证据 ID 为 `document.key:seq`，使用既有隔离租户时为 `doc_id:seq`。语料有 `documents` 时校验 gold 的家族归属。已有租户通过 `-tenant <非default租户>` 执行；不使用 `-seed` 时不清理其数据。报告记录实际分块指纹集合哈希，便于比较是否使用了同一语料快照。
 
@@ -51,7 +53,29 @@ export AUTOBID_RERANKER_FORMAT=tei
 # AUTOBID_RETRIEVAL_MULTI_AGENT 默认为 false，业务对比通过后才设为 true
 ```
 
-`tei` 请求格式依据 [Hugging Face TEI 官方文档](https://huggingface.co/docs/text-embeddings-inference/quick_tour)。也支持 `compatible`：embedding 的 `data[{index,embedding}]`、rerank 的 `results[{index,relevance_score}]`。服务必须提供对应契约，不能把任意模型的生成接口当作 rerank。模型名称和 revision 为配置声明，部署方须固定实际权重修订；接口不验证服务器权重文件。响应校验数量、索引、维度、有限数及非零向量；HTTP 默认 20 秒、无自动重试/重定向。
+`tei` 请求格式依据 [Hugging Face TEI 官方文档](https://huggingface.co/docs/text-embeddings-inference/quick_tour)。也支持 `compatible`：embedding 的 `data[{index,embedding}]`、rerank 的 `results[{index,relevance_score}]`。第三种是 `dashscope`（阿里云百炼原生接口）：请求为 `input` / `parameters`，响应为 `output.embeddings[{text_index,embedding}]` 和 `output.results[{index,relevance_score}]`。服务必须提供对应契约，不能把任意模型的生成接口当作 rerank。
+
+当前使用的百炼配置如下。密钥只放在被 Git 忽略的 `.env.local.bat` 或进程环境里，不写进仓库：
+
+```bash
+export AUTOBID_EMBEDDING_URL=https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+export AUTOBID_EMBEDDING_MODEL=qwen3.7-text-embedding-flash
+export AUTOBID_EMBEDDING_REVISION=bailian-2026-10-29
+export AUTOBID_EMBEDDING_DIMENSION=1024        # 该模型可选 1024 / 768 / 512 / 256
+export AUTOBID_EMBEDDING_FORMAT=dashscope
+export AUTOBID_EMBEDDING_MAX_BATCH=20          # 每次请求的文本数；dashscope 未设置时按 10
+export AUTOBID_RERANKER_URL=https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+export AUTOBID_RERANKER_MODEL=qwen3.7-text-rerank
+export AUTOBID_RERANKER_REVISION=bailian-2026-10-29
+export AUTOBID_RERANKER_FORMAT=dashscope
+# AUTOBID_EMBEDDING_API_KEY / AUTOBID_RERANKER_API_KEY 注入百炼 API Key
+```
+
+- **托管模型的修订号**：云端模型的权重修订无法固定，`REVISION` 填的是配置日期。怀疑服务端更新了模型时，修改 `REVISION` 并重建索引；旧索引会因模型标识不同而不再参与检索。
+- **查询与文档分开编码**：该嵌入模型是非对称的，同一句话按 `query` 和 `document` 编码的余弦相似度约为 0.80。建索引时用 `text_type=document`，检索查询用 `text_type=query`（`db.QueryEmbedder`），二者仍在同一向量空间。
+- **接口限制**：实测每批 21 条可用、30 条报错（提示上限 25），文档写 20，所以按 20 拆批；重排每次 1 ~ 500 篇，不会发送空请求。错误只返回 HTTP 状态和百炼的错误码（如 `model HTTP 400 (InvalidParameter)`），不返回错误正文。
+- **用量**：响应中的 `usage.total_tokens` 会累计到 `HTTPModel.TokensUsed()`，评测报告的 `provider_reported_tokens` 记录整次运行的用量。按实测，中文大约每字 1 个 token，嵌入每条另有约 14 token 的固定开销；重排按查询与全部候选的总长度计费。真实分块下，单次搜索的重排输入受 64000 字节的预留上限约束，约 2 万 token，所以 1M 额度大约够 50 次满额重排。
+- **本机网络**：Windows 自带的 `curl`（schannel）连接 dashscope 时证书吊销检查会失败，需要加 `--ssl-no-revoke`；Go 客户端不受影响。模型名称和 revision 为配置声明，部署方须固定实际权重修订；接口不验证服务器权重文件。响应校验数量、索引、维度、有限数及非零向量；HTTP 默认 20 秒、无自动重试/重定向。
 
 1. 配好模型，启动服务器，知识库页面 →「语义索引」→ 按模型实际维度构建。
 2. 检查 `ready` 后激活。构建与激活分开；文档 epoch、模型、维度、预处理和 embedding 覆盖率须一致。
@@ -62,8 +86,8 @@ export AUTOBID_RERANKER_FORMAT=tei
 
 ## 运行、预算与核验边界
 
-- 搜索每路召回 50，RRF 常数 60，融合最多 100 条重排；搜索最多返回 50 条，捕获前 12 条证据。评测 Top-20 排名与最终证据集合明确分开。表格偏好只作通道内同分排序，不覆盖相关性。
-- 搜索预算 4 次调用、64000 预留 token、45 秒；research 预算如上。调用包括逻辑源检索、embedding、rerank、规划/补查模型。模型调用按 UTF-8 输入字节的保守 token 上界预留，reasoner 另预留 2048 输出及 framing；失败不退额度。已知 reasoner 用量写入 `actual_tokens`，embedding/rerank 实际账单尚不统一采集。
+- 搜索每路召回 50，RRF 常数 60，融合最多 100 条重排；搜索最多返回 50 条，捕获前 12 条证据。在有预算的运行中，只重排融合排名靠前、且能放进剩余预留额度的那部分候选，其余候选保持 RRF 顺序，并标记 `rerank_truncated`；连一条都放不下时才是 `reranker_failed`（策略版本 `hybrid-rrf-v2`）。原因是真实招标分块平均约 600 字节、p90 约 1400 字节，100 条候选约 8 万字节，超过单次搜索 64000 的预留上限。按 v1 的做法，真实数据上重排会被整体跳过。评测 Top-20 排名与最终证据集合明确分开。表格偏好只作通道内同分排序，不覆盖相关性。
+- 搜索预算 4 次调用、64000 预留 token、45 秒；research 预算如上。调用包括逻辑源检索、embedding、rerank、规划/补查模型。模型调用按 UTF-8 输入字节的保守 token 上界预留，reasoner 另预留 2048 输出及 framing；失败不退额度。已知 reasoner 用量写入 `actual_tokens`；embedding/rerank 的服务端用量只在进程内累计（`TokensUsed()`），尚未写入运行记录。
 - 单次预算内的查询由 singleflight 去重；跨运行仅共享不可变成功缓存，避免把一个运行的付费调用归到另一个预算。缓存键包含租户、过滤器、索引 epoch、模型和策略，TTL 1 分钟，上限 128 条；返回深拷贝，降级结果不缓存。调用取消会传递至模型 HTTP。
 - research 子任务租约 20 秒并续租，最多 2 次领取；崩溃后重发同一 `request_key` 和原请求恢复。已完成子任务不重跑；最多再尝试一次丢失响应的外部调用，费用已预留且不退款，不能保证第三方请求恰好一次。需要重发请求才接管，没有后台轮询自动重启模型调用。原截止时间不延长。
 - 来源分域存储。知识库强制 tenant 过滤；招标按 task 过滤；Phase 7 前资信/招标仅允许 default 租户。HTTP 固定 default，当前仍是单团队 Bearer Token 鉴权，不代表已实现 RBAC。

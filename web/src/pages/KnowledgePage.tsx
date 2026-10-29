@@ -332,7 +332,7 @@ function SearchTab() {
         </div>
         <div className="mt-2"><ErrorBanner error={error} /></div>
       </Card>
-      {result && <Card><p className="text-sm">检索记录 #{result.run_id} · {result.cached ? '缓存命中' : '新检索'}</p>{result.degraded.length > 0 && <p className="mt-1 text-sm text-amber-700">降级：{result.degraded.map(reason => ({ semantic_model_unconfigured: '语义模型未配置', semantic_index_missing_or_stale: '语义索引缺失或过期', semantic_channel_failed: '语义检索失败或超预算', reranker_unconfigured: '重排模型未配置', reranker_failed: '重排失败或超预算' }[reason] ?? reason)).join('；')}</p>}</Card>}
+      {result && <Card><p className="text-sm">检索记录 #{result.run_id} · {result.cached ? '缓存命中' : '新检索'}</p>{result.degraded.length > 0 && <p className="mt-1 text-sm text-amber-700">降级：{result.degraded.map(reason => ({ semantic_model_unconfigured: '语义模型未配置', semantic_index_missing_or_stale: '语义索引缺失或过期', semantic_channel_failed: '语义检索失败或超预算', reranker_unconfigured: '重排模型未配置', reranker_failed: '重排失败或超预算', rerank_truncated: '预算内只重排了排名靠前的候选' }[reason] ?? reason)).join('；')}</p>}</Card>}
       {result && <RetrievalEvidence key={result.run_id} runID={result.run_id} />}
       {hits && (hits.length === 0 ? <Card><Empty>没有命中，尝试更少或更宽泛的关键词</Empty></Card> : (
         <div className="space-y-2">

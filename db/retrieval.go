@@ -239,6 +239,16 @@ func (d *DB) ReserveRetrieval(ctx context.Context, tenant string, id int64, call
 	}
 	return nil
 }
+
+// RetrievalTokensLeft 返回运行尚未预留的 token 额度；运行已结束或超时时为 0。
+func (d *DB) RetrievalTokensLeft(ctx context.Context, tenant string, id int64) (int, error) {
+	var left int
+	err := d.QueryRowContext(ctx, `SELECT GREATEST(max_tokens-reserved_tokens,0) FROM retrieval_runs WHERE tenant_id=$1 AND id=$2 AND status='running' AND deadline>now()`, tenantOr(tenant), id).Scan(&left)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return left, err
+}
 func (d *DB) RecordRetrievalUsage(ctx context.Context, tenant string, id int64, tokens int) error {
 	_, err := d.ExecContext(ctx, `UPDATE retrieval_runs SET actual_tokens=actual_tokens+$3 WHERE tenant_id=$1 AND id=$2`, tenantOr(tenant), id, max(tokens, 0))
 	return err

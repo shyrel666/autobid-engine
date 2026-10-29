@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-const Strategy = "hybrid-rrf-v1"
+const Strategy = "hybrid-rrf-v2" // v2: query-side encoding for asymmetric models; budget-bounded rerank head
 const Preprocessing = "title-path-metadata-body-v2"
 
 type Service struct {
@@ -323,7 +323,7 @@ func (s *Service) retrieve(ctx context.Context, q db.KnowledgeQuery, epoch int64
 		var v [][]float64
 		e := s.reserve(ctx, 1, len(text)+256)
 		if e == nil {
-			v, e = s.Embedder.Embed(ctx, []string{text})
+			v, e = db.EmbedQuery(ctx, s.Embedder, []string{text})
 		}
 		if e == nil {
 			e = db.ValidateVectors(v, 1, idx.Dimension)
@@ -345,31 +345,49 @@ func (s *Service) retrieve(ctx context.Context, q db.KnowledgeQuery, epoch int64
 	} else if len(hits) > 0 {
 		start = time.Now()
 		texts := make([]string, len(hits))
+		query := q.Text + " " + strings.Join(q.MustTerms, " ")
+		bound, n := 256, len(hits)
+		cost := make([]int, len(hits))
 		for i, h := range hits {
 			texts[i] = h.Citation.DocTitle + " " + h.Chunk.SectionPath + " " + string(h.Metadata) + " " + h.Chunk.Content
+			cost[i] = len(texts[i]) + len(query) + 32
 		}
-		query := q.Text + " " + strings.Join(q.MustTerms, " ")
-		bound := 256
-		for _, text := range texts {
-			bound += len(text) + len(query) + 32
+		// Within a budgeted run rerank the fused head that fits the remaining reservation; the tail keeps RRF order.
+		if left, ok := s.tokensLeft(ctx); ok {
+			n = 0
+			for n < len(hits) && bound+cost[n] <= left {
+				bound += cost[n]
+				n++
+			}
+		} else {
+			for _, c := range cost {
+				bound += c
+			}
 		}
 		var scores []float64
-		e := s.reserve(ctx, 1, bound)
+		var e error = db.ErrRetrievalBudget
+		if n > 0 {
+			e = s.reserve(ctx, 1, bound)
+		}
 		if e == nil {
-			scores, e = s.Reranker.Rank(ctx, query, texts)
+			scores, e = s.Reranker.Rank(ctx, query, texts[:n])
 		}
 		for _, score := range scores {
 			if math.IsNaN(score) || math.IsInf(score, 0) {
 				e = fmt.Errorf("invalid score")
 			}
 		}
-		if e != nil || len(scores) != len(hits) {
+		if e != nil || len(scores) != n {
 			r.Degraded = append(r.Degraded, "reranker_failed")
 		} else {
-			for i := range hits {
-				hits[i].Score = scores[i]
+			head := hits[:n]
+			for i := range head {
+				head[i].Score = scores[i]
 			}
-			sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+			sort.SliceStable(head, func(i, j int) bool { return head[i].Score > head[j].Score })
+			if n < len(hits) {
+				r.Degraded = append(r.Degraded, "rerank_truncated")
+			}
 		}
 		r.Timings["rerank"] = time.Since(start).Milliseconds()
 	}

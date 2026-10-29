@@ -299,6 +299,15 @@ func run() error {
 	report := map[string]any{"dataset": data.Version, "dataset_sha256": db.ContentHash(string(raw)), "snapshot": data.Snapshot, "synthetic": data.Synthetic, "split": *split, "created_at": time.Now().UTC(), "embedding": model, "reranker": reranker, "strategy": retrieval.Strategy, "repeat": *repeat, "groups": reports, "business_acceptance": false, "unmeasured": []string{"human citation support", "unanswerable classification", "complete correct task rate", "cost per correct task", "mandatory false positives"}, "note": "D/E evidence union is ordered by first capture, not a comparable reranked list. Inspect human adjudications before enabling any route; synthetic fixtures are regression data only."}
 	report["runtime"] = map[string]any{"go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH, "logical_cpus": runtime.NumCPU(), "concurrency": 1, "pgvector_available": vectorAvailable, "vector_path": "exact PostgreSQL float8 cosine", "chunks": len(snapshotParts), "actual_corpus_hash": db.ContentHash(strings.Join(snapshotParts, "\n")), "preprocessing": retrieval.Preprocessing}
 	report["index_ids"] = map[string]int64{"B": baselineIndexID, "C": indexID}
+	// Provider-reported usage (response usage.total_tokens) for this run, index builds included; null when the provider reports none.
+	used := map[string]any{"embedding": nil, "reranker": nil}
+	if m, ok := emb.(*retrieval.HTTPModel); ok && m.TokensUsed() > 0 {
+		used["embedding"] = m.TokensUsed()
+	}
+	if m, ok := rank.(*retrieval.HTTPModel); ok && m.TokensUsed() > 0 {
+		used["reranker"] = m.TokensUsed()
+	}
+	report["provider_reported_tokens"] = used
 	output, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err

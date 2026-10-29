@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/autobid/autobid-engine/db"
@@ -28,11 +30,19 @@ type HTTPModel struct {
 	Revision  string
 	APIKey    string
 	Dimension int
-	Format    string // tei or compatible (embeddings: indexed data; rerank: results)
+	Format    string // tei, compatible (embeddings: indexed data; rerank: results) or dashscope (Bailian native output envelope)
+	MaxBatch  int    // texts per embedding request; 0 sends each batch whole
 	Client    *http.Client
+	used      atomic.Int64
 }
 
+// errorCode accepts only machine-readable provider codes such as DashScope's "InvalidParameter"; messages are never surfaced.
+var errorCode = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
 func (m *HTTPModel) Model() string { return m.Name + "@" + m.Revision }
+
+// TokensUsed is the provider-reported token total (response usage.total_tokens) since start; TEI reports none.
+func (m *HTTPModel) TokensUsed() int64 { return m.used.Load() }
 func (m *HTTPModel) post(ctx context.Context, body any, out any) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -56,6 +66,12 @@ func (m *HTTPModel) post(ctx context.Context, body any, out any) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
+		var e struct {
+			Code string `json:"code"`
+		}
+		if m.Format == "dashscope" && json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&e) == nil && errorCode.MatchString(e.Code) {
+			return fmt.Errorf("model HTTP %d (%s)", res.StatusCode, e.Code)
+		}
 		return fmt.Errorf("model HTTP %d", res.StatusCode)
 	} // never expose remote bodies or credentials
 	data, err := io.ReadAll(io.LimitReader(res.Body, 16<<20+1))
@@ -68,15 +84,82 @@ func (m *HTTPModel) post(ctx context.Context, body any, out any) error {
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("invalid model JSON")
 	}
+	var usage struct {
+		Usage struct {
+			TotalTokens int64 `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(data, &usage) == nil && usage.Usage.TotalTokens > 0 {
+		m.used.Add(usage.Usage.TotalTokens)
+	}
 	return nil
 }
+
+// Embed encodes documents. Batches larger than MaxBatch are split into consecutive requests.
 func (m *HTTPModel) Embed(ctx context.Context, texts []string) ([][]float64, error) {
-	var v [][]float64
-	if m.Format == "tei" {
+	return m.embed(ctx, texts, "document")
+}
+
+// EmbedQuery encodes search queries; dashscope models encode them with text_type=query, other formats as documents.
+func (m *HTTPModel) EmbedQuery(ctx context.Context, texts []string) ([][]float64, error) {
+	return m.embed(ctx, texts, "query")
+}
+func (m *HTTPModel) embed(ctx context.Context, texts []string, textType string) ([][]float64, error) {
+	step := len(texts)
+	if m.MaxBatch > 0 && m.MaxBatch < step {
+		step = m.MaxBatch
+	}
+	v := make([][]float64, 0, len(texts))
+	for start := 0; start < len(texts); start += step {
+		part, err := m.embedBatch(ctx, texts[start:min(start+step, len(texts))], textType)
+		if err != nil {
+			return nil, err
+		}
+		v = append(v, part...)
+	}
+	if err := db.ValidateVectors(v, len(texts), m.Dimension); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+type indexedVector struct {
+	Index     int
+	Embedding []float64
+}
+
+func (m *HTTPModel) embedBatch(ctx context.Context, texts []string, textType string) ([][]float64, error) {
+	var items []indexedVector
+	switch m.Format {
+	case "tei":
+		var v [][]float64
 		if err := m.post(ctx, map[string]any{"inputs": texts, "truncate": false}, &v); err != nil {
 			return nil, err
 		}
-	} else {
+		if len(v) != len(texts) {
+			return nil, fmt.Errorf("embedding count: got %d want %d", len(v), len(texts))
+		}
+		return v, nil
+	case "dashscope":
+		params := map[string]any{"text_type": textType}
+		if m.Dimension > 0 {
+			params["dimension"] = m.Dimension
+		}
+		var out struct {
+			Output struct {
+				Embeddings []struct {
+					TextIndex int       `json:"text_index"`
+					Embedding []float64 `json:"embedding"`
+				} `json:"embeddings"`
+			} `json:"output"`
+		}
+		if err := m.post(ctx, map[string]any{"model": m.Name, "input": map[string]any{"texts": texts}, "parameters": params}, &out); err != nil {
+			return nil, err
+		}
+		for _, e := range out.Output.Embeddings {
+			items = append(items, indexedVector{e.TextIndex, e.Embedding})
+		}
+	default:
 		var out struct {
 			Data []struct {
 				Index     int       `json:"index"`
@@ -86,16 +169,16 @@ func (m *HTTPModel) Embed(ctx context.Context, texts []string) ([][]float64, err
 		if err := m.post(ctx, map[string]any{"model": m.Name, "input": texts, "encoding_format": "float"}, &out); err != nil {
 			return nil, err
 		}
-		v = make([][]float64, len(texts))
 		for _, d := range out.Data {
-			if d.Index < 0 || d.Index >= len(v) || v[d.Index] != nil {
-				return nil, fmt.Errorf("invalid embedding indices")
-			}
-			v[d.Index] = d.Embedding
+			items = append(items, indexedVector{d.Index, d.Embedding})
 		}
 	}
-	if err := db.ValidateVectors(v, len(texts), m.Dimension); err != nil {
-		return nil, err
+	v := make([][]float64, len(texts))
+	for _, d := range items {
+		if d.Index < 0 || d.Index >= len(v) || v[d.Index] != nil {
+			return nil, fmt.Errorf("invalid embedding indices")
+		}
+		v[d.Index] = d.Embedding
 	}
 	return v, nil
 }
@@ -105,12 +188,27 @@ func (m *HTTPModel) Rank(ctx context.Context, q string, texts []string) ([]float
 		Score     *float64 `json:"score"`
 		Relevance *float64 `json:"relevance_score"`
 	}
+	if len(texts) == 0 {
+		return []float64{}, nil
+	}
 	var items []item
-	if m.Format == "tei" {
+	switch m.Format {
+	case "tei":
 		if err := m.post(ctx, map[string]any{"query": q, "texts": texts, "raw_scores": true, "truncate": false}, &items); err != nil {
 			return nil, err
 		}
-	} else {
+	case "dashscope":
+		var out struct {
+			Output struct {
+				Results []item `json:"results"`
+			} `json:"output"`
+		}
+		if err := m.post(ctx, map[string]any{"model": m.Name, "input": map[string]any{"query": q, "documents": texts},
+			"parameters": map[string]any{"top_n": len(texts), "return_documents": false}}, &out); err != nil {
+			return nil, err
+		}
+		items = out.Output.Results
+	default:
 		var out struct {
 			Results []item `json:"results"`
 		}
@@ -156,10 +254,17 @@ func ModelsFromEnv() (db.Embedder, Reranker, error) {
 		if m.Format == "" {
 			m.Format = "compatible"
 		}
-		if m.Name == "" || m.Revision == "" || (m.Format != "compatible" && m.Format != "tei") {
+		if m.Name == "" || m.Revision == "" || (m.Format != "compatible" && m.Format != "tei" && m.Format != "dashscope") {
 			return nil, fmt.Errorf("%s requires MODEL, REVISION and supported FORMAT", prefix)
 		}
 		m.Dimension, _ = strconv.Atoi(os.Getenv(prefix + "_DIMENSION"))
+		if raw := strings.TrimSpace(os.Getenv(prefix + "_MAX_BATCH")); raw != "" {
+			if m.MaxBatch, err = strconv.Atoi(raw); err != nil || m.MaxBatch < 1 || m.MaxBatch > 2048 {
+				return nil, fmt.Errorf("%s_MAX_BATCH must be 1..2048", prefix)
+			}
+		} else if m.Format == "dashscope" {
+			m.MaxBatch = 10 // strictest DashScope text-embedding batch limit; raise per model, e.g. 20 for qwen3.7-text-embedding-flash
+		}
 		return m, nil
 	}
 	e, err := read("AUTOBID_EMBEDDING")

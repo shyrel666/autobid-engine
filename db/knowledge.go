@@ -525,7 +525,7 @@ func (d *DB) searchKnowledge(ctx context.Context, q KnowledgeQuery, emb Embedder
 		}
 	}
 	if emb != nil {
-		vecs, err := emb.Embed(ctx, []string{strings.Join(allTerms, " ")})
+		vecs, err := EmbedQuery(ctx, emb, []string{strings.Join(allTerms, " ")})
 		if err != nil {
 			return nil, fmt.Errorf("db: embed query: %w", err)
 		}

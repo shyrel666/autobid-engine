@@ -14,7 +14,11 @@ import OverviewPage from '../features/task-workspace/OverviewPage'
 import DocumentsPage from '../features/proposal/documents/DocumentsPage'
 import RequirementsPage from '../features/proposal/requirements/RequirementsPage'
 import OutlinePage from '../features/proposal/outline/OutlinePage'
-import ProposalTab from './task/ProposalTab'
+import WritingPage from '../features/proposal/writing/WritingPage'
+import { ConsistencyPanel, MatrixPanel } from './task/ReviewPanels'
+import { ExportPanel } from '../features/proposal/export/ExportParts'
+import { navigate } from '../lib/router'
+import { taskUrl } from '../lib/routes'
 import MonitorTab from './task/MonitorTab'
 import ElementsTab from './task/ElementsTab'
 import ReportTab from './task/ReportTab'
@@ -35,7 +39,7 @@ function ApprovalsPage() {
   )
 }
 
-function Body({ page }: { page: TaskPage; sectionId?: number }) {
+function Body({ page, sectionId }: { page: TaskPage; sectionId?: number }) {
   const { task, taskId, lastInGroup, invalidate, overview, stream, intercepts } = useTaskWorkspace()
   const loc = useLocation()
   const proposalTick = useTick('requirements', 'outline', 'sections', 'matrix', 'consistency', 'export', 'business')
@@ -53,7 +57,7 @@ function Body({ page }: { page: TaskPage; sectionId?: number }) {
     )
   }
   // 写作与执行记录使用固定标题、面板各自滚动；其余页面主区域滚动。
-  const fill = false
+  const fill = page === 'writing'
   let content: ReactNode
   switch (page) {
     case 'overview': content = <OverviewPage />; break
@@ -61,11 +65,11 @@ function Body({ page }: { page: TaskPage; sectionId?: number }) {
     case 'requirements': content = <RequirementsPage />; break
     case 'research': content = <div className="mx-auto max-w-6xl"><ResearchTab taskID={taskId} /></div>; break
     case 'outline': content = <OutlinePage />; break
-    case 'writing': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break
-    case 'matrix': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break
-    case 'consistency': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break
+    case 'writing': content = <WritingPage sectionId={sectionId} />; break
+    case 'matrix': content = <div className="mx-auto max-w-7xl"><MatrixPanel taskID={taskId} tick={proposalTick} onOpenSection={(id) => void navigate(taskUrl(taskId, 'writing', { sectionId: id }))} /></div>; break
+    case 'consistency': content = <div className="mx-auto max-w-7xl"><ConsistencyPanel taskID={taskId} tick={proposalTick} /></div>; break
     case 'report': content = <div className="mx-auto max-w-6xl"><ReportTab taskID={taskId} /></div>; break
-    case 'export': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break
+    case 'export': content = <div className="mx-auto max-w-6xl"><ExportPanel taskID={taskId} tick={proposalTick} /></div>; break
     case 'monitor': content = <MonitorTab taskID={taskId} overview={overview} stream={stream} pending={intercepts.data ?? []} onDecided={() => invalidate('intercept_decided')} />; break
     case 'elements': content = <div className="mx-auto max-w-6xl"><ElementsTab taskID={taskId} /></div>; break
     case 'approvals': content = <ApprovalsPage />; break

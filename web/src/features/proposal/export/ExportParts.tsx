@@ -5,16 +5,16 @@ import { useEffect, useState } from 'react'
 import {
   AlertTriangle, CheckCircle2, Download, FileDown, FileText, ImageOff, Link2, Lock, RefreshCw, ShieldAlert, Trash2, Upload, Wand2,
 } from 'lucide-react'
-import { api, errorText, ApiError, saveBlob } from '../../api/client'
+import { api, errorText, ApiError, saveBlob } from '../../../api/client'
 import type {
   ChartType, ExportFormat, ExportJob, ExportPreflight, ExportReadiness, ExportWarning, ProposalChart,
-} from '../../api/types'
-import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Pre, Select, Spinner, TextArea, cx, useToast } from '../../components/ui'
-import type { Tone } from '../../components/ui'
-import { useAsync, useInterval } from '../../hooks/useAsync'
+} from '../../../api/types'
+import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Pre, Select, Spinner, TextArea, cx, useToast } from '../../../components/ui'
+import type { Tone } from '../../../components/ui'
+import { useAsync, useInterval } from '../../../hooks/useAsync'
 import {
   chartRenderLabel, chartTypeLabel, exportBlockerLabel, exportStatusLabel, exportWarningLabel, fmtBytes, fmtTime,
-} from '../../lib/format'
+} from '../../../lib/format'
 
 // ---------------------------------------------------------------------------
 // 章节图表

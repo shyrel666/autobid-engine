@@ -4,8 +4,9 @@ import { api, errorText } from '../api/client'
 import type { KnowledgeCategory, KnowledgeDocument, KnowledgeHit, KnowledgeUploadResp, RetrievalResult } from '../api/types'
 import { RetrievalEvidence, KnowledgeIndexes } from '../components/RetrievalEvidence'
 import { TableView } from '../components/TableView'
-import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Select, Spinner, Tabs, TextArea, cx, useToast } from '../components/ui'
+import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Select, Spinner, Tabs, TextArea, cx, useConfirm, useToast } from '../components/ui'
 import { useAsync } from '../hooks/useAsync'
+import { PageFrame } from '../components/layout/AppShell'
 import { docFormatLabel, fmtNum, fmtTime, knowledgeCategoryLabel, pageRange } from '../lib/format'
 
 const CATEGORIES: KnowledgeCategory[] = ['historical_bid', 'standard_solution', 'product_spec', 'whitepaper']
@@ -158,13 +159,14 @@ function DocumentDialog({ id, onClose }: { id: number | null; onClose: () => voi
 
 function LibraryTab() {
   const toast = useToast()
+  const confirm = useConfirm()
   const [filter, setFilter] = useState({ category: '', tags: '', q: '' })
   const [applied, setApplied] = useState(filter)
   const [viewing, setViewing] = useState<number | null>(null)
   const docs = useAsync(() => api.listKnowledge({ category: applied.category, tags: splitTags(applied.tags).join(','), q: applied.q, limit: 500 }), [applied])
 
   const remove = async (d: KnowledgeDocument) => {
-    if (!confirm(`确认删除知识库文档 #${d.id}「${d.title}」？其全部分块将一并删除，且不可恢复。`)) return
+    if (!(await confirm({ title: `删除知识库文档 #${d.id}「${d.title}」？`, message: '其全部分块将一并删除，且不可恢复；引用它的证据会失效。', confirmLabel: '删除', danger: true }))) return
     try {
       await api.deleteKnowledge(d.id)
       toast('ok', `已删除 #${d.id}`)
@@ -347,16 +349,11 @@ function SearchTab() {
 export default function KnowledgePage() {
   const [tab, setTab] = useState<'library' | 'search' | 'indexes'>('library')
   return (
-    <div className="mx-auto max-w-6xl space-y-4 p-6">
-      <div className="flex items-center gap-3">
-        <div className="flex size-10 items-center justify-center rounded-lg bg-blue-50 text-blue-600"><BookOpen className="size-5" /></div>
-        <div>
-          <h1 className="text-xl font-semibold">企业方案知识库</h1>
-          <p className="text-sm text-slate-500">沉淀历史标书、标准技术方案、产品规格书与技术白皮书；Worker 经 knowledge-reuse 技能检索复用，引用强制附带文档、章节与页码。</p>
-        </div>
+    <PageFrame title="企业方案知识库" description="沉淀历史标书、标准技术方案、产品规格书与技术白皮书；写作检索复用时引用附带文档、章节与页码。历史承诺不等于当前能力，引用前请核验。">
+      <div className="space-y-4">
+        <Tabs value={tab} onChange={setTab} tabs={[{ key: 'library', label: '文档库' }, { key: 'search', label: '检索预览' }, { key: 'indexes', label: '语义索引' }]} />
+        {tab === 'library' ? <LibraryTab /> : tab === 'search' ? <SearchTab /> : <KnowledgeIndexes />}
       </div>
-      <Tabs value={tab} onChange={setTab} tabs={[{ key: 'library', label: '文档库' }, { key: 'search', label: '检索预览' }, { key: 'indexes', label: '语义索引' }]} />
-      {tab === 'library' ? <LibraryTab /> : tab === 'search' ? <SearchTab /> : <KnowledgeIndexes />}
-    </div>
+    </PageFrame>
   )
 }

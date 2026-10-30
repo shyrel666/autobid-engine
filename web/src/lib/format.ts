@@ -1,8 +1,6 @@
+/** fmtTime 统一以北京时间显示业务时间（与投标截止口径一致），不随浏览器所在时区变化。 */
 export function fmtTime(s?: string | null): string {
-  if (!s) return '—'
-  const d = new Date(s)
-  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return '—'
-  return d.toLocaleString('zh-CN', { hour12: false })
+  return fmtBeijing(s) || '—'
 }
 
 export function fmtPct(p: number | null | undefined): string {
@@ -43,8 +41,19 @@ export function downloadText(filename: string, text: string, type: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+/** 任务运行状态：只表示推演运行生命周期，与标书完成度无关（运行结束 ≠ 标书完成）。 */
 export const taskStatusLabel: Record<string, string> = {
-  created: '未启动', running: '运行中', paused: '已暂停', done: '已完成', failed: '失败', timeout: '超时',
+  created: '未启动', running: '运行中', paused: '已暂停', done: '运行已结束', failed: '运行失败', timeout: '运行超时',
+}
+
+/** fmtBeijing 以北京时间显示「2006-01-02 15:04」，用于投标截止时间等业务时刻。 */
+export function fmtBeijing(s?: string | null): string {
+  if (!s) return ''
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return ''
+  const p = Object.fromEntries(new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(d).map((x) => [x.type, x.value]))
+  return `${p.year}-${p.month}-${p.day} ${p.hour === '24' ? '00' : p.hour}:${p.minute}`
 }
 
 export const assetTypeLabel: Record<string, string> = {
@@ -146,7 +155,7 @@ export const chartTypeLabel: Record<string, string> = {
 
 export const chartRenderLabel: Record<string, string> = { pending: '待渲染', rendered: '已渲染', unrendered: '未渲染（mmdc 不可用）', failed: '渲染失败' }
 
-export const exportStatusLabel: Record<string, string> = { queued: '排队中', running: '执行中', succeeded: '已完成', failed: '失败' }
+export const exportStatusLabel: Record<string, string> = { queued: '排队中', running: '执行中', succeeded: '已生成', failed: '失败' }
 
 export const exportWarningLabel: Record<string, string> = {
   chart_unrendered: '图表未渲染', chart_failed: '图表渲染失败', chart_stale: '图表已过期', toc_not_refreshed: '目录页码未刷新',

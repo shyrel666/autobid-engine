@@ -1,8 +1,47 @@
 @import "tailwindcss";
 
+/* 设计基线 v1（docs/frontend-refactor/design）：语义颜色、字体与尺寸变量。
+   页面优先使用 bg-canvas / bg-panel / text-fg / text-muted / bg-soft / border-line 等语义类；
+   slate 色阶映射为中性灰，旧页面中的 slate-* 类与设计色板保持一致。 */
 @theme {
-  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
+  --font-sans: "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-mono: Consolas, monospace;
+
+  --color-canvas: #fafafa;
+  --color-panel: #ffffff;
+  --color-fg: #171717;
+  --color-muted: #737373;
+  --color-soft: #f5f5f5;
+  --color-line: #e5e5e5;
+  --color-line-soft: #ededed;
+  --color-primary: #171717;
+  --color-primary-hover: #404040;
+  --color-link: #2563eb;
+  --color-ok: #059669;
+  --color-warn: #d97706;
+  --color-danger: #dc2626;
+  --color-warm: #fffbf2;
+
+  --color-slate-50: #fafafa;
+  --color-slate-100: #f5f5f5;
+  --color-slate-200: #e5e5e5;
+  --color-slate-300: #d4d4d4;
+  --color-slate-400: #a3a3a3;
+  --color-slate-500: #737373;
+  --color-slate-600: #525252;
+  --color-slate-700: #404040;
+  --color-slate-800: #262626;
+  --color-slate-900: #171717;
+
+  --radius-frame: 14px;
+  --radius-control: 10px;
+}
+
+:root {
+  color-scheme: light;
+  --sidebar-expanded: 272px;
+  --sidebar-collapsed: 64px;
+  --focus-ring: #a3a3a380;
 }
 
 html, body, #root {
@@ -10,5 +49,32 @@ html, body, #root {
 }
 
 body {
-  background: var(--color-slate-50);
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-fg);
+  font: 14px/20px var(--font-sans);
+}
+
+button, input, textarea, select {
+  font: inherit;
+}
+
+:where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

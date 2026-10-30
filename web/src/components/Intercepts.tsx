@@ -1,25 +1,28 @@
 import { useState } from 'react'
 import { Check, RefreshCw, ShieldAlert, X } from 'lucide-react'
-import { api, errorText } from '../api/client'
+import { ApiError, api, errorText } from '../api/client'
 import type { InterceptAudit, InterceptPending } from '../api/types'
 import { fmtTime, pretty } from '../lib/format'
-import { navigate } from '../lib/router'
-import { Badge, Button, Card, Empty, ErrorBanner, Pre, Spinner, TextArea, statusTone, useToast } from './ui'
+import { linkProps } from '../lib/router'
+import { Badge, Button, Card, Empty, ErrorBanner, Pre, Spinner, TextArea, statusTone, useConfirm, useToast } from './ui'
 
 function PendingCard({ row, onDecided, showTask }: { row: InterceptPending; onDecided: () => void; showTask?: boolean }) {
   const toast = useToast()
+  const confirm = useConfirm()
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState<'' | 'allow' | 'deny'>('')
   const decide = async (allow: boolean) => {
-    if (!allow && !reason.trim() && !confirm('未填写拒绝原因，Worker 将只收到“人工审批未通过”。继续拒绝？')) return
+    if (!allow && !reason.trim() && !(await confirm({ title: '未填写拒绝原因，继续拒绝？', message: 'Worker 将只收到“人工审批未通过”。', confirmLabel: '拒绝', danger: true }))) return
     setBusy(allow ? 'allow' : 'deny')
     try {
       const r = await api.decideIntercept(row.id, allow, reason.trim())
       toast('ok', `审批 #${row.id} 已${allow ? '允许' : '拒绝'}（${r.status}）`)
       onDecided()
     } catch (e) {
-      // 409：已被他人/超时处理；410：等待方已离开（工作已取消或服务重启）
-      toast('error', errorText(e))
+      // 409：已被他人/超时处理；410：等待方已离开（工作已取消或服务重启），审批已失效，刷新列表不保留可点击的批准按钮。
+      if (e instanceof ApiError && e.status === 410) toast('error', `审批 #${row.id} 已失效：等待方已结束（工作取消、超时或服务重启）`)
+      else if (e instanceof ApiError && e.status === 409) toast('error', `审批 #${row.id} 已被处理或已超时回收：${e.message}`)
+      else toast('error', errorText(e))
       onDecided()
     } finally {
       setBusy('')
@@ -33,8 +36,7 @@ function PendingCard({ row, onDecided, showTask }: { row: InterceptPending; onDe
         <Badge tone="amber">{row.status}</Badge>
         <span className="text-xs text-slate-500">{row.agent_name} · Intent #{row.intent_id}</span>
         {showTask && (
-          <a href={`/tasks/${row.task_id}/approvals`} className="text-xs text-blue-600 hover:underline"
-            onClick={(e) => { e.preventDefault(); navigate(`/tasks/${row.task_id}/approvals`) }}>任务 #{row.task_id}</a>
+          <a {...linkProps(`/tasks/${row.task_id}/approvals`)} className="text-xs text-link hover:underline">项目 #{row.task_id}</a>
         )}
         <span className="ml-auto text-xs text-slate-400">提交 {fmtTime(row.created_at)} · 等待方心跳至 {fmtTime(row.waiter_until)}</span>
       </div>
@@ -55,7 +57,7 @@ function PendingCard({ row, onDecided, showTask }: { row: InterceptPending; onDe
 export function InterceptList({ rows, loading, error, onReload, onDecided, showTask, compact }:
   { rows?: InterceptPending[]; loading: boolean; error: string; onReload: () => void; onDecided: () => void; showTask?: boolean; compact?: boolean }) {
   return (
-    <Card title={<><ShieldAlert className="size-4 text-amber-600" /> 待人工审批的工具调用 {rows && rows.length > 0 && <Badge tone="red">{rows.length}</Badge>}</>}
+    <Card title={<><ShieldAlert className="size-4 text-warn" /> 待人工审批的工具调用 {rows && rows.length > 0 && <Badge tone="red">{rows.length}</Badge>}</>}
       actions={<Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} onClick={onReload}>刷新</Button>}>
       <ErrorBanner error={error} onRetry={onReload} />
       {loading && !rows ? <Spinner /> : !rows || rows.length === 0 ? (

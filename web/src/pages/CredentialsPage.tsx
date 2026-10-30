@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { ApiError, api, errorText } from '../api/client'
 import type { CompanyCredential, CredentialReq } from '../api/types'
-import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Select, Spinner, useToast } from '../components/ui'
+import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Select, Spinner, useConfirm, useToast } from '../components/ui'
 import { useAsync } from '../hooks/useAsync'
+import { PageFrame } from '../components/layout/AppShell'
 import { credentialCategoryLabel, fmtTime } from '../lib/format'
 
 interface AttrRow { key: string; value: string }
@@ -121,13 +122,14 @@ function CredentialDialog({ editing, onClose, onSaved }: { editing: CompanyCrede
 
 export default function CredentialsPage() {
   const toast = useToast()
+  const confirm = useConfirm()
   const [filter, setFilter] = useState({ category: '', q: '', valid_on: '' })
   const [applied, setApplied] = useState(filter)
   const creds = useAsync(() => api.listCredentials({ ...applied, limit: 1000 }), [applied])
   const [editing, setEditing] = useState<CompanyCredential | 'new' | null>(null)
 
   const remove = async (c: CompanyCredential) => {
-    if (!confirm(`确认删除资信 #${c.id}「${c.title}」？此操作不可恢复。`)) return
+    if (!(await confirm({ title: `删除资信 #${c.id}「${c.title}」？`, message: '此操作不可恢复。', confirmLabel: '删除', danger: true }))) return
     try {
       await api.deleteCredential(c.id)
       toast('ok', `已删除 #${c.id}`)
@@ -141,14 +143,9 @@ export default function CredentialsPage() {
   const list = creds.data ?? []
   const now = today()
   return (
-    <div className="mx-auto max-w-6xl space-y-4 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">企业资信库</h1>
-          <p className="text-sm text-slate-500">企业资质、类似业绩与人员证书档案；Worker 通过 query_company_credentials 工具比对招标资格要求。</p>
-        </div>
-        <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing('new')}>新增资信</Button>
-      </div>
+    <PageFrame title="企业资信库" description="企业资质、类似业绩与人员证书档案；写作与核验时用于比对招标资格要求。"
+      actions={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing('new')}>新增资信</Button>}>
+    <div className="space-y-4">
       <Card>
         <form className="flex flex-wrap items-end gap-3" onSubmit={(e) => { e.preventDefault(); setApplied(filter) }}>
           <Field label="类别" className="w-40">
@@ -208,5 +205,6 @@ export default function CredentialsPage() {
       </Card>
       <CredentialDialog editing={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void creds.reload() }} />
     </div>
+    </PageFrame>
   )
 }

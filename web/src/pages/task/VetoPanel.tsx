@@ -43,7 +43,7 @@ export function BidScopeCard({ taskID, view, onChanged }: { taskID: number; view
           <div className="text-xs text-slate-500">投标截止时间（北京时间）</div>
           {deadline === undefined ? (
             <div className="mt-1 flex flex-wrap items-center gap-2">
-              <span className={cx('font-medium', !m.bid_deadline && 'text-amber-700')}>{m.bid_deadline ? toLocalInput(m.bid_deadline) : '未识别'}</span>
+              <span className={cx('font-medium', !m.bid_deadline && 'text-amber-700')}>{m.bid_deadline ? toLocalInput(m.bid_deadline) : '尚未确认'}</span>
               {src.origin === 'manual' && <Badge tone="purple">人工指定 · {String(src.by ?? '')}</Badge>}
               {src.origin === 'extracted' && <Badge tone="blue">原文{src.doc_role ? ` · ${docRoleLabel[String(src.doc_role)] ?? src.doc_role}` : ''}{src.page ? ` · 第 ${src.page} 页` : ''}</Badge>}
               <Button size="sm" variant="ghost" onClick={() => setDeadline(toLocalInput(m.bid_deadline))}>修改</Button>
@@ -83,7 +83,7 @@ export function BidScopeCard({ taskID, view, onChanged }: { taskID: number; view
   )
 }
 
-export function VetoChecklist({ taskID, items, onChanged }: { taskID: number; items: RequirementItem[]; onChanged: () => void }) {
+export function VetoChecklist({ taskID, items, onChanged, highlightId }: { taskID: number; items: RequirementItem[]; onChanged: () => void; highlightId?: number }) {
   const [checking, setChecking] = useState<{ item: RequirementItem; status: VetoStatus }>()
   const vetoes = items.filter((i) => i.category === 'veto_item' && !i.out_of_bid)
   const failed = vetoes.filter((i) => i.veto_status === 'failed').length
@@ -94,10 +94,10 @@ export function VetoChecklist({ taskID, items, onChanged }: { taskID: number; it
       {vetoes.length === 0 ? <Empty>尚无否决项。上传招标文件后点击「从招标文件提取」：资格性 / 符合性审查表逐行生成否决项，另有 87 号令法定无效情形 6 项。</Empty> : (
         <div className="divide-y divide-slate-100">
           {vetoes.map((it) => (
-            <div key={it.id} className="flex flex-wrap items-start gap-3 py-2 text-sm">
+            <div key={it.id} id={`req-${it.id}`} className={cx('flex flex-wrap items-start gap-3 py-2 text-sm', highlightId === it.id && '-mx-2 rounded-lg bg-soft px-2 ring-1 ring-fg')}>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge tone={vetoTone(it.veto_status)}>{vetoStatusLabel[it.veto_status]}</Badge>
+                  <Badge dot tone={vetoTone(it.veto_status)}>{vetoStatusLabel[it.veto_status]}</Badge>
                   <Badge>{vetoKindLabel[it.veto_kind] ?? it.veto_kind}</Badge>
                   <span className="font-medium">{it.title}</span>
                   {it.lot && <span className="text-xs text-slate-400">包{it.lot}</span>}
@@ -110,9 +110,9 @@ export function VetoChecklist({ taskID, items, onChanged }: { taskID: number; it
                   <span className="text-slate-400"> · {it.veto_checked_by} {it.veto_checked_at ? fmtTime(it.veto_checked_at) : ''}</span></p>}
               </div>
               <div className="flex shrink-0 gap-1">
-                <Button size="sm" variant="ghost" title="核对通过" onClick={() => setChecking({ item: it, status: 'passed' })}><CheckCircle2 className="size-4 text-green-600" /></Button>
-                <Button size="sm" variant="ghost" title="核对不通过" onClick={() => setChecking({ item: it, status: 'failed' })}><XCircle className="size-4 text-red-600" /></Button>
-                {it.veto_status !== 'pending' && <Button size="sm" variant="ghost" title="退回待核对" onClick={() => setChecking({ item: it, status: 'pending' })}><CircleDashed className="size-4 text-slate-400" /></Button>}
+                <Button size="sm" variant="ghost" title="核对通过" aria-label={`核对通过：${it.title}`} onClick={() => setChecking({ item: it, status: 'passed' })}><CheckCircle2 className="size-4 text-green-600" /></Button>
+                <Button size="sm" variant="ghost" title="核对不通过" aria-label={`核对不通过：${it.title}`} onClick={() => setChecking({ item: it, status: 'failed' })}><XCircle className="size-4 text-red-600" /></Button>
+                {it.veto_status !== 'pending' && <Button size="sm" variant="ghost" title="退回待核对" aria-label={`退回待核对：${it.title}`} onClick={() => setChecking({ item: it, status: 'pending' })}><CircleDashed className="size-4 text-slate-400" /></Button>}
               </div>
             </div>
           ))}
@@ -136,7 +136,7 @@ function VetoDialog({ taskID, item, status, onClose, onSaved }: { taskID: number
     try { await api.setVetoStatus(taskID, item.id, status, note); toast('ok', `已标记为「${vetoStatusLabel[status]}」`); onSaved() } catch (e) { toast('error', errorText(e)) } finally { setBusy(false) }
   }
   return (
-    <Modal open title={`${vetoStatusLabel[status]}：${item.title}`} onClose={onClose}
+    <Modal open title={`${vetoStatusLabel[status]}：${item.title}`} onClose={onClose} dirty={note.trim() !== (status === item.veto_status ? item.veto_note : '').trim()}
       footer={<><Button variant="ghost" onClick={onClose}>取消</Button>
         <Button variant={status === 'failed' ? 'danger' : 'primary'} loading={busy} disabled={needNote && !note.trim()} onClick={() => void submit()}>确定</Button></>}>
       <p className="whitespace-pre-wrap text-xs text-slate-600">{item.description}</p>

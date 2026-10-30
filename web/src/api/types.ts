@@ -591,7 +591,9 @@ export interface EvidenceClaim {
 }
 export interface RetrievalEvidence {
   id: number; run_id: number; status: string; relation: string; reason: string; content_hash: string
-  snapshot: { document?: KnowledgeDocument; chunk?: KnowledgeChunk; page_reliability?: string }
+  /** 证据来源域（knowledge / tender / credential …），不同域的快照结构不同。 */
+  source_domain?: string
+  snapshot: { document?: KnowledgeDocument; chunk?: KnowledgeChunk; page_reliability?: string; [k: string]: unknown }
   claim: { verdict?: { quote?: string; table?: number; row?: number; column?: number } }
 }
 export interface KnowledgeIndex {

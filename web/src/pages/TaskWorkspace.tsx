@@ -11,7 +11,9 @@ import type { TaskPage } from '../lib/routes'
 import { TaskWorkspaceProvider, useTaskWorkspace, useTick } from '../features/task-workspace/TaskWorkspaceProvider'
 import TaskHeader from '../features/task-workspace/TaskHeader'
 import OverviewPage from '../features/task-workspace/OverviewPage'
-import DocumentsTab from './task/DocumentsTab'
+import DocumentsPage from '../features/proposal/documents/DocumentsPage'
+import RequirementsPage from '../features/proposal/requirements/RequirementsPage'
+import OutlinePage from '../features/proposal/outline/OutlinePage'
 import ProposalTab from './task/ProposalTab'
 import MonitorTab from './task/MonitorTab'
 import ElementsTab from './task/ElementsTab'
@@ -55,10 +57,10 @@ function Body({ page }: { page: TaskPage; sectionId?: number }) {
   let content: ReactNode
   switch (page) {
     case 'overview': content = <OverviewPage />; break
-    case 'documents': content = <div className="mx-auto max-w-6xl"><DocumentsTab taskID={taskId} onUploaded={() => invalidate('document_imported')} /></div>; break
-    case 'requirements': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break
+    case 'documents': content = <DocumentsPage />; break
+    case 'requirements': content = <RequirementsPage />; break
     case 'research': content = <div className="mx-auto max-w-6xl"><ResearchTab taskID={taskId} /></div>; break
-    case 'outline': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break
+    case 'outline': content = <OutlinePage />; break
     case 'writing': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break
     case 'matrix': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break
     case 'consistency': content = <div className="mx-auto max-w-7xl"><ProposalTab taskID={taskId} tick={proposalTick} /></div>; break

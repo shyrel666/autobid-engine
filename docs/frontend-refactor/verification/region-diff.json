@@ -1,0 +1,62 @@
+{
+ "V01": {
+  "sidebar": 6.0,
+  "main-frame": 6.9,
+  "global-header": 7.3,
+  "project-table": 15.4
+ },
+ "V02": {
+  "sidebar": 6.0,
+  "main-frame": 9.1,
+  "task-header": 11.1,
+  "project-tabs": 42.2,
+  "execution": 9.7,
+  "work-list": 16.1,
+  "activity-pane": 7.6,
+  "activity-scroll": 5.4,
+  "tool-event": 10.5,
+  "composer": 12.3
+ },
+ "V03": {
+  "sidebar": 5.9,
+  "main-frame": 12.5,
+  "global-header": 7.3,
+  "profile-list": 28.3,
+  "profile-form": 12.5
+ },
+ "V04": {
+  "sidebar": 5.8,
+  "main-frame": 10.0,
+  "task-header": 9.8,
+  "project-tabs": 35.8,
+  "execution": 10.8,
+  "work-list": 15.1,
+  "activity-pane": 9.5,
+  "activity-scroll": 7.9,
+  "tool-event": 10.3,
+  "composer": 12.1
+ },
+ "V05": {
+  "sidebar": 5.6,
+  "main-frame": 5.9,
+  "global-header": 6.4,
+  "project-table": 13.3
+ },
+ "V06": {
+  "sidebar": 5.6,
+  "main-frame": 12.7,
+  "task-header": 8.3,
+  "project-tabs": 42.9,
+  "writing": 15.1
+ },
+ "V07": {
+  "main-frame": 24.7,
+  "task-header": 18.3,
+  "project-tabs": 29.7,
+  "execution": 29.7,
+  "activity-pane": 30.6,
+  "activity-scroll": 32.2,
+  "tool-event": 41.8,
+  "composer": 25.5
+ }
+}

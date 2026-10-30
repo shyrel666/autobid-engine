@@ -38,7 +38,7 @@ export default function App() {
     case 'intercepts': active = 'intercepts'; page = <InterceptsPage />; break
     case 'credentials': active = 'credentials'; page = <CredentialsPage />; break
     case 'knowledge': active = 'knowledge'; page = <KnowledgePage />; break
-    case 'llm': active = 'llm'; page = <PageFrame><LLMPage /></PageFrame>; break
+    case 'llm': active = 'llm'; page = <LLMPage />; break
     case 'proposal': active = 'tasks'; page = <ProposalEntryPage intent={route.intent} />; break
     case 'redirect': page = null; break
     case 'notfound': page = <NotFound reason={route.reason} />; break

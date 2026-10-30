@@ -17,7 +17,7 @@ import OutlinePage from '../features/proposal/outline/OutlinePage'
 import WritingPage from '../features/proposal/writing/WritingPage'
 import { ConsistencyPage, MatrixPage } from '../features/proposal/review/ReviewPages'
 import ExportPage from '../features/proposal/export/ExportPage'
-import MonitorTab from './task/MonitorTab'
+import ExecutionPage from '../features/execution/ExecutionPage'
 import ElementsTab from './task/ElementsTab'
 import ReportTab from './task/ReportTab'
 import TaskLLMTab from './task/TaskLLMTab'
@@ -38,7 +38,7 @@ function ApprovalsPage() {
 }
 
 function Body({ page, sectionId }: { page: TaskPage; sectionId?: number }) {
-  const { task, taskId, lastInGroup, invalidate, overview, stream, intercepts } = useTaskWorkspace()
+  const { task, taskId, lastInGroup } = useTaskWorkspace()
   const loc = useLocation()
   useEffect(() => { lastInGroup.set(navGroupOf(page).key, loc.pathname + loc.search) }, [page, loc, lastInGroup])
 
@@ -54,7 +54,7 @@ function Body({ page, sectionId }: { page: TaskPage; sectionId?: number }) {
     )
   }
   // 写作与执行记录使用固定标题、面板各自滚动；其余页面主区域滚动。
-  const fill = page === 'writing'
+  const fill = page === 'writing' || page === 'monitor'
   let content: ReactNode
   switch (page) {
     case 'overview': content = <OverviewPage />; break
@@ -67,7 +67,7 @@ function Body({ page, sectionId }: { page: TaskPage; sectionId?: number }) {
     case 'consistency': content = <ConsistencyPage />; break
     case 'report': content = <div className="mx-auto max-w-6xl"><ReportTab taskID={taskId} /></div>; break
     case 'export': content = <ExportPage />; break
-    case 'monitor': content = <MonitorTab taskID={taskId} overview={overview} stream={stream} pending={intercepts.data ?? []} onDecided={() => invalidate('intercept_decided')} />; break
+    case 'monitor': content = <ExecutionPage />; break
     case 'elements': content = <div className="mx-auto max-w-6xl"><ElementsTab taskID={taskId} /></div>; break
     case 'approvals': content = <ApprovalsPage />; break
     case 'llm': content = <div className="mx-auto max-w-6xl"><TaskLLMTab taskID={taskId} /></div>; break

@@ -5,7 +5,7 @@ import type { Asset } from '../../api/types'
 import { Badge, Button, Card, Empty, ErrorBanner, Modal, Pre, Select, Spinner, cx, severityTone } from '../../components/ui'
 import { useAsync } from '../../hooks/useAsync'
 import { assetTypeLabel, findingCategoryLabel, fmtTime, pretty, severityLabel } from '../../lib/format'
-import { NodeDetailModal } from './MonitorTab'
+import { NodeDetailModal } from '../../features/execution/NodeParts'
 
 function AssetModal({ asset, onClose }: { asset: Asset | null; onClose: () => void }) {
   const out = useAsync(() => api.assetEdges(asset!.id, 'out'), [asset?.id], asset !== null)

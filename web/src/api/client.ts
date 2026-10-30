@@ -7,7 +7,7 @@ import type {
   KnowledgeTextReq, KnowledgeUploadResp, LLMChain, LLMHealth, LLMProfile, LLMUsage, NodeDetail, Overview, Coverage,
   Task, TaskReport, TaskView, UploadDocumentFileReq, UploadDocumentReq, UploadDocumentResp, ResearchRequest, RetrievalRun,
   ExtractResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
-  RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionClaim, SectionDetail,
+  RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionClaim, SectionDetail, BidScopeInput, VetoStatus,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
   ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
 } from './types'
@@ -182,7 +182,8 @@ export const api = {
   // 招标文档
   uploadDocument: (id: number, req: UploadDocumentReq) => post<UploadDocumentResp>(`${t(id)}/documents`, req),
   uploadDocumentFile: (id: number, req: UploadDocumentFileReq) => post<UploadDocumentResp>(`${t(id)}/documents`,
-    formData({ tender_no: req.tender_no, lot_no: req.lot_no, title: req.title, wake_planner: req.wake_planner }, req.file)),
+    formData({ tender_no: req.tender_no, lot_no: req.lot_no, title: req.title, wake_planner: req.wake_planner,
+      doc_role: req.doc_role, published_at: req.published_at }, req.file)),
   listDocuments: (id: number, content = true) =>
     get<DocumentWithChunks[]>(`${t(id)}/documents${content ? '?content=1' : ''}`),
 
@@ -222,6 +223,9 @@ export const api = {
   updateRequirement: (id: number, reqID: number, req: RequirementInput) => put<RequirementItem>(`${t(id)}/requirements/${reqID}`, req),
   deleteRequirement: (id: number, reqID: number) => del(`${t(id)}/requirements/${reqID}`),
   confirmRequirements: (id: number, epoch?: number) => post<RequirementManifest>(`${t(id)}/requirements/confirm`, { epoch: epoch ?? 0 }),
+  // D1：否决项核对（通过 / 不通过须写依据）与投标范围（分包、人工截止时间）
+  setVetoStatus: (id: number, reqID: number, status: VetoStatus, note: string) => put<RequirementItem>(`${t(id)}/requirements/${reqID}/veto`, { status, note }),
+  setBidScope: (id: number, req: BidScopeInput) => put<RequirementsView>(`${t(id)}/requirements/bid-scope`, req),
   outlines: (id: number) => get<OutlineList>(`${t(id)}/outlines`),
   createOutline: (id: number, req: OutlineInput = {}) => post<OutlineDetail>(`${t(id)}/outlines`, req),
   getOutline: (id: number, version: number) => get<OutlineDetail>(`${t(id)}/outlines/${version}`),

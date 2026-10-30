@@ -81,6 +81,7 @@ export const docFormatLabel: Record<string, string> = {
 
 export const requirementCategoryLabel: Record<string, string> = {
   scoring_item: '评分项', mandatory_clause: '★ 强制条款', non_scoring_required: '非评分必答项', format_attachment: '格式与附件',
+  veto_item: '否决项',
 }
 
 /** 评分项分组：价格分由报价文件响应，不进入技术标大纲。 */
@@ -127,6 +128,16 @@ export const exportBlockerLabel: Record<string, string> = {
   no_approved_outline: '无批准大纲', requirements_not_confirmed: '要求清单未确认', requirement_unmapped: '要求未映射',
   section_not_approved: '章节未定稿', matrix_stale: '响应核验失效', matrix_failed: '响应核验未通过', matrix_unverified: '尚未核验',
   consistency_not_run: '未做一致性核验', consistency_stale: '一致性核验过期', finding_open: '一致性结论待处理', evidence_invalid: '证据失效',
+  veto_pending: '否决项待核对', veto_failed: '否决项不通过',
+}
+
+// D1：否决项与招标包
+export const vetoKindLabel: Record<string, string> = { qualification: '资格性审查', conformity: '符合性审查', statutory: '法定无效情形' }
+
+export const vetoStatusLabel: Record<string, string> = { pending: '待核对', passed: '通过', failed: '不通过' }
+
+export const docRoleLabel: Record<string, string> = {
+  tender: '招标文件', correction: '更正公告', clarification: '澄清', qa: '答疑', attachment: '附件',
 }
 
 export const chartTypeLabel: Record<string, string> = {

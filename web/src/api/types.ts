@@ -231,6 +231,9 @@ export interface TenderDocument {
   chunk_count: number
   created_by?: string
   created_at: string
+  /** 招标包内的文件角色；后发布的更正 / 澄清优先于原招标文件。 */
+  doc_role: 'tender' | 'correction' | 'clarification' | 'qa' | 'attachment'
+  published_at?: string
 }
 
 export interface DocumentChunk {
@@ -262,6 +265,9 @@ export interface UploadDocumentReq {
   title?: string
   text: string
   wake_planner?: boolean
+  /** 招标包内的文件角色（空时按标题推断）与公告发布时间（2006-01-02），决定效力先后。 */
+  doc_role?: string
+  published_at?: string
 }
 
 export interface UploadDocumentResp {
@@ -286,6 +292,9 @@ export interface UploadDocumentFileReq {
   lot_no?: string
   title?: string
   wake_planner?: boolean
+  /** 招标包内的文件角色（空时按标题推断）与公告发布时间（2006-01-02），决定效力先后。 */
+  doc_role?: string
+  published_at?: string
   file: File
 }
 
@@ -601,28 +610,44 @@ export interface RetrievalRun {
 // ---------------------------------------------------------------------------
 // Phase 5：要求清单、技术标大纲与章节修订（db/requirements.go、db/proposal.go、server/proposal.go）
 // ---------------------------------------------------------------------------
-export type RequirementCategory = 'scoring_item' | 'mandatory_clause' | 'non_scoring_required' | 'format_attachment'
+export type RequirementCategory = 'scoring_item' | 'mandatory_clause' | 'non_scoring_required' | 'format_attachment' | 'veto_item'
+/** 否决项来源：资格性审查表 / 符合性审查表 / 87 号令法定无效情形。 */
+export type VetoKind = '' | 'qualification' | 'conformity' | 'statutory'
+/** 否决项核对结论：待核对与不通过都阻断导出。 */
+export type VetoStatus = 'pending' | 'passed' | 'failed'
 
 export interface RequirementItem {
   id: number; tenant_id: string; task_id: number; code: string; category: RequirementCategory
   title: string; description: string; is_mandatory: boolean; score_weight: number; score_group: ScoreGroup
   origin: 'extracted' | 'manual'
   source_asset_id?: number; source_doc_id?: number; source_chunk_id?: number; source_hash: string
-  source_loc: { doc_id?: number; chunk_id?: number; section_code?: string; section_title?: string; page_start?: number; page_end?: number; doc_title?: string; table?: number; row?: number; [k: string]: unknown }
+  source_loc: { doc_id?: number; chunk_id?: number; section_code?: string; section_title?: string; page_start?: number; page_end?: number; doc_title?: string; table?: number; row?: number; covered_by?: string[]; [k: string]: unknown }
   evidence_run_id?: number; evidence_ids: number[]; evidence_gap: string
   review_status: 'draft' | 'confirmed' | 'needs_revision'
   created_by: string; updated_by: string; approved_by: string; created_at: string; updated_at: string
   mapped_section_codes: string[]
+  veto_kind: VetoKind; veto_status: VetoStatus; veto_note: string; veto_checked_by: string; veto_checked_at?: string
+  /** 所属分包（空串为不分包）；out_of_bid 表示不在本次投标分包内。 */
+  lot: string; out_of_bid: boolean
 }
 export interface RequirementManifest {
   tenant_id: string; task_id: number; epoch: number; status: 'draft' | 'confirmed' | 'stale'
   confirmed_at?: string; approved_by: string; updated_by: string; updated_at: string
+  /** 投标截止时间；bid_deadline_source.origin 为 extracted（附原文位置）或 manual。 */
+  bid_deadline?: string
+  bid_deadline_source: { origin?: 'extracted' | 'manual'; text?: string; page?: number; doc_role?: string; by?: string; [k: string]: unknown }
+  /** 本次投标分包，空数组表示全部分包。 */
+  bid_lots: string[]
 }
+export interface VetoStats { total: number; passed: number; failed: number; pending: number }
 export interface RequirementStats {
   total: number; by_category: Record<string, number>; mandatory: number; confirmed: number; needs_revision: number
   with_evidence: number; evidence_gaps: number; no_evidence: number; outline_version: number; mapped: number; unmapped: string[]
   out_of_scope: number
+  out_of_bid: number; veto: VetoStats; lots: string[]
 }
+/** PUT /api/tasks/{id}/requirements/bid-scope：未给出的字段不变；bid_deadline 为空串时清除人工值。 */
+export interface BidScopeInput { bid_lots?: string[]; bid_deadline?: string }
 /** 评分项分组：technical 技术 / commercial 商务 / price 价格（由报价文件响应，不进入技术标大纲）；空串为未分类。 */
 export type ScoreGroup = '' | 'technical' | 'commercial' | 'price'
 export interface ScoringGroupSummary { group: string; score_group: ScoreGroup; declared: number; extracted: number; items: number }
@@ -635,11 +660,13 @@ export interface RequirementsView { manifest: RequirementManifest; items: Requir
 export interface ExtractResult {
   created: number; updated: number; unchanged: number; skipped_manual: number; scanned_chunks: number; codes: string[]
   scoring_items: number; orphaned: number; orphan_codes: string[]
+  veto_items: number; bid_deadline?: string
 }
 export interface RequirementInput {
   code?: string; category?: RequirementCategory; title?: string; description?: string; is_mandatory?: boolean; score_weight?: number
   score_group?: ScoreGroup
   source_chunk_id?: number; evidence_run_id?: number; evidence_ids?: number[]; evidence_gap?: string; review_status?: string
+  veto_kind?: VetoKind; lot?: string
 }
 
 export type OutlineStatus = 'draft' | 'pending_approval' | 'approved' | 'superseded'

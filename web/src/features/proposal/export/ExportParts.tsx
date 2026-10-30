@@ -7,13 +7,14 @@ import {
 } from 'lucide-react'
 import { api, errorText, ApiError, saveBlob } from '../../../api/client'
 import type {
-  ChartType, ExportFormat, ExportJob, ExportPreflight, ExportReadiness, ExportWarning, ProposalChart,
+  ChartType, ExportFormat, ExportJob, ExportPreflight, ExportWarning, ProposalChart,
 } from '../../../api/types'
-import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Pre, Select, Spinner, TextArea, cx, useToast } from '../../../components/ui'
+import { Badge, Button, Card, Empty, ErrorBanner, Field, IconButton, Input, Modal, Notice, Pre, Select, Spinner, TextArea, cx, useConfirm, useToast } from '../../../components/ui'
+import BlockerList from '../../task-workspace/BlockerList'
 import type { Tone } from '../../../components/ui'
 import { useAsync, useInterval } from '../../../hooks/useAsync'
 import {
-  chartRenderLabel, chartTypeLabel, exportBlockerLabel, exportStatusLabel, exportWarningLabel, fmtBytes, fmtTime,
+  chartRenderLabel, chartTypeLabel, exportStatusLabel, exportWarningLabel, fmtBytes, fmtTime,
 } from '../../../lib/format'
 
 // ---------------------------------------------------------------------------
@@ -103,6 +104,7 @@ function ChartBody({ taskID, chart }: { taskID: number; chart: ProposalChart }) 
 export function ChartsCard({ taskID, sectionID, currentRevNo, writable, tick }:
   { taskID: number; sectionID: number; currentRevNo: number; writable: boolean; tick: number }) {
   const toast = useToast()
+  const confirm = useConfirm()
   const [refresh, setRefresh] = useState(0)
   const data = useAsync(() => api.charts(taskID, sectionID), [taskID, sectionID, tick, refresh, currentRevNo])
   const [open, setOpen] = useState(false)
@@ -118,7 +120,7 @@ export function ChartsCard({ taskID, sectionID, currentRevNo, writable, tick }:
   return (
     <Card title={<>章节图表 <span className="text-xs font-normal text-slate-400">绑定修订；章节产生新修订后旧图表失效、不进入导出</span></>}
       actions={<>
-        <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} onClick={() => setRefresh((n) => n + 1)} />
+        <IconButton label="刷新章节图表" onClick={() => setRefresh((n) => n + 1)}><RefreshCw className="size-4" /></IconButton>
         <Button size="sm" variant="primary" icon={<Wand2 className="size-3.5" />} disabled={!currentRevNo} onClick={() => setOpen(true)}>生成图表</Button>
       </>}>
       <ErrorBanner error={data.error} onRetry={data.reload} />
@@ -147,7 +149,7 @@ export function ChartsCard({ taskID, sectionID, currentRevNo, writable, tick }:
                 {c.source_format === 'mermaid' && <Button size="sm" icon={<RefreshCw className="size-3.5" />} loading={busy === `r${c.id}`}
                   onClick={() => act(`r${c.id}`, () => api.renderChart(taskID, c.id), '已重新渲染')}>重新渲染</Button>}
                 <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} loading={busy === `d${c.id}`}
-                  onClick={() => { if (confirm(`删除图表《${c.title}》？`)) void act(`d${c.id}`, () => api.deleteChart(taskID, c.id), '已删除') }}>删除</Button>
+                  onClick={async () => { if (await confirm({ title: `删除图表《${c.title}》？`, message: '删除后不会进入导出；已固化在历史导出任务中的快照不受影响。', confirmLabel: '删除', danger: true })) void act(`d${c.id}`, () => api.deleteChart(taskID, c.id), '已删除') }}>删除</Button>
               </div>
             </div>
           ))}
@@ -202,24 +204,6 @@ function jobTone(s: string): Tone {
   return s === 'succeeded' ? 'green' : s === 'failed' ? 'red' : s === 'running' ? 'blue' : 'slate'
 }
 
-function Blockers({ r }: { r: ExportReadiness }) {
-  const groups = new Map<string, ExportReadiness['blockers']>()
-  for (const b of r.blockers) groups.set(b.kind, [...(groups.get(b.kind) ?? []), b])
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1.5">{[...groups.entries()].map(([k, list]) => <Badge key={k} tone="red">{exportBlockerLabel[k] ?? k} {list.length}</Badge>)}</div>
-      <ul className="max-h-64 space-y-1 overflow-y-auto text-sm">
-        {r.blockers.map((b, i) => (
-          <li key={i} className="flex gap-2 rounded border border-red-100 bg-red-50/50 px-2 py-1">
-            <span className="shrink-0 text-xs font-medium text-red-700">{exportBlockerLabel[b.kind] ?? b.kind}</span>
-            <span className="text-slate-700">{b.message}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
 function Warnings({ list }: { list: ExportWarning[] }) {
   if (!list.length) return null
   return (
@@ -234,7 +218,7 @@ function Warnings({ list }: { list: ExportWarning[] }) {
   )
 }
 
-export function ExportPanel({ taskID, tick }: { taskID: number; tick: number }) {
+export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick: number; onCreated?: () => void }) {
   const toast = useToast()
   const [refresh, setRefresh] = useState(0)
   const pre = useAsync(() => api.exportPreflight(taskID), [taskID, tick, refresh])
@@ -258,6 +242,7 @@ export function ExportPanel({ taskID, tick }: { taskID: number; tick: number }) 
       const r = await api.createExport(taskID, { formats: fs, template_id: template || undefined, bidder })
       toast('ok', `已创建导出任务 ${r.jobs.map((j) => `#${j.id} ${j.format.toUpperCase()}`).join('、')}，已锁定 ${Object.keys(r.jobs[0].rev_snapshot).length} 个章节修订`)
       setRefresh((n) => n + 1)
+      onCreated?.()
     } catch (e) {
       if (e instanceof ApiError && e.status === 422 && e.code === 'export_blocked') {
         setBlocked((e.data as { preflight: ExportPreflight }).preflight)
@@ -293,14 +278,16 @@ export function ExportPanel({ taskID, tick }: { taskID: number; tick: number }) 
         ? <Badge tone="green"><CheckCircle2 className="size-3" />可以导出</Badge>
         : <Badge tone="red"><ShieldAlert className="size-3" />{r.blockers.length} 项阻止导出</Badge>)}
         {r && <span className="text-xs font-normal text-slate-400">大纲 v{r.outline_version || '—'} · 检查于 {fmtTime(r.checked_at)}</span>}</>}
-        actions={<Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} onClick={() => { setBlocked(undefined); setRefresh((n) => n + 1) }} />}>
+        subtitle="以服务器 exports/preflight 结果为准；创建导出时服务端会在锁定快照时再次校验"
+        actions={<IconButton label="刷新导出门禁" onClick={() => { setBlocked(undefined); setRefresh((n) => n + 1) }}><RefreshCw className="size-4" /></IconButton>}>
         <ErrorBanner error={pre.error} onRetry={pre.reload} />
+        {blocked && <Notice tone="danger" className="mb-3">创建导出被拒绝：服务端在锁定快照时重新校验发现阻断，下方已改用服务器返回的最新门禁；已选格式与模板保留，未生成导出任务。</Notice>}
         {!r ? <Spinner /> : (
           <div className="space-y-3">
             {r.ready
               ? <p className="text-sm text-emerald-700">全部章节已批准当前修订，响应矩阵全部实质响应且未失效，最新一致性核验无待处理结论，证据均有效。
                 创建导出时在同一数据库事务内固化章节修订、图表与偏离表快照，之后再编辑不影响该次导出。</p>
-              : <Blockers r={r} />}
+              : <BlockerList taskId={taskID} blockers={r.blockers} />}
             <Warnings list={warnings} />
             {p && <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
               <span>LibreOffice：{p.status.office ? <span className="text-emerald-700">{p.status.office_version}</span> : <span className="text-red-600">不可用（PDF 将失败，DOCX 目录页码不刷新）</span>}</span>
@@ -355,7 +342,8 @@ export function ExportPanel({ taskID, tick }: { taskID: number; tick: number }) 
           标题按样式名「heading 1~6」匹配。目录与页码由 LibreOffice 刷新，Word 打开时无需手动更新域。</p>
       </Card>
 
-      <Card title="导出任务" actions={<Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} onClick={() => void jobs.reload()} />}>
+      <Card title="导出任务" subtitle={active ? '有排队或执行中的任务，每 2 秒刷新；全部结束后停止轮询' : '导出成功只表示产物已生成，不代表已签章或已被交易平台接收'}
+        actions={<IconButton label="刷新导出任务" onClick={() => void jobs.reload()}><RefreshCw className="size-4" /></IconButton>}>
         <ErrorBanner error={jobs.error} onRetry={jobs.reload} />
         {jobs.loading && !jobs.data ? <Spinner /> : list.length === 0 ? <Empty>尚无导出任务</Empty> : (
           <table className="w-full text-sm">

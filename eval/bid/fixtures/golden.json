@@ -1,0 +1,23 @@
+{
+  "fixture_version": 1,
+  "tender_no": "DEMO-2026-SMART-PARK-001",
+  "bid_deadline": "2026-11-20T09:00:00+08:00",
+  "veto_total": 11,
+  "veto_by_kind": {
+    "qualification": 3,
+    "conformity": 2,
+    "statutory": 6
+  },
+  "scoring_total": 3,
+  "scoring_weights": {
+    "技术方案": 50,
+    "类似项目业绩": 30,
+    "投标报价": 20
+  },
+  "mandatory_clause_total": 1,
+  "non_scoring_required_total": 8,
+  "price_items_out_of_scope": 1,
+  "superseded": 1,
+  "mapped_requirements": 11,
+  "outline_sections": 6
+}

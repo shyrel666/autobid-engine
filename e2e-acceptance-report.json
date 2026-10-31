@@ -1,0 +1,1076 @@
+{
+  "schema": "autobid.e2e.acceptance/v1",
+  "level": "E",
+  "generated_at": "2026-10-31T11:58:41+08:00",
+  "git_commit": "37b4cc1",
+  "run_id": "E2E-20261030-235837",
+  "go_version": "go1.27.0",
+  "fixture_version": 1,
+  "database": {
+    "kind": "postgresql",
+    "schema_migrated": true
+  },
+  "summary": {
+    "passed": 118,
+    "failed": 0,
+    "blocked": 8
+  },
+  "stages": [
+    {
+      "id": "main.setup",
+      "title": "main.setup",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.setup.create_task",
+          "status": "pass",
+          "expected": "task created",
+          "actual": "task created"
+        },
+        {
+          "id": "main.setup.origin_fact",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1"
+        }
+      ]
+    },
+    {
+      "id": "main.ingest",
+      "title": "main.ingest",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.ingest.tender_role",
+          "status": "pass",
+          "expected": "tender",
+          "actual": "tender"
+        },
+        {
+          "id": "main.ingest.tender_chunks",
+          "status": "pass",
+          "expected": "\u003e0",
+          "actual": "21"
+        },
+        {
+          "id": "main.ingest.tender_tables",
+          "status": "pass",
+          "expected": "\u003e0",
+          "actual": "3"
+        },
+        {
+          "id": "main.ingest.tender_published",
+          "status": "pass",
+          "expected": "2026-10-01T09:00:00+08:00",
+          "actual": "2026-10-01T09:00:00+08:00"
+        },
+        {
+          "id": "main.ingest.correction_role",
+          "status": "pass",
+          "expected": "correction",
+          "actual": "correction"
+        },
+        {
+          "id": "main.ingest.correction_chunks",
+          "status": "pass",
+          "expected": "\u003e0",
+          "actual": "1"
+        },
+        {
+          "id": "main.ingest.correction_later",
+          "status": "pass",
+          "expected": "T2\u003eT1",
+          "actual": "2026-10-10T09:00:00+08:00"
+        }
+      ]
+    },
+    {
+      "id": "main.census",
+      "title": "main.census",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.census.tender_sections",
+          "status": "pass",
+          "expected": "20 required codes",
+          "actual": "missing=0"
+        },
+        {
+          "id": "main.census.correction_section",
+          "status": "pass",
+          "expected": "2.3.2",
+          "actual": "missing=0"
+        },
+        {
+          "id": "main.census.table.1.2",
+          "status": "pass",
+          "expected": "1 table",
+          "actual": "table_count=1"
+        },
+        {
+          "id": "main.census.table.1.3",
+          "status": "pass",
+          "expected": "1 table",
+          "actual": "table_count=1"
+        },
+        {
+          "id": "main.census.table.3.1",
+          "status": "pass",
+          "expected": "1 table",
+          "actual": "table_count=1"
+        }
+      ]
+    },
+    {
+      "id": "main.extract",
+      "title": "main.extract",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "golden.veto_total",
+          "status": "pass",
+          "expected": "11",
+          "actual": "11",
+          "detail": "by_kind=conformity=2,qualification=3,statutory=6"
+        },
+        {
+          "id": "golden.veto.qualification",
+          "status": "pass",
+          "expected": "3",
+          "actual": "3"
+        },
+        {
+          "id": "golden.veto.conformity",
+          "status": "pass",
+          "expected": "2",
+          "actual": "2"
+        },
+        {
+          "id": "golden.veto.statutory",
+          "status": "pass",
+          "expected": "6",
+          "actual": "6"
+        },
+        {
+          "id": "golden.scoring_total",
+          "status": "pass",
+          "expected": "3",
+          "actual": "3"
+        },
+        {
+          "id": "golden.scoring_weights",
+          "status": "pass",
+          "expected": "技术方案=50,投标报价=20,类似项目业绩=30",
+          "actual": "技术方案=50,投标报价=20,类似项目业绩=30"
+        },
+        {
+          "id": "golden.mandatory_clause_total",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1"
+        },
+        {
+          "id": "golden.non_scoring_required_total",
+          "status": "pass",
+          "expected": "8",
+          "actual": "8"
+        },
+        {
+          "id": "golden.price_out_of_scope",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1"
+        },
+        {
+          "id": "golden.superseded",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1"
+        },
+        {
+          "id": "golden.bid_deadline",
+          "status": "pass",
+          "expected": "2026-11-20T09:00:00+08:00",
+          "actual": "2026-11-20T09:00:00+08:00"
+        }
+      ]
+    },
+    {
+      "id": "main.confirm",
+      "title": "main.confirm",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.confirm.status",
+          "status": "pass",
+          "expected": "confirmed",
+          "actual": "confirmed"
+        },
+        {
+          "id": "main.confirm.epoch",
+          "status": "pass",
+          "expected": "\u003e0",
+          "actual": "26"
+        }
+      ]
+    },
+    {
+      "id": "main.veto",
+      "title": "main.veto",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.veto.all_passed",
+          "status": "pass",
+          "expected": "11/11",
+          "actual": "11/11 failed=0 pending=0"
+        }
+      ]
+    },
+    {
+      "id": "main.outline",
+      "title": "main.outline",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.outline.version",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1"
+        },
+        {
+          "id": "main.outline.epoch",
+          "status": "pass",
+          "expected": "manifest epoch",
+          "actual": "26",
+          "detail": "大纲 epoch 必须等于 S5 记录的清单 epoch"
+        },
+        {
+          "id": "main.outline.sections",
+          "status": "pass",
+          "expected": "6",
+          "actual": "6"
+        },
+        {
+          "id": "main.outline.mapped",
+          "status": "pass",
+          "expected": "11",
+          "actual": "11/11"
+        },
+        {
+          "id": "main.outline.approved",
+          "status": "pass",
+          "expected": "approved",
+          "actual": "approved"
+        },
+        {
+          "id": "main.outline.version_stable",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1"
+        },
+        {
+          "id": "main.outline.epoch_stable",
+          "status": "pass",
+          "expected": "26",
+          "actual": "26"
+        }
+      ]
+    },
+    {
+      "id": "main.write",
+      "title": "main.write",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.write.1",
+          "status": "pass",
+          "expected": "applied",
+          "actual": "rev=1"
+        },
+        {
+          "id": "main.write.2",
+          "status": "pass",
+          "expected": "applied",
+          "actual": "rev=1"
+        },
+        {
+          "id": "main.write.2.1",
+          "status": "pass",
+          "expected": "applied",
+          "actual": "rev=1"
+        },
+        {
+          "id": "main.write.3",
+          "status": "pass",
+          "expected": "applied",
+          "actual": "rev=1"
+        },
+        {
+          "id": "main.write.4",
+          "status": "pass",
+          "expected": "applied",
+          "actual": "rev=1"
+        },
+        {
+          "id": "main.write.5",
+          "status": "pass",
+          "expected": "applied",
+          "actual": "rev=1"
+        }
+      ]
+    },
+    {
+      "id": "main.approve",
+      "title": "main.approve",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.approve.all",
+          "status": "pass",
+          "expected": "6/6",
+          "actual": "6/6"
+        },
+        {
+          "id": "main.approve.bound",
+          "status": "pass",
+          "expected": "6/6",
+          "actual": "6/6",
+          "detail": "每章 approved_rev_no == current_rev_no"
+        }
+      ]
+    },
+    {
+      "id": "main.matrix",
+      "title": "main.matrix",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.matrix.checked",
+          "status": "pass",
+          "expected": "11",
+          "actual": "11"
+        },
+        {
+          "id": "main.matrix.verified",
+          "status": "pass",
+          "expected": "11",
+          "actual": "11"
+        },
+        {
+          "id": "main.matrix.failed",
+          "status": "pass",
+          "expected": "0",
+          "actual": "0"
+        },
+        {
+          "id": "main.matrix.pending",
+          "status": "pass",
+          "expected": "0",
+          "actual": "0"
+        },
+        {
+          "id": "main.matrix.stale",
+          "status": "pass",
+          "expected": "0",
+          "actual": "0"
+        }
+      ]
+    },
+    {
+      "id": "main.consistency",
+      "title": "main.consistency",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.consistency.contradictions",
+          "status": "pass",
+          "expected": "0",
+          "actual": "0"
+        },
+        {
+          "id": "main.consistency.omissions",
+          "status": "pass",
+          "expected": "0",
+          "actual": "0"
+        },
+        {
+          "id": "main.consistency.findings",
+          "status": "pass",
+          "expected": "0",
+          "actual": "0"
+        }
+      ]
+    },
+    {
+      "id": "main.readiness",
+      "title": "main.readiness",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.readiness.ready",
+          "status": "pass",
+          "expected": "true",
+          "actual": "true"
+        },
+        {
+          "id": "main.readiness.blockers",
+          "status": "pass",
+          "expected": "0",
+          "actual": "0"
+        }
+      ]
+    },
+    {
+      "id": "main.export",
+      "title": "main.export",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "main.export.jobs",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1"
+        },
+        {
+          "id": "main.export.status",
+          "status": "pass",
+          "expected": "queued",
+          "actual": "queued"
+        },
+        {
+          "id": "main.export.preflight",
+          "status": "pass",
+          "expected": "ready",
+          "actual": "true"
+        }
+      ]
+    },
+    {
+      "id": "main.export_readback",
+      "title": "main.export_readback",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "export.claim",
+          "status": "pass",
+          "expected": "running",
+          "actual": "running"
+        },
+        {
+          "id": "export.status",
+          "status": "pass",
+          "expected": "succeeded",
+          "actual": "succeeded"
+        },
+        {
+          "id": "export.artifact_size",
+          "status": "pass",
+          "expected": "matches task record",
+          "actual": "match"
+        },
+        {
+          "id": "export.artifact_hash",
+          "status": "pass",
+          "expected": "matches task record",
+          "actual": "match"
+        },
+        {
+          "id": "export.parse",
+          "status": "pass",
+          "expected": "no error",
+          "actual": "ok"
+        },
+        {
+          "id": "export.headings",
+          "status": "pass",
+          "expected": "6",
+          "actual": "6"
+        },
+        {
+          "id": "export.body",
+          "status": "pass",
+          "expected": "present",
+          "actual": "true"
+        },
+        {
+          "id": "export.toc",
+          "status": "pass",
+          "expected": "refreshed or warned",
+          "actual": "refreshed=false warnings=toc_not_refreshed",
+          "detail": "M1 只导出 DOCX；目录未刷新允许为 false，但必须记录 toc_not_refreshed 警告"
+        }
+      ]
+    }
+  ],
+  "gates": [
+    {
+      "id": "G01",
+      "gate": "no_approved_outline",
+      "blocked": true,
+      "observed": "no_approved_outline",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G01.trigger",
+          "status": "pass",
+          "expected": "no_approved_outline",
+          "actual": "no_approved_outline"
+        },
+        {
+          "id": "G01.remediated",
+          "status": "pass",
+          "expected": "no no_approved_outline",
+          "actual": "veto_pending,section_not_approved,matrix_unverified,consistency_not_run"
+        }
+      ]
+    },
+    {
+      "id": "G02",
+      "gate": "ErrRequirementsNotConfirmed",
+      "blocked": true,
+      "observed": "ErrRequirementsNotConfirmed",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G02.trigger",
+          "status": "pass",
+          "expected": "ErrRequirementsNotConfirmed",
+          "actual": "ErrRequirementsNotConfirmed"
+        },
+        {
+          "id": "G02.remediated",
+          "status": "pass",
+          "expected": "submitted",
+          "actual": "submitted"
+        }
+      ]
+    },
+    {
+      "id": "G03",
+      "gate": "veto_pending",
+      "blocked": true,
+      "observed": "veto_pending,section_not_approved,matrix_unverified,consistency_not_run",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G03.trigger",
+          "status": "pass",
+          "expected": "veto_pending",
+          "actual": "veto_pending,section_not_approved,matrix_unverified,consistency_not_run",
+          "detail": "全部否决项保持 pending"
+        },
+        {
+          "id": "G03.remediated",
+          "status": "pass",
+          "expected": "no veto_pending",
+          "actual": "section_not_approved,matrix_unverified,consistency_not_run"
+        }
+      ]
+    },
+    {
+      "id": "G04",
+      "gate": "veto_failed",
+      "blocked": true,
+      "observed": "veto_failed,section_not_approved,matrix_unverified,consistency_not_run",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G04.trigger",
+          "status": "pass",
+          "expected": "veto_failed",
+          "actual": "veto_failed,section_not_approved,matrix_unverified,consistency_not_run"
+        },
+        {
+          "id": "G04.remediated",
+          "status": "pass",
+          "expected": "no veto_failed",
+          "actual": "section_not_approved,matrix_unverified,consistency_not_run"
+        }
+      ]
+    },
+    {
+      "id": "G05",
+      "gate": "no_bid_decision",
+      "blocked": true,
+      "observed": "no_bid_decision,section_not_approved,matrix_unverified,consistency_not_run",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G05.trigger",
+          "status": "pass",
+          "expected": "no_bid_decision",
+          "actual": "no_bid_decision,section_not_approved,matrix_unverified,consistency_not_run"
+        },
+        {
+          "id": "G05.remediated",
+          "status": "pass",
+          "expected": "no no_bid_decision",
+          "actual": "section_not_approved,matrix_unverified,consistency_not_run",
+          "detail": "已确认无 failed 否决项"
+        }
+      ]
+    },
+    {
+      "id": "G06",
+      "gate": "no_approved_outline (requirement change)",
+      "blocked": true,
+      "observed": "no_approved_outline",
+      "remediated": true,
+      "full_ready": true,
+      "checks": [
+        {
+          "id": "G06.trigger",
+          "status": "pass",
+          "expected": "no_approved_outline",
+          "actual": "no_approved_outline"
+        },
+        {
+          "id": "G06.old_outline",
+          "status": "pass",
+          "expected": "superseded",
+          "actual": "superseded"
+        },
+        {
+          "id": "G06.new_draft",
+          "status": "pass",
+          "expected": "draft",
+          "actual": "draft"
+        },
+        {
+          "id": "G06.epoch_grew",
+          "status": "pass",
+          "expected": "\u003e",
+          "actual": "27\u003e26"
+        },
+        {
+          "id": "G06.unmapped",
+          "status": "pass",
+          "expected": "NEW-1",
+          "actual": "true"
+        },
+        {
+          "id": "G06.confirmed",
+          "status": "pass",
+          "expected": "confirmed",
+          "actual": "confirmed"
+        },
+        {
+          "id": "G06.mapped_new",
+          "status": "pass",
+          "expected": "true",
+          "actual": "true",
+          "detail": "编辑自动派生草案，把新要求映射到已有章节"
+        },
+        {
+          "id": "G06.approved",
+          "status": "pass",
+          "expected": "approved",
+          "actual": "approved"
+        },
+        {
+          "id": "G06.coverage",
+          "status": "pass",
+          "expected": "12/12",
+          "actual": "12/12"
+        },
+        {
+          "id": "G06.sections",
+          "status": "pass",
+          "expected": "6/6",
+          "actual": "written=6 approved=6",
+          "detail": "新大纲全部章节重新写回并批准"
+        },
+        {
+          "id": "G06.matrix",
+          "status": "pass",
+          "expected": "12/12",
+          "actual": "verified=12 failed=0 pending=0"
+        },
+        {
+          "id": "G06.consistency",
+          "status": "pass",
+          "expected": "0 findings",
+          "actual": "findings=0 current=true"
+        },
+        {
+          "id": "G06.full_ready",
+          "status": "pass",
+          "expected": "true",
+          "actual": "true",
+          "detail": "新增要求后完整恢复"
+        }
+      ]
+    },
+    {
+      "id": "G07",
+      "gate": "section_not_approved",
+      "blocked": true,
+      "observed": "section_not_approved,matrix_stale,consistency_stale",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G07.trigger",
+          "status": "pass",
+          "expected": "section_not_approved",
+          "actual": "section_not_approved,matrix_stale,consistency_stale"
+        },
+        {
+          "id": "G07.remediated",
+          "status": "pass",
+          "expected": "no section_not_approved",
+          "actual": "matrix_stale,consistency_stale"
+        }
+      ]
+    },
+    {
+      "id": "G08",
+      "gate": "matrix_failed",
+      "blocked": true,
+      "observed": "matrix_failed,consistency_stale",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G08.matrix_failed",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1",
+          "detail": "技术方案@2.1:failed 正文仅有章节名、要求复述或「详见」类引用，没有实质应答"
+        },
+        {
+          "id": "G08.trigger",
+          "status": "pass",
+          "expected": "matrix_failed",
+          "actual": "matrix_failed,consistency_stale"
+        },
+        {
+          "id": "G08.remediated",
+          "status": "pass",
+          "expected": "verified",
+          "actual": "verified=1 failed=0"
+        }
+      ]
+    },
+    {
+      "id": "G09",
+      "gate": "finding_open",
+      "blocked": true,
+      "observed": "finding_open",
+      "remediated": true,
+      "full_ready": true,
+      "checks": [
+        {
+          "id": "G09.matrix",
+          "status": "pass",
+          "expected": "2 verified",
+          "actual": "verified=2 failed=0"
+        },
+        {
+          "id": "G09.trigger",
+          "status": "pass",
+          "expected": "contradiction\u003e0",
+          "actual": "contradictions=1"
+        },
+        {
+          "id": "G09.finding_open",
+          "status": "pass",
+          "expected": "finding_open",
+          "actual": "finding_open"
+        },
+        {
+          "id": "G09.sections",
+          "status": "pass",
+          "expected": "2/2",
+          "actual": "2/2",
+          "detail": "重新保存并批准受影响章节"
+        },
+        {
+          "id": "G09.remediated",
+          "status": "pass",
+          "expected": "no open finding",
+          "actual": "findings=0"
+        },
+        {
+          "id": "G09.full_ready",
+          "status": "pass",
+          "expected": "true",
+          "actual": "true",
+          "detail": "统一工期承诺后完整恢复"
+        }
+      ]
+    },
+    {
+      "id": "G10",
+      "gate": "conflict_candidate",
+      "blocked": true,
+      "observed": "conflict_candidate",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G10.trigger",
+          "status": "pass",
+          "expected": "conflict_candidate",
+          "actual": "conflict_candidate",
+          "detail": "current_rev_no=1"
+        },
+        {
+          "id": "G10.remediated",
+          "status": "pass",
+          "expected": "applied",
+          "actual": "applied"
+        }
+      ]
+    },
+    {
+      "id": "G11",
+      "gate": "no_approved_outline (correction supersedes)",
+      "blocked": true,
+      "observed": "no_approved_outline",
+      "remediated": true,
+      "full_ready": true,
+      "checks": [
+        {
+          "id": "G11.superseded",
+          "status": "pass",
+          "expected": "1",
+          "actual": "1"
+        },
+        {
+          "id": "G11.stale_link",
+          "status": "pass",
+          "expected": "old-\u003enew link",
+          "actual": "stale=true link=true"
+        },
+        {
+          "id": "G11.trigger",
+          "status": "pass",
+          "expected": "no_approved_outline",
+          "actual": "no_approved_outline"
+        },
+        {
+          "id": "G11.old_outline",
+          "status": "pass",
+          "expected": "superseded",
+          "actual": "true"
+        },
+        {
+          "id": "G11.auto_v2",
+          "status": "pass",
+          "expected": "maps new, not old",
+          "actual": "new=true old=false"
+        },
+        {
+          "id": "G11.confirmed",
+          "status": "pass",
+          "expected": "confirmed",
+          "actual": "confirmed"
+        },
+        {
+          "id": "G11.approved",
+          "status": "pass",
+          "expected": "approved",
+          "actual": "approved",
+          "detail": "直接使用自动派生 v2，未再次调用 CreateOutline 或 UpdateOutline"
+        },
+        {
+          "id": "G11.sections",
+          "status": "pass",
+          "expected": "6/6",
+          "actual": "written=6 approved=6",
+          "detail": "新大纲全部章节重新写回并批准"
+        },
+        {
+          "id": "G11.matrix",
+          "status": "pass",
+          "expected": "11/11",
+          "actual": "verified=11 failed=0 pending=0"
+        },
+        {
+          "id": "G11.consistency",
+          "status": "pass",
+          "expected": "0 findings",
+          "actual": "findings=0 current=true"
+        },
+        {
+          "id": "G11.full_ready",
+          "status": "pass",
+          "expected": "true",
+          "actual": "true",
+          "detail": "更正覆盖后完整恢复"
+        }
+      ]
+    },
+    {
+      "id": "G12",
+      "gate": "unknown_evidence",
+      "blocked": true,
+      "observed": "unknown_evidence",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G12.known_kept",
+          "status": "pass",
+          "expected": "7",
+          "actual": "7"
+        },
+        {
+          "id": "G12.trigger",
+          "status": "pass",
+          "expected": "1 unknown_evidence gap",
+          "actual": "1"
+        },
+        {
+          "id": "G12.remediated",
+          "status": "pass",
+          "expected": "0 unknown_evidence",
+          "actual": "0"
+        }
+      ]
+    },
+    {
+      "id": "G13",
+      "gate": "ExportBlockedError",
+      "blocked": true,
+      "observed": "ExportBlockedError: veto_pending",
+      "remediated": true,
+      "checks": [
+        {
+          "id": "G13.veto_pending",
+          "status": "pass",
+          "expected": "veto_pending",
+          "actual": "veto_pending"
+        },
+        {
+          "id": "G13.trigger",
+          "status": "pass",
+          "expected": "ExportBlockedError",
+          "actual": "ExportBlockedError: veto_pending",
+          "detail": "veto_pending"
+        },
+        {
+          "id": "G13.no_job",
+          "status": "pass",
+          "expected": "0",
+          "actual": "0"
+        },
+        {
+          "id": "G13.remediated",
+          "status": "pass",
+          "expected": "1 queued",
+          "actual": "jobs=1 status=queued"
+        }
+      ]
+    }
+  ],
+  "determinism": {
+    "enabled": true,
+    "consistent": true,
+    "differences": null
+  },
+  "deferred": [
+    {
+      "id": "D2.evidence",
+      "status": "blocked",
+      "reason": "证据检索与绑定、过期证书、子公司业绩、无证据业绩：依赖 D2 证据库，M1 只有虚构企业文件且不消费"
+    },
+    {
+      "id": "evidence_binding",
+      "status": "blocked",
+      "reason": "虚拟企业 JSON 仅在 M1 生成、未导入知识库、未绑定证据，不能宣称证据链路已覆盖"
+    },
+    {
+      "id": "D2.commitment",
+      "status": "blocked",
+      "reason": "承诺低于评分阈值、报价不一致、报价与商务文件冲突、型号错误与参数低于阈值、承诺台账：依赖 D2/D3，M1 未实现"
+    },
+    {
+      "id": "D3.writing",
+      "status": "blocked",
+      "reason": "真实大模型写作质量与句子级事实核验：M1 使用确定性替身写作，只验流程"
+    },
+    {
+      "id": "6B.pdf",
+      "status": "blocked",
+      "reason": "PDF 导出与 LibreOffice 目录页码刷新：M1 只导出 DOCX，目录未刷新仅记警告"
+    },
+    {
+      "id": "V.accuracy",
+      "status": "blocked",
+      "reason": "真实项目/企业的准确率与召回率：无真实材料与人工标注，不能做 V 级"
+    },
+    {
+      "id": "4.4.multi_agent",
+      "status": "blocked",
+      "reason": "多 Agent 检索与写作：无稳定收益证据前保持关闭"
+    },
+    {
+      "id": "API.UI",
+      "status": "blocked",
+      "reason": "HTTP REST 路由、SSE 与浏览器端到端操作：本执行器直接调用 Go 业务接口，API/UI 需另行验收"
+    }
+  ],
+  "artifacts": [
+    {
+      "kind": "extraction_census",
+      "path": "e2e-artifacts/extraction-census-r1.md",
+      "size": 4149,
+      "sha256": "02f9a2b575bf0a934801e04a0fdde86bdc0c03ff919b1bb8ad2567d31149b871",
+      "note": "分块普查表（编号/标题/内容摘要/提取要求）"
+    },
+    {
+      "kind": "export_docx",
+      "path": "e2e-artifacts/exports/main-r1.docx",
+      "size": 8719,
+      "sha256": "f92513760c7d233433435c72fc91a22fb2d32053b248d08285a12286e04d47b7",
+      "note": "主链路导出的技术标 DOCX（M1 未启用 LibreOffice）"
+    },
+    {
+      "kind": "tender_docx",
+      "path": "e2e-artifacts/fixtures/tender.docx",
+      "size": 3223,
+      "sha256": "914a66b484352da06e44b8e9ec0e3cc97f5b3c5471b2496a6344732ee1390877",
+      "note": "确定性生成的虚构招标 DOCX"
+    },
+    {
+      "kind": "correction_docx",
+      "path": "e2e-artifacts/fixtures/correction.docx",
+      "size": 1914,
+      "sha256": "625a9907477c564c2beb702f08eff0679106b4fc2172f1f7a1e65f2132d54941",
+      "note": "确定性生成的虚构更正公告 DOCX"
+    },
+    {
+      "kind": "g09_docx",
+      "path": "e2e-artifacts/fixtures/g09-consistency.docx",
+      "size": 1902,
+      "sha256": "6f372f150a98ec70cdc9baa8685b76c173b6b86af866a775c9c414b7ae6b886a",
+      "note": "G09 一致性冲突专用夹具 DOCX"
+    },
+    {
+      "kind": "company_profile",
+      "path": "eval/bid/fixtures/company/company-profile.json",
+      "size": 349,
+      "sha256": "d813d4cae700bac0bf26bd07ab9b5ab1431d5bf21d78d98d586d2c66c571d1cc",
+      "note": "M1 只生成不消费的虚构企业资料"
+    },
+    {
+      "kind": "company_credentials",
+      "path": "eval/bid/fixtures/company/credentials.json",
+      "size": 457,
+      "sha256": "d54eeea81cabe4db55b705ca3a2809829d2049062d9389860daf276c3d6b0250",
+      "note": "M1 只生成不消费的虚构资质资料"
+    },
+    {
+      "kind": "company_performance",
+      "path": "eval/bid/fixtures/company/performance.json",
+      "size": 440,
+      "sha256": "dfe16dda64625b3bd66bc98902d4e9a9657ed5a959af3fc1a9691f8f53e58aec",
+      "note": "M1 只生成不消费的虚构业绩资料"
+    }
+  ],
+  "cleanup": {
+    "mode": "delete-created-tasks",
+    "tasks": 26,
+    "status": "removed",
+    "detail": "已按 tasks.id 精确删除；未 DROP 表、未删除其他任务、未清理全局资产。推演空间（explorations）不随任务删除，保留为历史记录，不影响下一次运行"
+  }
+}

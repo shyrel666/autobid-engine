@@ -1,3 +1,0 @@
-# Internal per-task export store (lease/token directories).
-# Stable acceptance evidence lives in fixtures/, exports/ and extraction-census-*.md.
-export-store/

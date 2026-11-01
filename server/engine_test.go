@@ -372,6 +372,33 @@ func summaryText(n *db.Node) string {
 }
 
 // 单 work 暂停 -> paused 栅栏；人工消息直投 -> 以新租约续跑同一 transcript -> done。
+func TestEngineMessageWithoutSavedHistory(t *testing.T) {
+	env := newEnv(t, 0, false, "block", &workerProbe{}, Config{})
+	var in *db.Node
+	waitFor(t, 5*time.Second, "registered work", func() bool {
+		ns, _ := env.task.Store.NodesByKind(context.Background(), db.KindIntent, []string{db.StateIntentRunning}, 1)
+		if len(ns) != 1 {
+			return false
+		}
+		in = ns[0]
+		env.e.workMu.Lock()
+		defer env.e.workMu.Unlock()
+		return env.e.work[in.ID] != nil
+	})
+	ctx := context.Background()
+	if err := env.e.ControlWork(ctx, in.ID, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	// Force the exact early-pause boundary independently of scheduling speed.
+	if _, err := testDB(t).ExecContext(ctx, `DELETE FROM transcripts WHERE session_id=$1`, agent.WorkerSessionID(env.task.ExpID, in.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.e.SendMessage(ctx, env.task, in.ID, "fresh-message", "人工指令：直接结束本意图"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, "message respected with no history", func() bool { n, _ := env.task.Store.GetNode(ctx, in.ID); return n.State == db.StateIntentDone })
+}
+
 func TestEngineControlWorkPauseAndMessage(t *testing.T) {
 	env := newEnv(t, 0, false, "block", &workerProbe{}, Config{})
 	var in *db.Node

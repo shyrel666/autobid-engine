@@ -46,6 +46,7 @@ type Config struct {
 	Effort string
 	// ThinkingDisplay 为 adaptive thinking 的 display（summarized|omitted）；为空时不发送 thinking 参数。
 	ThinkingDisplay string
+	ThinkingType    string
 	// DisableRefusalFallback 关闭默认开启的服务端拒答回退（fallbacks: "default"）。
 	DisableRefusalFallback bool
 	Timeout                time.Duration
@@ -111,9 +112,24 @@ func (p *Provider) params(req llm.CompletionRequest, stream bool) (sdk.MessageNe
 		adaptive := sdk.ThinkingConfigAdaptiveParam{Display: sdk.ThinkingConfigAdaptiveDisplay(p.cfg.ThinkingDisplay)}
 		params.Thinking = sdk.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 	}
+	if p.cfg.ThinkingType != "" {
+		thinking := map[string]any{"type": p.cfg.ThinkingType}
+		if p.cfg.ThinkingType == "enabled" {
+			thinking["budget_tokens"] = max(int64(1024), min(int64(8192), maxTokens/2))
+		}
+		params.SetExtraFields(map[string]any{"thinking": thinking})
+	}
 	var opts []option.RequestOption
 	if !p.cfg.DisableRefusalFallback && defaultFallbackModels[model] {
-		params.SetExtraFields(map[string]any{"fallbacks": "default"})
+		extra := map[string]any{"fallbacks": "default"}
+		if p.cfg.ThinkingType != "" {
+			thinking := map[string]any{"type": p.cfg.ThinkingType}
+			if p.cfg.ThinkingType == "enabled" {
+				thinking["budget_tokens"] = max(int64(1024), min(int64(8192), maxTokens/2))
+			}
+			extra["thinking"] = thinking
+		}
+		params.SetExtraFields(extra)
 		opts = append(opts, option.WithHeaderAdd("anthropic-beta", refusalFallbackBeta))
 	}
 	return params, opts

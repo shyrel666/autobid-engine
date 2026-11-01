@@ -1,0 +1,72 @@
+[
+  {
+    "acceptance_date": "2024-09-01",
+    "amount": "8600000.0000",
+    "buyer": "虚构产业园区管理委员会",
+    "code": "PERF-1",
+    "contract_date": "2024-03-01",
+    "contract_no": "DEMO-HT-0001",
+    "currency": "CNY",
+    "is_subsidiary": false,
+    "project_name": "虚构智慧园区安防系统建设项目",
+    "scope": "视频监控、门禁与停车诱导系统集成",
+    "subject_name": "演示智联科技有限公司（虚构）",
+    "subject_type": "bidder"
+  },
+  {
+    "acceptance_date": "2025-08-15",
+    "amount": "4200000.0000",
+    "buyer": "虚构市政务服务中心",
+    "code": "PERF-2",
+    "contract_date": "2025-02-10",
+    "contract_no": "DEMO-HT-0002",
+    "currency": "CNY",
+    "is_subsidiary": false,
+    "project_name": "虚构政务服务中心安防改造项目",
+    "scope": "安防平台升级与运维服务",
+    "subject_name": "演示智联科技有限公司（虚构）",
+    "subject_type": "bidder"
+  },
+  {
+    "acceptance_date": "2025-05-01",
+    "amount": "3000000.0000",
+    "buyer": "虚构客户",
+    "code": "PERF-SUB",
+    "contract_date": "2025-01-01",
+    "contract_no": "DEMO-HT-SUB",
+    "currency": "CNY",
+    "is_subsidiary": true,
+    "project_name": "子公司虚构安防项目",
+    "scope": "视频监控系统集成",
+    "subject_name": "演示智联子公司（虚构）",
+    "subject_type": "subsidiary"
+  },
+  {
+    "acceptance_date": "2020-01-01",
+    "amount": "1000000.0000",
+    "buyer": "虚构客户",
+    "code": "PERF-OLD",
+    "contract_date": "2019-01-01",
+    "contract_no": "DEMO-HT-OLD",
+    "currency": "CNY",
+    "is_subsidiary": false,
+    "project_name": "窗口外虚构安防项目",
+    "scope": "安防系统集成",
+    "subject_name": "演示智联科技有限公司（虚构）",
+    "subject_type": "bidder"
+  },
+  {
+    "acceptance_date": null,
+    "amount": "900000.0000",
+    "buyer": "虚构客户",
+    "code": "PERF-NOACC",
+    "contract_date": "2025-03-01",
+    "contract_no": "DEMO-HT-NOACC",
+    "currency": "CNY",
+    "is_subsidiary": false,
+    "project_name": "缺验收虚构安防项目",
+    "scope": "安防系统集成",
+    "subject_name": "演示智联科技有限公司（虚构）",
+    "subject_type": "bidder"
+  }
+]

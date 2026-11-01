@@ -11,6 +11,7 @@ import (
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/internal/tool"
+	"github.com/autobid/autobid-engine/retrieval"
 )
 
 const (
@@ -31,17 +32,31 @@ type SourceRef struct {
 	PageNo       int    `json:"page_no"`
 	PageStart    int    `json:"page_start,omitempty"`
 	PageEnd      int    `json:"page_end,omitempty"`
-	TenderNo     string `json:"tender_no,omitempty"`
-	FileName     string `json:"file_name,omitempty"`
-	LotNo        string `json:"lot_no,omitempty"`
-	DocTitle     string `json:"doc_title,omitempty"`
+	// PageIsPhysical 为 false 时 page_no 只是兼容占位值，来源是表格工作表/区域。
+	PageIsPhysical bool                  `json:"page_is_physical"`
+	SourceLocator  *ingest.SourceLocator `json:"source_locator,omitempty"`
+	TenderNo       string                `json:"tender_no,omitempty"`
+	FileName       string                `json:"file_name,omitempty"`
+	LotNo          string                `json:"lot_no,omitempty"`
+	DocTitle       string                `json:"doc_title,omitempty"`
+	OriginalFileID *int64                `json:"original_file_id,omitempty"`
+	SHA256         string                `json:"sha256,omitempty"`
 }
 
 func refOf(c *db.DocumentChunk, doc *db.TenderDocument) SourceRef {
 	r := SourceRef{DocID: c.DocID, ChunkID: c.ID, SectionCode: c.SectionCode, SectionTitle: c.SectionTitle, PageNo: c.PageNo,
-		PageStart: c.PageStart, PageEnd: c.PageEnd}
+		PageStart: c.PageStart, PageEnd: c.PageEnd, PageIsPhysical: c.PageIsPhysical}
+	if len(c.BBoxMeta) > 0 {
+		var meta struct {
+			SourceLocator *ingest.SourceLocator `json:"source_locator"`
+		}
+		if json.Unmarshal(c.BBoxMeta, &meta) == nil {
+			r.SourceLocator = meta.SourceLocator
+		}
+	}
 	if doc != nil {
 		r.TenderNo, r.LotNo, r.DocTitle, r.FileName = doc.TenderNo, doc.LotNo, doc.Title, doc.FileName
+		r.OriginalFileID, r.SHA256 = doc.OriginalFileID, doc.ContentHash
 	}
 	return r
 }
@@ -49,11 +64,11 @@ func refOf(c *db.DocumentChunk, doc *db.TenderDocument) SourceRef {
 func (k *Kit) documentOutlineTool() tool.CoreTool {
 	return readTool(tool.Spec{
 		Name: ToolDocumentOutline,
-		Description: "List the section outline of this task's tender documents (doc_id, chunk_id, section_code, section_title, page_no, page_end, level). " +
-			"mandatory=true marks ★/*/废标/否决 clauses; tables>0 marks chunks with structured tables (read_chunk returns them). Use it to decide which chunks to read.",
+		Description: "列出当前投标项目下各招标文件（含更正公告、澄清、答疑）的章节目录大纲（返回 doc_id、chunk_id、section_code、section_title、page_no、page_end、level）。" +
+			"mandatory=true 标记含 ★/*/废标/否决 等强制性条款的切片；tables>0 标记含结构化表格的切片（可通过 read_chunk 读取完整表格）。用于快速定位需要精读的章节切片。",
 		Schema: obj(map[string]any{
-			"doc_id":    integer("only this document; omit for all documents"),
-			"max_level": integer("only headings up to this level (1 chapter, 2 section, 3+ numbered clauses); omit for all"),
+			"doc_id":    integer("仅返回指定招标文档 ID 的章节目录（不填则返回全部文档）"),
+			"max_level": integer("限制返回的最大标题层级（1 为一级章，2 为二级节，3+ 为编号条款；不填则返回全部层级）"),
 		}),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		req, err := decode[struct {
@@ -75,15 +90,16 @@ func (k *Kit) documentOutlineTool() tool.CoreTool {
 			return tool.Result{}, err
 		}
 		type entry struct {
-			DocID        int64  `json:"doc_id"`
-			ChunkID      int64  `json:"chunk_id"`
-			Level        int    `json:"level"`
-			SectionCode  string `json:"section_code"`
-			SectionTitle string `json:"section_title"`
-			PageNo       int    `json:"page_no"`
-			PageEnd      int    `json:"page_end,omitempty"`
-			Mandatory    bool   `json:"mandatory,omitempty"`
-			Tables       int    `json:"tables,omitempty"`
+			DocID          int64  `json:"doc_id"`
+			ChunkID        int64  `json:"chunk_id"`
+			Level          int    `json:"level"`
+			SectionCode    string `json:"section_code"`
+			SectionTitle   string `json:"section_title"`
+			PageNo         int    `json:"page_no"`
+			PageEnd        int    `json:"page_end,omitempty"`
+			PageIsPhysical bool   `json:"page_is_physical"`
+			Mandatory      bool   `json:"mandatory,omitempty"`
+			Tables         int    `json:"tables,omitempty"`
 		}
 		entries := []entry{}
 		omitted := 0
@@ -99,7 +115,7 @@ func (k *Kit) documentOutlineTool() tool.CoreTool {
 			if c.PageEnd > c.PageNo {
 				pageEnd = c.PageEnd
 			}
-			entries = append(entries, entry{c.DocID, c.ID, c.Level, c.SectionCode, truncate(c.SectionTitle, 60), c.PageNo, pageEnd, c.IsMandatory, c.TableCount})
+			entries = append(entries, entry{c.DocID, c.ID, c.Level, c.SectionCode, truncate(c.SectionTitle, 60), c.PageNo, pageEnd, c.PageIsPhysical, c.IsMandatory, c.TableCount})
 		}
 		type docRow struct {
 			DocID    int64  `json:"doc_id"`
@@ -127,13 +143,14 @@ func (k *Kit) documentOutlineTool() tool.CoreTool {
 
 // chunkMatch 是一条检索命中。
 type chunkMatch struct {
-	ChunkID      int64  `json:"chunk_id"`
-	DocID        int64  `json:"doc_id"`
-	SectionCode  string `json:"section_code"`
-	SectionTitle string `json:"section_title"`
-	PageNo       int    `json:"page_no"`
-	Mandatory    bool   `json:"mandatory,omitempty"`
-	Snippet      string `json:"snippet"`
+	ChunkID        int64  `json:"chunk_id"`
+	DocID          int64  `json:"doc_id"`
+	SectionCode    string `json:"section_code"`
+	SectionTitle   string `json:"section_title"`
+	PageNo         int    `json:"page_no"`
+	PageIsPhysical bool   `json:"page_is_physical"`
+	Mandatory      bool   `json:"mandatory,omitempty"`
+	Snippet        string `json:"snippet"`
 }
 
 // compileQuery 把查询编译为正则：regex 模式原样编译（不区分大小写）；
@@ -191,7 +208,7 @@ func matchChunks(chunks []*db.DocumentChunk, res []*regexp.Regexp, mandatoryOnly
 			off := len(c.SectionTitle) + 1
 			loc = []int{mandatoryLoc[0] + off, mandatoryLoc[1] + off}
 		}
-		matches = append(matches, chunkMatch{c.ID, c.DocID, c.SectionCode, c.SectionTitle, c.PageNo, mandatory, snippet(text, loc)})
+		matches = append(matches, chunkMatch{c.ID, c.DocID, c.SectionCode, c.SectionTitle, c.PageNo, c.PageIsPhysical, mandatory, snippet(text, loc)})
 	}
 	return matches, total
 }
@@ -218,15 +235,15 @@ func snippet(text string, loc []int) string {
 func (k *Kit) searchDocumentTool() tool.CoreTool {
 	return readTool(tool.Spec{
 		Name: ToolSearchDocument,
-		Description: "Search this task's tender document chunks by keywords (all must appear, case-insensitive) or a regular expression. " +
-			"mandatory_only=true keeps only ★/*/废标/否决/无效投标/实质性 clauses (query may then be empty). " +
-			"Returns snippets with chunk_id; call read_chunk for the full text and its source_ref.",
+		Description: "按关键词（空格分隔，大小写不敏感且须全部命中）或正则表达式全文检索当前项目的招标文件切片。" +
+			"设置 mandatory_only=true 时仅保留含 ★/*/废标/否决/无效投标/实质性 的条款（此时 query 可为空）。" +
+			"返回匹配片段与 chunk_id；需完整正文及结构化表格时请继续调用 read_chunk。",
 		Schema: obj(map[string]any{
-			"query":          str("keywords separated by spaces, or a regex when regex=true"),
-			"regex":          boolean("treat query as a Go/RE2 regular expression"),
-			"mandatory_only": boolean("only mandatory / disqualification clauses"),
-			"doc_id":         integer("only this document"),
-			"limit":          integer("max matches returned, default 20, max 100"),
+			"query":          str("检索关键词（多个词以空格分隔，须同时命中），或当 regex=true 时为正则表达式"),
+			"regex":          boolean("是否将 query 作为 Go/RE2 正则表达式解析"),
+			"mandatory_only": boolean("是否仅检索 ★/否决/废标/实质性响应等强制条款"),
+			"doc_id":         integer("仅在指定招标文档 ID 内检索"),
+			"limit":          integer("返回匹配条数上限，默认 20，最大 100"),
 		}),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		req, err := decode[struct {
@@ -266,20 +283,27 @@ func (k *Kit) searchDocumentTool() tool.CoreTool {
 func (k *Kit) readChunkTool() tool.CoreTool {
 	return readTool(tool.Spec{
 		Name: ToolReadChunk,
-		Description: "Read the full text of one tender document chunk, optionally with up to 3 neighbouring chunks before/after it. " +
-			"Structured tables (rows/cols/merged cells/grid/markdown, page_start-page_end) are returned under chunk.tables. " +
-			"Returns source_ref {doc_id, chunk_id, section_code, page_no, page_start, page_end, ...}: copy it verbatim into insert_assets.source_ref, " +
-			"record_fact.source_ref or report_finding.source_refs so every conclusion cites its origin.",
+		Description: "读取单个招标文件切片的完整正文，可选附带前后各最多 3 个相邻切片上下文。" +
+			"结构化表格（行列结构、合并单元格、Markdown 及页码范围）在 chunk.tables 中返回；超长正文与大表支持按偏移量分页读取（Inline & Spill 预算控制）。" +
+			"同时返回标准溯源引用 source_ref（含 doc_id、chunk_id、section_code、page_no、page_start、page_end 等），在调用 insert_assets、record_fact 或 report_finding 时必须原样填入以确保结论有据可查。",
 		Schema: obj(map[string]any{
-			"chunk_id": integer("chunk id from document_outline / search_document"),
-			"before":   integer("neighbouring chunks before, 0-3"),
-			"after":    integer("neighbouring chunks after, 0-3"),
+			"chunk_id":       integer("要读取的切片 ID（来自 document_outline 或 search_document）"),
+			"before":         integer("附带读取前序相邻切片数量（0~3）"),
+			"after":          integer("附带读取后续相邻切片数量（0~3）"),
+			"text_offset":    integer("正文 UTF-8 字节分页偏移量（翻页时填入上一页返回的 next_text_offset）"),
+			"table_index":    integer("大表分页时指定的表格索引号，默认 0"),
+			"row_offset":     integer("大表分页时的起始行偏移量（自动保留表头行）"),
+			"context_budget": integer("单次读取的正文字节预算上限，默认 16000，最大 32000"),
 		}, "chunk_id"),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		req, err := decode[struct {
-			ChunkID int64 `json:"chunk_id"`
-			Before  int   `json:"before"`
-			After   int   `json:"after"`
+			ChunkID    int64 `json:"chunk_id"`
+			Before     int   `json:"before"`
+			After      int   `json:"after"`
+			TextOffset int   `json:"text_offset"`
+			TableIndex int   `json:"table_index"`
+			RowOffset  int   `json:"row_offset"`
+			Budget     int   `json:"context_budget"`
 		}](in)
 		if err != nil {
 			return tool.Errorf("invalid input: %v", err), nil
@@ -295,6 +319,26 @@ func (k *Kit) readChunkTool() tool.CoreTool {
 		if err != nil {
 			return tool.Result{}, err
 		}
+		budget := req.Budget
+		if budget <= 0 {
+			budget = 16000
+		}
+		budget = min(max(budget, 2048), 32000)
+		text, next, err := retrieval.TextPage(target.Content, req.TextOffset, budget/2)
+		if err != nil {
+			return tool.Errorf("%v", err), nil
+		}
+		tables := json.RawMessage(nonNullJSON(target.Tables, "[]"))
+		paged := len(tables) > budget/4 || req.RowOffset > 0 || req.TableIndex > 0
+		var tablePage *retrieval.TablePage
+		if paged {
+			p, e := retrieval.PageTable(tables, req.TableIndex, req.RowOffset, 100, budget/4)
+			if e != nil {
+				return tool.Errorf("%v", e), nil
+			}
+			tablePage = &p
+			tables = json.RawMessage(`[]`)
+		}
 		type neighbour struct {
 			ChunkID     int64     `json:"chunk_id"`
 			SectionCode string    `json:"section_code"`
@@ -303,7 +347,8 @@ func (k *Kit) readChunkTool() tool.CoreTool {
 		}
 		var before, after []neighbour
 		for _, c := range window {
-			n := neighbour{c.ID, c.SectionCode, c.Content, refOf(c, doc)}
+			excerpt, _, _ := retrieval.TextPage(c.Content, 0, max(budget/8, 512))
+			n := neighbour{c.ID, c.SectionCode, excerpt, refOf(c, doc)}
 			switch {
 			case c.Seq < target.Seq:
 				before = append(before, n)
@@ -312,13 +357,20 @@ func (k *Kit) readChunkTool() tool.CoreTool {
 			}
 		}
 		out := map[string]any{
+			"next_text_offset": next,
+			"text_complete":    next == len(target.Content),
+			"tables_complete":  !paged,
 			"chunk": map[string]any{
 				"chunk_id": target.ID, "doc_id": target.DocID, "section_code": target.SectionCode,
 				"section_title": target.SectionTitle, "page_no": target.PageNo, "page_start": target.PageStart, "page_end": target.PageEnd,
-				"level": target.Level, "mandatory": target.IsMandatory, "content": target.Content,
-				"tables": json.RawMessage(nonNullJSON(target.Tables, "[]")),
+				"page_is_physical": target.PageIsPhysical,
+				"level":            target.Level, "mandatory": target.IsMandatory, "content": text,
+				"tables": tables,
 			},
 			"source_ref": refOf(target, doc),
+		}
+		if tablePage != nil {
+			out["table_page"] = tablePage
 		}
 		if len(before) > 0 {
 			out["before"] = before

@@ -90,7 +90,7 @@ func parseDOCX(data []byte) (*Parsed, error) {
 	}
 	doc, err := readZipFile(zr, "word/document.xml")
 	if err != nil || doc == nil {
-		return nil, fmt.Errorf("%w: docx has no word/document.xml", ErrUnsupportedFormat)
+		return nil, fmt.Errorf("%w: docx_missing_document_xml: docx has no word/document.xml", ErrUnsupportedFormat)
 	}
 	p := &docxParser{page: 1, useRendered: bytes.Contains(doc, []byte("lastRenderedPageBreak"))}
 	if raw, _ := readZipFile(zr, "word/styles.xml"); raw != nil {

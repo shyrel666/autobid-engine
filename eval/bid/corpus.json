@@ -1,0 +1,258 @@
+{
+  "version": "public-2026-10-29",
+  "collected_at": "2026-10-29",
+  "method": "中国政府采购网（search.ccgp.gov.cn）标题检索与公告页阅读；重庆市政府采购网数据接口返回 HTTP 514 Frequency Capped，按限频要求未重试",
+  "policy": {
+    "storage": "招标文件原件留在被 Git 忽略的 ccgp_2026-10-06/；本清单只保存来源、哈希与公开公告中的结构化结果",
+    "excluded": [
+      "评审专家与评审小组成员名单（不入库，见 ROADMAP 第五节）",
+      "采购人、代理机构经办人姓名与电话"
+    ],
+    "splits": "每个项目自成一个项目族；调参集与保留集按项目族划分，由 PROTOCOL.md 冻结"
+  },
+  "projects": [
+    {
+      "key": "P01",
+      "family": "cq-public-data-platform-ops",
+      "project_no": "CQS25C00165",
+      "name": "重庆市一体化智能化公共数据平台2025年度运维",
+      "region": "重庆",
+      "local_file": "ccgp_2026-10-06/01_（上网稿）重庆市一体化智能化公共数据平台2025年度运维招标文件.docx",
+      "sha256": "bf999504bf6ac14977491b01fe7131caca325cc6ae16f40cf477299a8f423cdf",
+      "lots": ["1", "2"],
+      "bid_deadline": "2025-03-25T10:00:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2025-04-02", "url": "https://www.ccgp.gov.cn/cggg/dfgg/gkzb/202504/t20250402_24390468.htm",
+         "note": "公告正文发布日期 2025-03-04（重庆市政府采购网），中国政府采购网转载于 2025-04-02"}
+      ],
+      "outcome": null,
+      "gaps": [
+        "结果公告未取得：中国政府采购网检索未收录 2025 年公告，重庆市政府采购网接口限频",
+        "后续年度项目 CQS26C00441（2026 年度运维服务）的招标与结果公告在中国政府采购网可查，可作为扩充语料（不同项目）"
+      ]
+    },
+    {
+      "key": "P02",
+      "family": "cq-audit-ai",
+      "project_no": "CQS26C02070",
+      "name": "“政务·数字审计”升级优化及AI场景构建技术服务采购",
+      "region": "重庆",
+      "local_file": "ccgp_2026-10-06/02_（上网稿）“政务·数字审计”升级优化及AI场景构建技术服务采购招标文件.docx",
+      "sha256": "9780e03e87d8374f803a16e1b28993ad76c51f1ed64372e454d33e45f87eafcb",
+      "lots": ["1"],
+      "bid_deadline": "2026-08-26T10:00:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2026-08-05", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202608/t20260805_27075153.htm"},
+        {"type": "award", "published": "2026-08-28", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202608/t20260828_27222733.htm"}
+      ],
+      "outcome": {
+        "lots": [
+          {"lot": "1", "winner": "数字重庆政务科技有限公司（联合体牵头方）", "amount_cny": 2678000,
+           "scores": [
+             {"supplier": "数字重庆政务科技有限公司", "price": 19.8282, "technical": 47.10, "commercial": 17.00, "total": 83.93, "rank": 1},
+             {"supplier": "重庆米智信息技术有限公司", "price": 19.9474, "technical": 36.80, "commercial": 8.00, "total": 64.75, "rank": 2},
+             {"supplier": "重庆两仪芸科技有限公司", "price": 19.7324, "technical": 39.30, "commercial": 0.00, "total": 59.03, "rank": 3}
+           ]}
+        ],
+        "note": "商务总得分含政策分数（如有）"
+      }
+    },
+    {
+      "key": "P03",
+      "family": "cq-ndrc-ops",
+      "project_no": "CQS26C00981",
+      "name": "重庆市发展和改革委员会2026年度政务数字化应用常规运维",
+      "region": "重庆",
+      "local_file": "ccgp_2026-10-06/03_招标文件（定稿）—重庆市发展和改革委员会2026年度政务数字化应用常规运维.docx",
+      "sha256": "25b65c284d4ac31ba6e8c49b06df2c43761e8c8c2034e12b213ab3988d950539",
+      "lots": ["1"],
+      "bid_deadline": "2026-05-20T10:00:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2026-04-29", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202604/t20260429_26482331.htm"},
+        {"type": "award", "published": "2026-05-21", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202605/t20260521_26607452.htm"}
+      ],
+      "outcome": {
+        "lots": [
+          {"lot": "1", "winner": "中电智安科技有限公司", "amount_cny": 5985620,
+           "scores": [
+             {"supplier": "中电智安科技有限公司", "price": 11.19, "technical": 36.29, "commercial": 29, "total": 76.48, "rank": 1},
+             {"supplier": "东软集团股份有限公司", "price": 12.54, "technical": 24, "commercial": 22, "total": 58.54, "rank": 2},
+             {"supplier": "重庆恒宏晟科技有限公司", "price": 20, "technical": 17.57, "commercial": 7.5, "total": 45.07, "rank": 3}
+           ]}
+        ],
+        "note": "商务总得分含政策分数（如有）"
+      }
+    },
+    {
+      "key": "P04",
+      "family": "cq-security-services",
+      "project_no": "CQS26C01245",
+      "name": "2026年网络安全服务",
+      "region": "重庆",
+      "local_file": "ccgp_2026-10-06/04_公开招标-2026年网络安全服务CQS26C01245（终审稿）.docx",
+      "sha256": "f953868d457de49883d26ccffb588a75c950ff44a80efec45c22842f6448be2f",
+      "lots": ["1", "2"],
+      "bid_deadline": "2026-08-03T10:00:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2026-07-09", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202607/t20260709_26905508.htm"},
+        {"type": "award", "published": "2026-08-05", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202608/t20260805_27079273.htm"}
+      ],
+      "outcome": {
+        "lots": [
+          {"lot": "1", "winner": "重庆巽诺科技有限公司", "amount_cny": 833900,
+           "scores": [
+             {"supplier": "重庆巽诺科技有限公司", "price": 29.90, "technical": 35.00, "commercial": 30.00, "total": 94.90, "rank": 1},
+             {"supplier": "中检集团天帷网络安全技术（合肥）有限公司", "price": 30.00, "technical": 29.20, "commercial": 14.00, "total": 73.20, "rank": 2},
+             {"supplier": "内蒙古万邦信息安全技术有限公司", "price": 29.86, "technical": 28.00, "commercial": 8.00, "total": 65.86, "rank": 3}
+           ]},
+          {"lot": "2", "winner": "天津恒御科技有限公司", "amount_cny": 582000,
+           "scores": [
+             {"supplier": "天津恒御科技有限公司", "price": 30.00, "technical": 37.00, "commercial": 30.00, "total": 97.00, "rank": 1},
+             {"supplier": "杭州安信检测技术有限公司", "price": 27.04, "technical": 32.00, "commercial": 20.00, "total": 79.04, "rank": 2},
+             {"supplier": "金盾检测技术股份有限公司", "price": 26.45, "technical": 26.00, "commercial": 12.50, "total": 64.95, "rank": 3}
+           ]}
+        ],
+        "note": "商务总得分含政策分数（如有）"
+      }
+    },
+    {
+      "key": "P05",
+      "family": "cq-data-governance",
+      "project_no": "CQS26C01509",
+      "name": "数据治理项目（数据中台）",
+      "region": "重庆",
+      "local_file": "ccgp_2026-10-06/05_数据治理项目（数据中台）（定稿）.docx",
+      "sha256": "fc700b2977682b349e46ffd6a938222c6f60a18cba464ce53ea0773018c8fc31",
+      "lots": ["1"],
+      "bid_deadline": "2026-07-13T10:00:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2026-06-18", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202606/t20260618_26779817.htm"},
+        {"type": "award", "published": "2026-07-15", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202607/t20260715_26936713.htm"}
+      ],
+      "outcome": {
+        "lots": [
+          {"lot": "1", "winner": "重庆云华科技有限公司", "amount_cny": 590000,
+           "scores": [
+             {"supplier": "重庆云华科技有限公司", "price": 28.47, "technical": 40, "commercial": 18, "total": 86.47, "rank": 1},
+             {"supplier": "正方软件股份有限公司", "price": 40, "technical": 26, "commercial": 11.6, "total": 77.60, "rank": 2},
+             {"supplier": "江苏金智教育信息股份有限公司", "price": 24, "technical": 36, "commercial": 12.4, "total": 72.40, "rank": 3}
+           ]}
+        ],
+        "note": "商务总得分含政策分数（如有）"
+      }
+    },
+    {
+      "key": "P06",
+      "family": "gov-portal-ops",
+      "project_no": "GC-FGX260336W",
+      "name": "2026年度中国政府网运维服务采购项目",
+      "region": "中央",
+      "local_file": "ccgp_2026-10-06/01_2026年度中国政府网运维服务采购项目采购文件.pdf",
+      "sha256": "2ef11a75afbe514c36b74621d3f39bb9c0e55e50ec8cf49a07ec96e1fb235dab",
+      "lots": ["1", "2"],
+      "bid_deadline": "2026-05-29T09:00:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2026-05-08", "url": "http://www.ccgp.gov.cn/cggg/zygg/gkzb/202605/t20260508_26525868.htm"},
+        {"type": "award", "published": "2026-06-01", "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202606/t20260601_26665304.htm"}
+      ],
+      "outcome": {
+        "preliminary_review": "两个包均为“全部投标人通过了初审”",
+        "lots": [
+          {"lot": "1", "winner": "新华网股份有限公司", "amount_cny": 16080000, "team_size": 50},
+          {"lot": "2", "winner": "中报国际文化传媒（北京）有限公司", "amount_cny": 14650000, "team_size": 51}
+        ],
+        "note": "公告未公布评审得分"
+      }
+    },
+    {
+      "key": "P07",
+      "family": "chinacdc-trusted-data-space",
+      "project_no": "09-02-04A-2026-D-F-E15662",
+      "name": "2026年中国疾病预防控制中心联邦计算管理平台-可信数据空间数字底座建设（二次）",
+      "region": "中央",
+      "local_file": "ccgp_2026-10-06/02_2026年中国疾病预防控制中心联邦计算管理平台-可信数据空间数字底座建设（二次）-招标文件.pdf",
+      "sha256": "16b6749ee71e9c50c8154a41ce880f37326b8edd85d0044bdfe117449d4674fa",
+      "lots": [],
+      "bid_deadline": "2026-08-20T09:30:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2026-07-06", "url": "http://www.ccgp.gov.cn/cggg/zygg/gkzb/202607/t20260706_26875687.htm", "note": "第一次招标"},
+        {"type": "failed", "published": "2026-07-30", "url": "http://www.ccgp.gov.cn/cggg/zygg/fblbgg/202607/t20260730_27038133.htm",
+         "reason": "本项目符合专业条件的供应商或者对招标文件作实质响应的供应商不足三家，作废标处理"},
+        {"type": "tender", "published": "2026-07-30", "url": "http://www.ccgp.gov.cn/cggg/zygg/gkzb/202607/t20260730_27039011.htm", "note": "二次招标；本地文件为二次招标文件"},
+        {"type": "award", "published": "2026-08-27", "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202608/t20260827_27213812.htm"}
+      ],
+      "outcome": {
+        "lots": [{"lot": "", "winner": "上海仪电鑫森科技发展有限公司", "amount_cny": 1880000, "winner_total": 90.98}],
+        "note": "第一次招标因实质响应的供应商不足三家废标；公告未列出具体投标人的无效原因"
+      }
+    },
+    {
+      "key": "P08",
+      "family": "mof-procurement-system",
+      "project_no": "ZZGJ20250268",
+      "name": "中央政府采购管理系统升级改造项目",
+      "region": "中央",
+      "local_file": "ccgp_2026-10-06/03_ZZGJ20250268-中央政府采购管理系统升级改造项目公开招标文件.pdf",
+      "sha256": "5b81d1368898ff18380d6d44d8460a9a7323431b6b2a86e15fc3384968d02847",
+      "lots": [],
+      "bid_deadline": "2026-01-26T09:30:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2025-11-20", "url": null, "note": "首次公告日期取自更正公告；中国政府采购网检索未收录"},
+        {"type": "correction", "published": "2026-01-08", "url": "http://www.ccgp.gov.cn/cggg/zygg/gzgg/202601/t20260108_26054883.htm",
+         "changes": ["投标截止与开标时间改为 2026-01-26 09:30", "第四章评标标准修改，修改后的招标文件由代理机构发送给潜在投标人，未公开发布"]},
+        {"type": "award", "published": "2026-01-29", "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202601/t20260129_26131836.htm"}
+      ],
+      "outcome": {
+        "lots": [{"lot": "", "winner": "中软信息系统工程有限公司", "amount_cny": 5100000, "winner_total": 97.03}]
+      },
+      "version_note": "本地 PDF 的投标截止时间为 2026-01-26 09:30，与更正一致，推定为更正后版本；其评标标准是否为更正后内容无法用公开信息核实"
+    },
+    {
+      "key": "P09",
+      "family": "xcvtc-security-ops",
+      "project_no": "许财招标采购-2026-56（ZFCG-G2026069）",
+      "name": "许昌职业技术学院网络安全及信息化建设运维服务项目",
+      "region": "河南",
+      "local_file": "ccgp_2026-10-06/04_许昌职业技术学院“许昌职业技术学院网络安全及信息化建设运维服务项目”招标文件.pdf",
+      "sha256": "37294398627270a6b16f01dc7048302ad26e8acb6b9b04c2879d1172ec21d552",
+      "lots": ["A", "B"],
+      "bid_deadline": "2026-09-01T08:30:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2026-08-11", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202608/t20260811_27110908.htm"},
+        {"type": "award", "published": "2026-09-03", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202609/t20260903_27256839.htm"}
+      ],
+      "outcome": {
+        "lots": [
+          {"lot": "A", "winner": "许昌锐远电子技术有限公司", "amount_cny": 871980, "winner_total": 96.09},
+          {"lot": "B", "winner": "河南恒耀电子科技有限公司", "amount_cny": 591250, "winner_total": 75.74}
+        ]
+      }
+    },
+    {
+      "key": "P10",
+      "family": "mnr-social-service-ops",
+      "project_no": "ZJZX-ZCFW-20260609-47",
+      "name": "社会服务场景运维（2026年）",
+      "region": "中央",
+      "local_file": "ccgp_2026-10-06/05_中经国际发布稿260617-社会服务场景运维（2026年）招标文件.pdf",
+      "sha256": "2699303f562b2037da66ef8144172ee650ef841c91913e0eb7c7fd05aa3fdec7",
+      "lots": ["A", "B", "C"],
+      "bid_deadline": "2026-07-08T09:00:00+08:00",
+      "announcements": [
+        {"type": "tender", "published": "2026-06-17", "url": "http://www.ccgp.gov.cn/cggg/zygg/gkzb/202606/t20260617_26766664.htm"},
+        {"type": "award", "published": "2026-07-16", "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202607/t20260716_26943491.htm"}
+      ],
+      "outcome": {
+        "lots": [
+          {"lot": "A", "winner": "拓尔思信息技术股份有限公司", "amount_cny": 1050000, "winner_total": 93.67},
+          {"lot": "B", "winner": "北京网景盛世技术开发中心", "amount_cny": 475200, "winner_total": 92.2},
+          {"lot": "C", "winner": "仪电双杨智能科技（上海）有限公司", "amount_cny": 151800, "winner_total": 93.58}
+        ]
+      }
+    }
+  ],
+  "o1_sources_without_per_bidder_reasons": [
+    {"url": "http://www.ccgp.gov.cn/cggg/zygg/fblbgg/202607/t20260730_27038133.htm", "reason": "实质响应的供应商不足三家"},
+    {"url": "http://www.ccgp.gov.cn/cggg/dfgg/qtgg/202606/t20260608_26707362.htm", "reason": "有效供应商不足三家（杭州，非本语料项目）"}
+  ]
+}

@@ -44,8 +44,8 @@ export function Button({ variant = 'secondary', size = 'md', loading, icon, chil
       {...rest}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
-      className={mergeCls(cx('relative inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-        size === 'sm' ? 'h-7 rounded-lg px-2 text-[13px]' : 'h-8 rounded-[10px] px-2.5 text-sm', variants[variant]), className)}
+      className={mergeCls(cx('relative inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        size === 'sm' ? 'h-7 rounded-lg px-2.5 text-[13px]' : 'h-8 rounded-[10px] px-2.5 text-sm', variants[variant]), className)}
     >
       {/* loading 时保留原内容占位，按钮宽度不变 */}
       <span className={cx('inline-flex items-center gap-1.5', loading && 'invisible')}>{icon}{children}</span>
@@ -177,7 +177,7 @@ export function Field({ label, hint, children, className }: { label: ReactNode; 
 
 const inputCls = 'w-full min-w-0 rounded-[10px] border border-line bg-panel px-2.5 text-sm text-fg placeholder:text-muted focus-visible:border-[#a3a3a3] disabled:bg-soft disabled:opacity-70'
 
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+export function Input(props: InputHTMLAttributes<HTMLInputElement> & { ref?: RefObject<HTMLInputElement | null> }) {
   return <input {...props} className={mergeCls(`${inputCls} h-8`, props.className)} />
 }
 
@@ -233,18 +233,24 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, open: boolean) 
   }, [open, ref])
 }
 
-// dirty 为 true 时，Esc、点击遮罩或关闭按钮会先确认，避免误丢表单内容。
+type DirtyValue = boolean | string | undefined
+
+// dirty 为 true 时，Esc、点击遮罩或关闭按钮会先确认，避免误丢表单内容；传字符串时用作确认说明（如上传仍在进行）。
+// 子组件自己持有表单状态时传函数，关闭时读取最新值（不经父组件重渲染，紧接输入的 Esc 也不会漏掉确认）。
 export function Modal({ open, title, onClose, children, footer, wide, dirty }:
-  { open: boolean; title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean; dirty?: boolean }) {
+  { open: boolean; title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean; dirty?: DirtyValue | (() => DirtyValue) }) {
   const ref = useRef<HTMLDivElement>(null)
   const titleID = useId()
   const confirm = useConfirm()
   useFocusTrap(ref, open)
   const isTop = useDialogLayer(open)
+  const dirtyRef = useRef(dirty)
+  dirtyRef.current = dirty
   const tryClose = useCallback(async () => {
-    if (dirty && !(await confirm({ title: '放弃未保存的修改？', message: '关闭后本次填写的内容不会保存。', confirmLabel: '放弃修改', danger: true }))) return
+    const d = typeof dirtyRef.current === 'function' ? dirtyRef.current() : dirtyRef.current
+    if (d && !(await confirm({ title: '放弃未保存的修改？', message: typeof d === 'string' ? d : '关闭后本次填写的内容不会保存。', confirmLabel: '放弃修改', danger: true }))) return
     onClose()
-  }, [dirty, onClose, confirm])
+  }, [onClose, confirm])
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {

@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	AgentPlanner = "planner"
-	AgentWorker  = "worker"
+	AgentPlanner  = "planner"
+	AgentWorker   = "worker"
+	AgentGoals    = "goals"
+	AgentWatchdog = "watchdog"
 )
 
 // 图工具名。
@@ -30,13 +32,18 @@ const (
 	ToolLinkAssets    = "link_assets"
 	ToolRecordFact    = "record_fact"
 	ToolReportFinding = "report_finding"
-	ToolCompactNodes  = "compact_nodes"
-	ToolConsumeHint   = "consume_hint"
-	ToolAddGoal       = "add_goal"
+	ToolCompactNodes      = "compact_nodes"
+	ToolConsumeHint       = "consume_hint"
+	ToolAddGoal           = "add_goal"
+	ToolDecomposeRFPGoals = "decompose_rfp_goals"
 )
 
-// WorkerWritebackTools 是 Worker 收尾阶段的写回白名单（Patch ②）；list_assets 用于查实体 ID 以便锚定。
-var WorkerWritebackTools = []string{ToolInsertAssets, ToolLinkAssets, ToolRecordFact, ToolReportFinding, ToolListAssets}
+// WorkerWritebackTools 是 Worker 收尾阶段的写回白名单（Patch ②）；list_assets 用于查实体 ID 以便锚定，并包含标书域写回工具。
+var WorkerWritebackTools = []string{
+	ToolInsertAssets, ToolLinkAssets, ToolRecordFact, ToolReportFinding, ToolListAssets,
+	"requirement_bind_evidence", "section_write_draft", "chart_generate", "compliance_verify", "fulltext_consistency_check",
+	tool.ExecuteExtraToolName,
+}
 
 type WriteCounts struct {
 	Facts    int
@@ -92,7 +99,7 @@ func (s *ToolSet) plannerTools(todos *tool.TodoStore, final bool) []tool.CoreToo
 	if final {
 		return tools
 	}
-	tools = append(tools, s.addIntentTool(), s.addGoalTool(), s.consumeHintTool(), s.compactNodesTool(), tool.NewTodoWriteTool(todos))
+	tools = append(tools, s.addIntentTool(), s.addGoalTool(), s.decomposeRFPGoalsTool(), s.consumeHintTool(), s.compactNodesTool(), tool.NewTodoWriteTool(todos))
 	if s.killWork != nil {
 		tools = append(tools, s.killWorkTool())
 	}
@@ -276,21 +283,31 @@ func (s *ToolSet) addIntentTool() tool.CoreTool {
 	return writeTool(tool.Spec{
 		Name: ToolAddIntent,
 		Description: "Dispatch one bounded, executable intent to workers (e.g. verify one qualification requirement against our credentials). " +
-			"parents are the existing fact/finding ids this intent builds on.",
+			"parents are the existing fact/finding ids this intent builds on; mandate optionally enforces hard execution boundaries.",
 		Schema: obj(map[string]any{
 			"summary":   str("what the worker must verify or produce, concrete and bounded"),
 			"rationale": str("why this is the next step"),
 			"priority":  integer("1-10, default 5"),
 			"parents":   ids("fact/finding ids this intent is derived from"),
 			"anchors":   ids("asset ids this intent concerns"),
+			"mandate": obj(map[string]any{
+				"allowed_section_ids":     ids("proposal section ids the worker is allowed to write"),
+				"allowed_requirement_ids": ids("requirement ids the worker is allowed to bind evidence to"),
+				"target_words_min":        integer("minimum section draft character/word count"),
+				"target_words_max":        integer("maximum section draft character/word count"),
+				"max_tool_calls":          integer("hard cap on tool calls before forcing writeback"),
+				"forbidden_tools":         map[string]any{"type": "array", "items": str("tool name")},
+				"require_writeback":       map[string]any{"type": "boolean", "description": "require at least one graph/proposal writeback before finishing"},
+			}),
 		}, "summary"),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		req, err := decode[struct {
-			Summary   string  `json:"summary"`
-			Rationale string  `json:"rationale"`
-			Priority  int     `json:"priority"`
-			Parents   []int64 `json:"parents"`
-			Anchors   []int64 `json:"anchors"`
+			Summary   string            `json:"summary"`
+			Rationale string            `json:"rationale"`
+			Priority  int               `json:"priority"`
+			Parents   []int64           `json:"parents"`
+			Anchors   []int64           `json:"anchors"`
+			Mandate   *db.IntentMandate `json:"mandate"`
 		}](in)
 		if err != nil || strings.TrimSpace(req.Summary) == "" {
 			return tool.Errorf("summary is required"), nil
@@ -298,8 +315,15 @@ func (s *ToolSet) addIntentTool() tool.CoreTool {
 		if req.Priority < 0 || req.Priority > 10 {
 			return tool.Errorf("priority must be within 1-10"), nil
 		}
+		if req.Mandate != nil && req.Mandate.TargetWordsMin > 0 && req.Mandate.TargetWordsMax > 0 && req.Mandate.TargetWordsMin > req.Mandate.TargetWordsMax {
+			return tool.Errorf("mandate.target_words_min cannot exceed target_words_max"), nil
+		}
+		payload := map[string]any{"summary": req.Summary, "rationale": req.Rationale}
+		if !req.Mandate.IsEmpty() {
+			payload["mandate"] = req.Mandate
+		}
 		id, err := s.ts.AddIntentTx(ctx, db.AddIntentInput{
-			Payload:  map[string]any{"summary": req.Summary, "rationale": req.Rationale},
+			Payload:  payload,
 			Priority: req.Priority,
 			Parents:  req.Parents,
 			Anchors:  req.Anchors,
@@ -676,5 +700,37 @@ func (s *ToolSet) addGoalTool() tool.CoreTool {
 			return tool.Errorf("add_goal rejected: %v", err), nil
 		}
 		return tool.JSON(map[string]any{"goal_id": id}), nil
+	})
+}
+
+func (s *ToolSet) decomposeRFPGoalsTool() tool.CoreTool {
+	return writeTool(tool.Spec{
+		Name: ToolDecomposeRFPGoals,
+		Description: "Run the deterministic ARTEX RFP Goals Decomposer: parse uploaded tender documents into scoring items/tiers, " +
+			"qualification/conformity veto items, mandatory ★/technical deviation clauses, sync static assets into the graph, " +
+			"idempotently initialize the 4 canonical root Goal nodes (G-VETO, G-DEVIATION, G-SCORING, G-OUTLINE) with asset anchors, " +
+			"and optionally initialize the v1 draft proposal outline.",
+		Schema: obj(map[string]any{
+			"init_outline": map[string]any{"type": "boolean", "description": "initialize v1 draft proposal outline if none exists (default true)"},
+		}),
+	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
+		req := struct {
+			InitOutline *bool `json:"init_outline"`
+		}{}
+		if len(in) > 0 {
+			_ = json.Unmarshal(in, &req)
+		}
+		initOutline := true
+		if req.InitOutline != nil {
+			initOutline = *req.InitOutline
+		}
+		if s.ts == nil || s.ts.DB() == nil || s.taskID <= 0 {
+			return tool.Errorf("decompose_rfp_goals: task database store is not available"), nil
+		}
+		res, err := s.ts.DB().BootstrapRFPGoals(ctx, "", s.taskID, s.worker, initOutline)
+		if err != nil {
+			return tool.Errorf("decompose_rfp_goals failed: %v", err), nil
+		}
+		return tool.JSON(res), nil
 	})
 }

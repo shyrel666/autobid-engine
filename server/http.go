@@ -21,7 +21,9 @@ import (
 	"github.com/autobid/autobid-engine/agent"
 	"github.com/autobid/autobid-engine/compliance"
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/evidence"
 	"github.com/autobid/autobid-engine/export"
+	"github.com/autobid/autobid-engine/filework"
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
 	"github.com/autobid/autobid-engine/retrieval"
@@ -44,6 +46,11 @@ type APIConfig struct {
 	ComplianceVerifier compliance.Verifier
 	// Export 是图表渲染与导出服务（导出目录、mmdc、LibreOffice）；为 nil 时以系统临时目录下的 autobid-exports 探测创建。
 	Export *export.Service
+	// Evidence 是 D2 企业证据原件存储（AUTOBID_EVIDENCE_DIR，默认 data/evidence）。
+	Evidence *evidence.Store
+	// FileStore 是任务招标原件存储（AUTOBID_FILEWORK_DIR）；为 nil 时保持旧上传行为、不留存原件。
+	FileStore  *filework.Store
+	FileRunner *filework.Runner
 	// ExportRunner 非空时创建导出任务后立即唤醒执行者（否则等待其轮询）。
 	ExportRunner *export.Runner
 }
@@ -69,11 +76,21 @@ func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *
 	if cfg.Export == nil {
 		cfg.Export = export.NewServiceFromEnv(m.DB(), filepath.Join(os.TempDir(), "autobid-exports"), nil)
 	}
+	if cfg.Evidence == nil {
+		cfg.Evidence = evidence.FromEnv()
+	}
 	return &API{runCtx: runCtx, m: m, e: e, llm: svc, ic: ic, hub: hub, pg: m.DB(), cfg: cfg}
 }
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/tasks/{id}/files", a.withTask(a.uploadProcessingFile))
+	mux.HandleFunc("GET /api/tasks/{id}/materials", a.withTask(a.listTaskMaterials))
+	mux.HandleFunc("POST /api/tasks/{id}/materials", a.withTask(a.saveTaskMaterial))
+	mux.HandleFunc("POST /api/tasks/{id}/file-jobs", a.withTask(a.enqueueFixedJob))
+	mux.HandleFunc("GET /api/tasks/{id}/file-jobs", a.withTask(a.listFixedJobs))
+	mux.HandleFunc("GET /api/tasks/{id}/file-jobs/{jobID}", a.withTask(a.getFixedJob))
+	mux.HandleFunc("POST /api/tasks/{id}/file-jobs/{jobID}/cancel", a.withTask(a.cancelFixedJob))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.pg.PingContext(r.Context()); err != nil {
 			writeError(w, http.StatusServiceUnavailable, err)
@@ -102,6 +119,7 @@ func (a *API) Handler() http.Handler {
 
 	// 推演图与产出物
 	mux.HandleFunc("GET /api/tasks/{id}/overview", a.withTask(a.overview))
+	mux.HandleFunc("GET /api/tasks/{id}/graph", a.withTask(a.taskGraph))
 	mux.HandleFunc("GET /api/tasks/{id}/nodes/{nodeID}", a.withTask(a.nodeDetail))
 	mux.HandleFunc("GET /api/tasks/{id}/findings", a.withTask(a.findings))
 	mux.HandleFunc("GET /api/tasks/{id}/assets", a.withTask(a.assets))
@@ -110,11 +128,19 @@ func (a *API) Handler() http.Handler {
 
 	// 招标文档与企业资料库
 	mux.HandleFunc("POST /api/tasks/{id}/documents", a.withTask(a.uploadDocument))
+	mux.HandleFunc("GET /api/tasks/{id}/files", a.withTask(a.listProcessingFiles))
+	mux.HandleFunc("POST /api/tasks/{id}/files/{fileID}/import", a.withTask(a.importProcessingFile))
+	mux.HandleFunc("POST /api/tasks/{id}/documents/{docID}/reparse", a.withTask(a.reparseDocument))
+	mux.HandleFunc("GET /api/tasks/{id}/file-processing-records", a.withTask(a.listProcessingRecords))
+	mux.HandleFunc("GET /api/tasks/{id}/file-processing-records/{recordID}", a.withTask(a.getProcessingRecord))
+	mux.HandleFunc("POST /api/tasks/{id}/file-processing-records/{recordID}/adopt", a.withTask(a.adoptProcessingRecord))
 	mux.HandleFunc("GET /api/tasks/{id}/documents", a.withTask(a.listDocuments))
 	mux.HandleFunc("POST /api/company/credentials", a.upsertCredentials)
 	mux.HandleFunc("GET /api/company/credentials", a.listCredentials)
 	mux.HandleFunc("PUT /api/company/credentials/{credID}", a.updateCredential)
 	mux.HandleFunc("DELETE /api/company/credentials/{credID}", a.deleteCredential)
+	// D2 证据可采性、承诺台账与报价（server/d2.go）
+	a.registerD2Routes(mux)
 
 	// 企业方案知识库（Phase 4）
 	mux.HandleFunc("GET /api/knowledge/documents", a.listKnowledge)
@@ -149,15 +175,34 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/llm/profiles/{pid}", a.deleteProfile)
 	mux.HandleFunc("PUT /api/llm/bindings/{agent}", a.bindAgent)
 	mux.HandleFunc("GET /api/llm/health", a.llmHealth)
+	mux.HandleFunc("GET /api/llm/bindings", a.getBindings)
+	mux.HandleFunc("POST /api/llm/profiles/active", a.activateProfile)
+	mux.HandleFunc("GET /api/llm/settings", a.getLLMSettings)
+	mux.HandleFunc("PUT /api/llm/settings", a.putLLMSettings)
+	mux.HandleFunc("GET /api/llm/pool", a.poolStatus)
+	mux.HandleFunc("POST /api/llm/pool/reset", a.resetLLMPool)
+	mux.HandleFunc("POST /api/llm/models", a.listModels)
+	mux.HandleFunc("POST /api/llm/test", a.testLLM)
+	mux.HandleFunc("GET /api/llm/records", a.listLLMRecords)
+	mux.HandleFunc("GET /api/llm/records/{recordID}", a.getLLMRecord)
+	mux.HandleFunc("DELETE /api/llm/records", a.deleteLLMRecords)
+	mux.HandleFunc("GET /api/system/catalog", a.systemCatalog)
 	mux.HandleFunc("GET /api/tasks/{id}/llm-chain", a.withTask(a.getChain))
 	mux.HandleFunc("PUT /api/tasks/{id}/llm-chain", a.withTask(a.setChain))
 	mux.HandleFunc("POST /api/tasks/{id}/llm-chain/reset", a.withTask(a.resetChain))
 	mux.HandleFunc("GET /api/tasks/{id}/llm-usage", a.withTask(a.llmUsage))
 
-	// 拦截审批
+	// 拦截审批与控制面
 	mux.HandleFunc("GET /api/intercepts", a.listIntercepts)
 	mux.HandleFunc("POST /api/intercepts/{pendingID}/decide", a.decideIntercept)
 	mux.HandleFunc("GET /api/tasks/{id}/intercept-audit", a.withTask(a.interceptAudit))
+	mux.HandleFunc("GET /api/intercept/rules", a.listInterceptRules)
+	mux.HandleFunc("POST /api/intercept/rules", a.createInterceptRule)
+	mux.HandleFunc("PUT /api/intercept/rules/{ruleID}", a.updateInterceptRule)
+	mux.HandleFunc("DELETE /api/intercept/rules/{ruleID}", a.deleteInterceptRule)
+	mux.HandleFunc("GET /api/intercept/config", a.getInterceptConfig)
+	mux.HandleFunc("PUT /api/intercept/config", a.putInterceptConfig)
+	mux.HandleFunc("GET /api/intercept/approvals", a.listInterceptApprovals)
 
 	// 实时活动流
 	mux.HandleFunc("GET /api/tasks/{id}/events", a.withTask(a.events))
@@ -220,26 +265,47 @@ func writeError(w http.ResponseWriter, status int, err error) {
 // fail 把领域错误映射为 HTTP 状态码。
 func fail(w http.ResponseWriter, err error) {
 	var he *httpError
-	switch {
-	case errors.As(err, &he):
+	if errors.As(err, &he) {
 		writeError(w, he.status, he.err)
+		return
+	}
+	writeError(w, errorStatus(err), err)
+}
+
+func errorStatus(err error) int {
+	var archiveErr *ingest.ArchiveError
+	if errors.As(err, &archiveErr) {
+		return http.StatusUnprocessableEntity
+	}
+	switch {
+	case errors.Is(err, db.ErrInvalidMaterial):
+		return http.StatusBadRequest
+	case errors.Is(err, db.ErrParseRevisionConflict), errors.Is(err, db.ErrFileProcessingConflict):
+		return http.StatusConflict
+	case errors.Is(err, db.ErrInvalidParseRevision), errors.Is(err, filework.ErrHashMismatch):
+		return http.StatusUnprocessableEntity
 	case errors.Is(err, db.ErrNotFound), errors.Is(err, intercept.ErrNotFound):
-		writeError(w, http.StatusNotFound, err)
+		return http.StatusNotFound
 	case errors.Is(err, errWorkControlConflict), errors.Is(err, intercept.ErrAlreadyDecided), errors.Is(err, db.ErrCredentialConflict):
-		writeError(w, http.StatusConflict, err)
+		return http.StatusConflict
 	case errors.Is(err, intercept.ErrWaiterGone):
-		writeError(w, http.StatusGone, err)
+		return http.StatusGone
 	case errors.Is(err, db.ErrInvalidDigest), errors.Is(err, db.ErrInvalidEdge), errors.Is(err, db.ErrForeignNode),
 		errors.Is(err, db.ErrInvalidKnowledge), errors.Is(err, ingest.ErrInvalidInput):
-		writeError(w, http.StatusBadRequest, err)
+		return http.StatusBadRequest
 	case errors.Is(err, ingest.ErrUnsupportedFormat):
-		writeError(w, http.StatusUnsupportedMediaType, err)
-	case errors.Is(err, ingest.ErrOCRUnavailable), errors.Is(err, ingest.ErrNoText):
-		writeError(w, http.StatusUnprocessableEntity, err)
+		return http.StatusUnsupportedMediaType
+	case errors.Is(err, ingest.ErrOCRUnavailable), errors.Is(err, ingest.ErrNoText),
+		errors.Is(err, ingest.ErrSpreadsheetLimit), errors.Is(err, ingest.ErrSpreadsheetInvalid):
+		return http.StatusUnprocessableEntity
+	case errors.Is(err, filework.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge
+	case errors.Is(err, filework.ErrUnsafePath), errors.Is(err, filework.ErrHashMismatch):
+		return http.StatusUnprocessableEntity
 	case errors.Is(err, context.DeadlineExceeded):
-		writeError(w, http.StatusGatewayTimeout, err)
+		return http.StatusGatewayTimeout
 	default:
-		writeError(w, http.StatusInternalServerError, err)
+		return http.StatusInternalServerError
 	}
 }
 
@@ -403,7 +469,11 @@ func (a *API) startTask(w http.ResponseWriter, r *http.Request, t *Task) {
 }
 
 func (a *API) pauseTask(w http.ResponseWriter, r *http.Request, t *Task) {
-	a.respondTask(w, r, t, a.e.Pause(r.Context(), t, agent.AbortPausedByUser))
+	err := a.e.Pause(r.Context(), t, agent.AbortPausedByUser)
+	if err == nil && a.cfg.FileRunner != nil {
+		err = a.cfg.FileRunner.StopTask(r.Context(), t.ID)
+	}
+	a.respondTask(w, r, t, err)
 }
 
 func (a *API) resumeTask(w http.ResponseWriter, r *http.Request, t *Task) {
@@ -429,6 +499,16 @@ func (a *API) deleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.e.StopTask(id)
+	if err := a.pg.SetTaskPaused(r.Context(), id, true); err != nil {
+		fail(w, err)
+		return
+	}
+	if a.cfg.FileRunner != nil {
+		if err := a.cfg.FileRunner.StopTask(r.Context(), id); err != nil {
+			fail(w, err)
+			return
+		}
+	}
 	if err := a.pg.DeleteTask(r.Context(), id); err != nil {
 		fail(w, err)
 		return
@@ -627,6 +707,20 @@ func (a *API) nodeDetail(w http.ResponseWriter, r *http.Request, t *Task) {
 	writeJSON(w, http.StatusOK, map[string]any{"node": n, "edges": edges})
 }
 
+func (a *API) taskGraph(w http.ResponseWriter, r *http.Request, t *Task) {
+	nodes, err := t.Store.AllNodes(r.Context(), 1000)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	edges, err := t.Store.Edges(r.Context(), 2000)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes, "edges": edges})
+}
+
 func (a *API) findings(w http.ResponseWriter, r *http.Request, t *Task) {
 	fs, err := a.pg.ListFindings(r.Context(), t.ID, r.URL.Query().Get("category"))
 	if err != nil {
@@ -680,30 +774,29 @@ func (a *API) listProfiles(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	for _, p := range ps {
+		a.profileView(p)
+	}
+	if ps == nil {
+		ps = []*db.LLMProfile{}
+	}
 	writeJSON(w, http.StatusOK, ps)
 }
 
 func validateProfile(p *db.LLMProfile) error {
-	if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.Model) == "" {
-		return badRequest("name and model are required")
-	}
-	if p.Format != "" && p.Format != "anthropic" && p.Format != "openai" {
-		return badRequest("format must be anthropic or openai")
+	if err := p.Validate(); err != nil {
+		return badRequest("%s", err)
 	}
 	return nil
 }
 
 func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
-	var p db.LLMProfile
-	if err := decodeBody(r, &p); err != nil {
+	p, err := a.profileInput(r, 0, false)
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	if err := validateProfile(&p); err != nil {
-		fail(w, err)
-		return
-	}
-	id, err := a.pg.CreateLLMProfile(r.Context(), p)
+	id, err := a.pg.CreateLLMProfile(r.Context(), *p)
 	if err != nil {
 		fail(w, err)
 		return
@@ -714,7 +807,7 @@ func (a *API) createProfile(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, created)
+	writeJSON(w, http.StatusCreated, a.profileView(created))
 }
 
 func (a *API) getProfile(w http.ResponseWriter, r *http.Request) {
@@ -728,7 +821,7 @@ func (a *API) getProfile(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(w, http.StatusOK, a.profileView(p))
 }
 
 func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
@@ -737,20 +830,12 @@ func (a *API) updateProfile(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	var p db.LLMProfile
-	if err := decodeBody(r, &p); err != nil {
+	p, err := a.profileInput(r, id, false)
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	p.ID = id
-	if p.Format == "" {
-		p.Format = "anthropic"
-	}
-	if err := validateProfile(&p); err != nil {
-		fail(w, err)
-		return
-	}
-	if err := a.pg.UpdateLLMProfile(r.Context(), p); err != nil {
+	if err := a.pg.UpdateLLMProfile(r.Context(), *p); err != nil {
 		fail(w, err)
 		return
 	}
@@ -764,6 +849,15 @@ func (a *API) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	p, err := a.pg.GetLLMProfile(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if p.IsDefault {
+		fail(w, badRequest("activate another profile before deleting the default"))
+		return
+	}
 	if err := a.pg.DeleteLLMProfile(r.Context(), id); err != nil {
 		fail(w, err)
 		return
@@ -774,8 +868,8 @@ func (a *API) deleteProfile(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) bindAgent(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("agent")
-	if key != agent.AgentPlanner && key != agent.AgentWorker && key != judgeAgentKey {
-		fail(w, badRequest("agent must be planner, worker or judge"))
+	if key != agent.AgentPlanner && key != agent.AgentWorker && key != judgeAgentKey && key != agent.AgentGoals && key != agent.AgentWatchdog {
+		fail(w, badRequest("agent must be planner, worker, judge, goals or watchdog"))
 		return
 	}
 	var req struct {
@@ -784,6 +878,21 @@ func (a *API) bindAgent(w http.ResponseWriter, r *http.Request) {
 	if err := decodeBody(r, &req); err != nil {
 		fail(w, err)
 		return
+	}
+	if req.ProfileID < 0 {
+		fail(w, badRequest("invalid profile_id"))
+		return
+	}
+	if req.ProfileID > 0 {
+		p, err := a.pg.GetLLMProfile(r.Context(), req.ProfileID)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if !p.Enabled {
+			fail(w, badRequest("cannot bind a disabled profile"))
+			return
+		}
 	}
 	if err := a.pg.SetAgentLLMBinding(r.Context(), key, req.ProfileID); err != nil {
 		fail(w, err)
@@ -807,7 +916,7 @@ func (a *API) llmHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (a *API) getChain(w http.ResponseWriter, r *http.Request, t *Task) {
+func (a *API) writeChainState(w http.ResponseWriter, r *http.Request, t *Task, reopened int64) {
 	chain, err := a.pg.TaskLLMChain(r.Context(), t.ID)
 	if err != nil {
 		fail(w, err)
@@ -818,22 +927,42 @@ func (a *API) getChain(w http.ResponseWriter, r *http.Request, t *Task) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"chain": chain, "active_profile_id": st.ActiveProfileID, "revision": st.Revision})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"chain":             chain,
+		"active_profile_id": st.ActiveProfileID,
+		"revision":          st.Revision,
+		"failover_state":    st.FailoverState,
+		"failover_reason":   st.FailoverReason,
+		"reopened_intents":  reopened,
+	})
+}
+
+func (a *API) getChain(w http.ResponseWriter, r *http.Request, t *Task) {
+	a.writeChainState(w, r, t, 0)
 }
 
 func (a *API) setChain(w http.ResponseWriter, r *http.Request, t *Task) {
 	var req struct {
-		ProfileIDs []int64 `json:"profile_ids"`
+		ProfileIDs      []int64 `json:"profile_ids"`
+		ActiveProfileID int64   `json:"active_profile_id"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		fail(w, err)
 		return
 	}
-	if err := a.pg.SetTaskLLMChain(r.Context(), t.ID, req.ProfileIDs); err != nil {
+	if err := a.pg.SetTaskLLMChainWithActive(r.Context(), t.ID, req.ProfileIDs, req.ActiveProfileID); err != nil {
 		fail(w, err)
 		return
 	}
-	a.getChain(w, r, t)
+	reopened, err := t.Store.ReopenIntentsByBlockedReason(r.Context(), db.BlockedReasonQuotaExhausted)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if reopened > 0 {
+		t.Notify()
+	}
+	a.writeChainState(w, r, t, reopened)
 }
 
 func (a *API) resetChain(w http.ResponseWriter, r *http.Request, t *Task) {
@@ -842,12 +971,13 @@ func (a *API) resetChain(w http.ResponseWriter, r *http.Request, t *Task) {
 		return
 	}
 	// 配额恢复后重开因配额链耗尽而阻塞的意图。
-	if _, err := t.Store.ReopenIntentsByBlockedReason(r.Context(), db.BlockedReasonQuotaExhausted); err != nil {
+	reopened, err := t.Store.ReopenIntentsByBlockedReason(r.Context(), db.BlockedReasonQuotaExhausted)
+	if err != nil {
 		fail(w, err)
 		return
 	}
 	t.Notify()
-	a.getChain(w, r, t)
+	a.writeChainState(w, r, t, reopened)
 }
 
 func (a *API) llmUsage(w http.ResponseWriter, r *http.Request, t *Task) {
@@ -1000,6 +1130,26 @@ type uploadDocumentReq struct {
 	Title       string `json:"title"`
 	Text        string `json:"text"`
 	WakePlanner bool   `json:"wake_planner"`
+	// DocRole 为招标包内的文件角色（tender / correction / clarification / qa / attachment，空时按标题推断），
+	// PublishedAt 为公告发布时间（RFC 3339 或 2006-01-02），决定效力先后。
+	DocRole     string `json:"doc_role"`
+	PublishedAt string `json:"published_at"`
+}
+
+// publishedAt 解析公告发布时间；空串返回 nil。
+func (req uploadDocumentReq) publishedAt() (*time.Time, error) {
+	raw := strings.TrimSpace(req.PublishedAt)
+	if raw == "" {
+		return nil, nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return &t, nil
+	}
+	t, err := time.ParseInLocation("2006-01-02", raw, time.FixedZone("CST", 8*3600))
+	if err != nil {
+		return nil, badRequest("published_at must be RFC 3339 or 2006-01-02")
+	}
+	return &t, nil
 }
 
 // listDocuments 列出任务的招标文档及其章节切分；?content=1 时附带段落正文。
@@ -1035,11 +1185,17 @@ func (a *API) listDocuments(w http.ResponseWriter, r *http.Request, t *Task) {
 }
 
 type credentialReq struct {
-	Category   string          `json:"category"`
-	Code       string          `json:"code"`
-	Title      string          `json:"title"`
-	Attributes json.RawMessage `json:"attributes"`
-	ValidUntil *string         `json:"valid_until"`
+	Category      string          `json:"category"`
+	Code          string          `json:"code"`
+	Title         string          `json:"title"`
+	SubjectName   string          `json:"subject_name"`
+	SubjectType   string          `json:"subject_type"`
+	CertificateNo string          `json:"certificate_no"`
+	Issuer        string          `json:"issuer"`
+	IssuedOn      *string         `json:"issued_on"`
+	Scope         string          `json:"scope"`
+	Attributes    json.RawMessage `json:"attributes"`
+	ValidUntil    *string         `json:"valid_until"`
 }
 
 // upsertCredentials 录入企业资料：请求体为单个对象或对象数组；code 非空的记录按 (category, code) 幂等更新。
@@ -1081,8 +1237,10 @@ func (a *API) upsertCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]result, 0, len(reqs))
 	for _, c := range reqs {
-		saved, created, err := a.pg.UpsertCompanyCredential(r.Context(), &db.CompanyCredential{Category: c.Category, Code: c.Code,
-			Title: c.Title, Attributes: c.Attributes, ValidUntil: c.ValidUntil})
+		saved, created, err := a.pg.UpsertCompanyCredential(r.Context(), &db.CompanyCredential{TenantID: db.DefaultTenant,
+			Category: c.Category, Code: c.Code, Title: c.Title, SubjectName: c.SubjectName, SubjectType: c.SubjectType,
+			CertificateNo: c.CertificateNo, Issuer: c.Issuer, IssuedOn: c.IssuedOn, Scope: c.Scope,
+			Attributes: c.Attributes, ValidUntil: c.ValidUntil, CreatedBy: operator(r)})
 		if err != nil {
 			fail(w, err)
 			return
@@ -1105,6 +1263,11 @@ func validateCredential(c credentialReq) error {
 			return badRequest("valid_until must be YYYY-MM-DD")
 		}
 	}
+	if c.IssuedOn != nil && *c.IssuedOn != "" {
+		if _, err := time.Parse(time.DateOnly, *c.IssuedOn); err != nil {
+			return badRequest("issued_on must be YYYY-MM-DD")
+		}
+	}
 	return nil
 }
 
@@ -1124,8 +1287,10 @@ func (a *API) updateCredential(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	saved, err := a.pg.UpdateCompanyCredential(r.Context(), &db.CompanyCredential{ID: id, Category: req.Category, Code: req.Code,
-		Title: req.Title, Attributes: req.Attributes, ValidUntil: req.ValidUntil})
+	saved, err := a.pg.UpdateCompanyCredential(r.Context(), &db.CompanyCredential{ID: id, TenantID: db.DefaultTenant,
+		Category: req.Category, Code: req.Code, Title: req.Title, SubjectName: req.SubjectName, SubjectType: req.SubjectType,
+		CertificateNo: req.CertificateNo, Issuer: req.Issuer, IssuedOn: req.IssuedOn, Scope: req.Scope,
+		Attributes: req.Attributes, ValidUntil: req.ValidUntil, UpdatedBy: operator(r)})
 	if err != nil {
 		fail(w, err)
 		return
@@ -1139,17 +1304,18 @@ func (a *API) deleteCredential(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := a.pg.DeleteCompanyCredential(r.Context(), id); err != nil {
+	if err := a.pg.DeleteCompanyCredentialScoped(r.Context(), db.DefaultTenant, id, operator(r)); err != nil {
 		fail(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// listCredentials 查询企业资料：?category=&q=（空格分隔，任一命中）&valid_on=YYYY-MM-DD&limit=
+// listCredentials 查询企业资料：?category=&q=（空格分隔，任一命中）&valid_on=YYYY-MM-DD&task_id=&limit=
 func (a *API) listCredentials(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
+	taskID, _ := strconv.ParseInt(q.Get("task_id"), 10, 64)
 	validOn := q.Get("valid_on")
 	if validOn != "" {
 		if _, err := time.Parse(time.DateOnly, validOn); err != nil {
@@ -1158,7 +1324,7 @@ func (a *API) listCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	creds, err := a.pg.ListCompanyCredentials(r.Context(), db.CredentialFilter{Category: q.Get("category"),
-		Terms: strings.Fields(q.Get("q")), ValidOn: validOn, Limit: limit})
+		Terms: strings.Fields(q.Get("q")), ValidOn: validOn, TaskID: taskID, Tenant: db.DefaultTenant, Limit: limit})
 	if err != nil {
 		fail(w, err)
 		return

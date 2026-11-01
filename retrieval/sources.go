@@ -86,7 +86,7 @@ func (c *Coordinator) searchFacet(ctx context.Context, run *db.RetrievalRun, f F
 			}
 		}
 	case "credential":
-		creds, err := c.Service.DB.ListCompanyCredentials(ctx, db.CredentialFilter{Terms: db.QueryTerms(f.Query), Limit: 1000})
+		creds, err := c.Service.DB.ListCompanyCredentials(ctx, db.CredentialFilter{Terms: db.QueryTerms(f.Query), Limit: 1000, Tenant: run.TenantID})
 		if err != nil {
 			return nil, err
 		}

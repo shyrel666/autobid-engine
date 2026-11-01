@@ -32,11 +32,10 @@ func reviewErr(err error) (tool.Result, error) {
 
 func (k *Kit) complianceVerifyTool() tool.CoreTool {
 	spec := tool.Spec{Name: ToolComplianceVerify,
-		Description: "Verify, requirement by requirement, that the current revision of each mapped section in the approved outline " +
-			"gives a substantive response (not just a section title, a citation or a restated requirement). Writes the compliance matrix " +
-			"bound to section revision and paragraph anchor; returns per-row status, deviation and failure reasons.",
-		Schema: obj(map[string]any{"section_id": integer("limit to one proposal section (optional)"),
-			"section_code": str("limit to one section by code in the approved outline (optional)")})}
+		Description: "对当前批准大纲（或单个指定章节）绑定的全部招标要求逐条核验正文是否给出实质性响应（拒绝仅复述标题、仅贴引用或简单照搬要求原文），" +
+			"将核验结果与段落锚点写入响应矩阵（compliance_matrix），并返回每条要求的核验状态、偏离类型及不通过原因。",
+		Schema: obj(map[string]any{"section_id": integer("仅核验指定章节 ID（可选，不填则核验全部章节）"),
+			"section_code": str("仅核验指定章节编号（可选，如 \"3.2\"）")})}
 	return tool.New(spec, func(ctx context.Context, in json.RawMessage, _ *tool.ToolContext) (tool.Result, error) {
 		req, err := decode[struct {
 			SectionID int64  `json:"section_id"`
@@ -78,10 +77,9 @@ func (k *Kit) complianceVerifyTool() tool.CoreTool {
 
 func (k *Kit) fulltextConsistencyTool() tool.CoreTool {
 	spec := tool.Spec{Name: ToolFulltextConsistent,
-		Description: "Cross-check all current section revisions of the approved outline for contradicting commitments (total duration, " +
-			"warranty, SLA response/on-site/repair times and availability, team size, core models and quantities) and list ★/▲ " +
-			"requirements without a verified substantive response. Set reverify=true to refresh the compliance matrix first.",
-		Schema: obj(map[string]any{"reverify": boolean("re-run compliance_verify for all sections before the check (default true)")})}
+		Description: "横向比对当前批准大纲下所有章节有效修订稿中的关键定量承诺（总工期、免费质保期、SLA 响应/到场/修复时限与可用性、项目团队人数、核心设备型号与数量），" +
+			"检出跨章节前后矛盾项（contradictions），并汇总所有尚未通过实质性响应核验的 ★/▲ 强制条款漏项（omissions）。",
+		Schema: obj(map[string]any{"reverify": boolean("检查前是否先对全部章节重新运行响应矩阵核验（默认 true）")})}
 	return tool.New(spec, func(ctx context.Context, in json.RawMessage, _ *tool.ToolContext) (tool.Result, error) {
 		req, err := decode[struct {
 			Reverify *bool `json:"reverify"`

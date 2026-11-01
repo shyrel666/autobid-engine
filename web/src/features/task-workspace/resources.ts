@@ -15,7 +15,7 @@ export type ResourceAction =
   | 'intercept_decided' | 'run_controlled'
 
 const afterDraftChange: Resource[] = ['sections', 'business', 'charts', 'matrix', 'consistency', 'export']
-const afterRequirements: Resource[] = ['documents', 'requirements', 'business', 'outline', 'sections', 'matrix', 'consistency', 'export']
+const afterRequirements: Resource[] = ['overview', 'documents', 'requirements', 'business', 'outline', 'sections', 'matrix', 'consistency', 'export']
 
 export const INVALIDATION: Record<ResourceAction, readonly Resource[]> = {
   document_imported: afterRequirements,
@@ -42,6 +42,7 @@ export const INVALIDATION: Record<ResourceAction, readonly Resource[]> = {
 /** 活动流事件到资源失效：章节写作 / 大纲事件字段不足以定位章节，做有界的整组重读，不猜测章节 ID。 */
 export function resourcesForActivity(a: { worker: string; kind: string }): Resource[] {
   const out: Resource[] = []
+  if (a.worker === 'file-processing') out.push(...INVALIDATION.document_imported, 'evidence')
   if (a.worker === 'section-writer' || a.worker === 'proposal') out.push(...INVALIDATION.section_ai_written, 'outline')
   if (a.kind === 'intercept_request' || a.kind === 'intercept_decided') out.push('intercepts')
   if (a.kind !== 'tool') out.push('overview', 'task')

@@ -1,0 +1,24 @@
+{
+  "all_passed": true,
+  "at": "2026-10-31T09:56:07.1836459Z",
+  "checks": [
+    "legacy_backup",
+    "isolated_upgrade_preserves_data",
+    "empty_database",
+    "repeat_migration",
+    "rollback_old_version_reader",
+    "spreadsheet_no_fake_pages_after_schema_replay",
+    "database_and_originals_restore"
+  ],
+  "databases": [
+    "autobid_drill_20261031t095554_25480_legacy",
+    "autobid_drill_20261031t095554_25480_upgrade",
+    "autobid_drill_20261031t095554_25480_empty",
+    "autobid_drill_20261031t095554_25480_rollback",
+    "autobid_drill_20261031t095554_25480_files"
+  ],
+  "kind": "synthetic legacy upgrade and recovery rehearsal",
+  "legacy_commit": "e4bc8a510c775562f7be5d693cbd64310af4ea37",
+  "legacy_schema_sha256": "af520fd8420468a52c37eb83ac3d05a8c24a1b058079b3220b80c5d16e5aa4e2",
+  "limitation": "No real historical production backup was supplied; legacy data is synthetic. Not a production restore or V/P acceptance."
+}

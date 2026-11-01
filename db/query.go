@@ -104,7 +104,7 @@ func (d *DB) ListFindings(ctx context.Context, taskID int64, category string) ([
 }
 
 func (d *DB) ListLLMProfiles(ctx context.Context) ([]*LLMProfile, error) {
-	rows, err := d.QueryContext(ctx, `SELECT `+llmProfileCols+` FROM llm_profiles ORDER BY rank, priority DESC, id`)
+	rows, err := d.QueryContext(ctx, `SELECT `+llmProfileCols+` FROM llm_profiles WHERE tenant_id='default' ORDER BY is_default DESC, priority DESC, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -122,17 +122,23 @@ func (d *DB) ListLLMProfiles(ctx context.Context) ([]*LLMProfile, error) {
 
 // UpdateLLMProfile 整体覆盖 Profile 的可编辑字段（id 与 created_at 不变）。
 func (d *DB) UpdateLLMProfile(ctx context.Context, p LLMProfile) error {
+	options, err := json.Marshal(p.LLMOptions)
+	if err != nil {
+		return err
+	}
 	res, err := d.ExecContext(ctx, `UPDATE llm_profiles SET name = $2, format = $3, base_url = $4, api_key_env = $5,
 			model = $6, max_tokens = $7, effort = $8, thinking_display = $9, priority = $10, rank = $11,
-			window_tokens = $12, enabled = $13, in_global_pool = $14, proxy = $15, session_header_key = $16
-		WHERE id = $1`,
+			window_tokens = $12, enabled = $13, in_global_pool = $14, proxy = $15, session_header_key = $16,
+			api_key_ciphertext=$17, api_key_hint=$18, options=$19, updated_by=$20
+		WHERE id = $1 AND tenant_id='default' AND (NOT is_default OR $13)`,
 		p.ID, p.Name, p.Format, p.BaseURL, p.APIKeyEnv, p.Model, p.MaxTokens, p.Effort, p.ThinkingDisplay,
-		p.Priority, p.Rank, p.WindowTokens, p.Enabled, p.InGlobalPool, p.Proxy, p.SessionHeaderKey)
+		p.Priority, p.Rank, p.WindowTokens, p.Enabled, p.InGlobalPool, p.Proxy, p.SessionHeaderKey,
+		p.APIKeyCiphertext, p.APIKeyHint, options, p.UpdatedBy)
 	return requireOneRow(res, err, p.ID)
 }
 
 func (d *DB) DeleteLLMProfile(ctx context.Context, id int64) error {
-	res, err := d.ExecContext(ctx, `DELETE FROM llm_profiles WHERE id = $1`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM llm_profiles WHERE id = $1 AND tenant_id='default' AND NOT is_default`, id)
 	return requireOneRow(res, err, id)
 }
 

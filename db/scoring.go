@@ -34,11 +34,14 @@ func validScoreGroup(g string) bool {
 	return false
 }
 
-// InTechnicalScope 报告要求是否需要在技术标中作答：价格评分项由报价文件响应，不进入技术标大纲与响应覆盖。
-func (r *RequirementItem) InTechnicalScope() bool { return inTechnicalScope(r.Category, r.ScoreGroup) }
+// InTechnicalScope 报告要求是否需要在技术标中作答：价格评分项由报价文件响应，否决项由投标方逐项核对，
+// 不投的分包、已被更正覆盖的旧条款与拆分出的子档次不单列大纲映射。
+func (r *RequirementItem) InTechnicalScope() bool {
+	return !r.OutOfBid && !r.IsSuperseded() && r.ParentID == nil && inTechnicalScope(r.Category, r.ScoreGroup)
+}
 
 func inTechnicalScope(category, scoreGroup string) bool {
-	return !(category == ReqScoringItem && scoreGroup == ScoreGroupPrice)
+	return category != ReqVetoItem && !(category == ReqScoringItem && scoreGroup == ScoreGroupPrice)
 }
 
 // scoreTable 是 document_chunks.tables_json 中一张表格的解析视图。
@@ -617,7 +620,7 @@ func summarizeScoring(items []*RequirementItem) []ScoringSummary {
 	groups := map[string]map[string]*ScoringGroupSummary{}
 	var lots []string
 	for _, r := range items {
-		if r.Category != ReqScoringItem {
+		if r.Category != ReqScoringItem || r.IsSuperseded() || r.ParentID != nil {
 			continue
 		}
 		var loc struct {
@@ -626,6 +629,9 @@ func summarizeScoring(items []*RequirementItem) []ScoringSummary {
 			GroupWeight float64 `json:"group_weight"`
 		}
 		_ = json.Unmarshal(r.SourceLoc, &loc)
+		if loc.Lot == "" && r.Lot != "" {
+			loc.Lot = r.Lot
+		}
 		s := byLot[loc.Lot]
 		if s == nil {
 			s = &ScoringSummary{Lot: loc.Lot, Groups: []ScoringGroupSummary{}, Warnings: []string{}}
@@ -802,10 +808,433 @@ func scoringCandidates(order []*chunkSource) ([]reqCandidate, map[int64]bool, ma
 			if it.Page > 0 {
 				loc["item_page"] = it.Page
 			}
+			fullDesc := strings.TrimSpace(desc.String())
+			tiers, evalKind, scoreMin := ParseScoringTiers(it.Criteria+"\n"+it.Note, it.Score, it.ScoreGroup)
+			proof := ParseProofRules(title+"\n"+it.Criteria+"\n"+it.Note, ReqScoringItem, it.ScoreGroup)
 			out = append(out, reqCandidate{code: fmt.Sprintf("SC-%s-T%d-%02d", docKey, p.table+1, k+1), category: ReqScoringItem,
-				title: firstLine(title, 60), description: strings.TrimSpace(desc.String()), mandatory: it.Mandatory, score: it.Score,
-				scoreGroup: it.ScoreGroup, tableItem: true, src: p.cs, loc: loc})
+				title: firstLine(title, 60), description: fullDesc, mandatory: it.Mandatory, score: it.Score,
+				scoreMin: scoreMin, scoreGroup: it.ScoreGroup, evalKind: evalKind, atomType: AtomScoringItem,
+				scoringTiers: tiers, proofRules: proof, lot: it.Lot, tableItem: true, src: p.cs, loc: loc})
 		}
 	}
 	return out, chunks, docs
+}
+
+// ---------------------------------------------------------------------------
+// D1：评分细则拆解（档次 / 得分点 / 主客观属性）与证明材料硬规则解析
+// ---------------------------------------------------------------------------
+
+const (
+	AtomVetoItem      = "veto_item"
+	AtomScoringItem   = "scoring_item"
+	AtomScoringPoint  = "scoring_point"
+	AtomTierCriterion = "tier_criterion"
+	AtomDemandItem    = "demand_item"
+	AtomProofRule     = "proof_rule"
+	AtomFormatRule    = "format_rule"
+
+	EvalObjective  = "objective"
+	EvalSubjective = "subjective"
+	EvalMixed      = "mixed"
+)
+
+func validAtomType(a string) bool {
+	switch a {
+	case "", AtomVetoItem, AtomScoringItem, AtomScoringPoint, AtomTierCriterion, AtomDemandItem, AtomProofRule, AtomFormatRule:
+		return true
+	}
+	return false
+}
+
+func validEvalKind(e string) bool {
+	switch e {
+	case "", EvalObjective, EvalSubjective, EvalMixed:
+		return true
+	}
+	return false
+}
+
+// DefaultAtomType 按要求类别与是否有父节点推断默认原子粒度类型。
+func DefaultAtomType(category string, hasParent bool) string {
+	switch category {
+	case ReqVetoItem:
+		return AtomVetoItem
+	case ReqScoringItem:
+		if hasParent {
+			return AtomScoringPoint
+		}
+		return AtomScoringItem
+	case ReqFormatAttachment:
+		return AtomFormatRule
+	default:
+		return AtomDemandItem
+	}
+}
+
+// ScoringTier 表示一条评分项拆解出的档次判据或逐条得分点。
+type ScoringTier struct {
+	Seq       int     `json:"seq"`
+	Label     string  `json:"label"`
+	Kind      string  `json:"kind"` // tier（优/良/中/差档次）| point（逐条得分点）| deduction（扣分项）| formula（价格公式）
+	EvalKind  string  `json:"eval_kind,omitempty"`
+	ScoreMin  float64 `json:"score_min,omitempty"`
+	ScoreMax  float64 `json:"score_max,omitempty"`
+	Criteria  string  `json:"criteria"`
+	ProofHint string  `json:"proof_hint,omitempty"`
+}
+
+// ProofRules 表示从评分标准、审查表或实质性条款中抽取的取证硬规则。
+// ModelParams / ScopeKeywords 是 D2 可采性扩展：型号参数门槛与认证 / 合同范围关键词。
+type ProofRules struct {
+	RequiredDocs         []string          `json:"required_docs,omitempty"`
+	ContractPages        []string          `json:"contract_pages,omitempty"`
+	NeedAcceptance       bool              `json:"need_acceptance,omitempty"`
+	DateAnchor           string            `json:"date_anchor,omitempty"` // signing_date | acceptance_date
+	YearsWindow          int               `json:"years_window,omitempty"`
+	SinceDate            string            `json:"since_date,omitempty"`
+	ValidOnBidDeadline   bool              `json:"valid_on_bid_deadline,omitempty"`
+	SocialSecurityMonths int               `json:"social_security_months,omitempty"`
+	BidderOnly           bool              `json:"bidder_only,omitempty"`
+	MinCount             int               `json:"min_count,omitempty"`
+	ModelParams          map[string]string `json:"model_params,omitempty"`
+	ScopeKeywords        []string          `json:"scope_keywords,omitempty"`
+	RawSummary           string            `json:"raw_summary,omitempty"`
+}
+
+func (p ProofRules) IsZero() bool {
+	return len(p.RequiredDocs) == 0 && len(p.ContractPages) == 0 && !p.NeedAcceptance && p.DateAnchor == "" &&
+		p.YearsWindow == 0 && p.SinceDate == "" && !p.ValidOnBidDeadline && p.SocialSecurityMonths == 0 &&
+		!p.BidderOnly && p.MinCount == 0 && len(p.ModelParams) == 0 && len(p.ScopeKeywords) == 0 && p.RawSummary == ""
+}
+
+var (
+	reMetaPrefix     = regexp.MustCompile(`^(?:评分类别|分值|评分标准|说明)[：:]\s*`)
+	reBaseScore      = regexp.MustCompile(`起评分[：:为]?\s*([0-9]+(?:\.[0-9]+)?)\s*分`)
+	reTierBandLabel  = regexp.MustCompile(`(?:^|[；;。\n\s])(第[一二三四五1-5]档|[一二三四五]档|优秀?|良好?|中等?|较差|差|好|较好|一般)(?:[（(\[【]\s*(\d+(?:\.\d+)?)\s*(?:[-~～至,，]\s*(\d+(?:\.\d+)?))?\s*分?\s*[）)\]】]|[：:、，,\s])`)
+	reSubPointSplit  = regexp.MustCompile(`(?m)(?:^|[；;\n])\s*(?:[（(]\d+[)）]|\d+[.、）)]|[①②③④⑤⑥⑦⑧⑨⑩]|[（(][一二三四五六七八九十]+[)）])`)
+	reClauseScore    = regexp.MustCompile(`(?:最高(?:得|计)?|各?(?:得|计)|[（(\[【])\s*[（(\[【]?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*[-~～至,，]\s*([0-9]+(?:\.[0-9]+)?))?\s*[）)\]】]?\s*分`)
+	reDeductionScore = regexp.MustCompile(`扣\s*([0-9]+(?:\.[0-9]+)?)\s*分`)
+	reSubjectiveCue  = regexp.MustCompile(`合理|完善|详实|清晰|透彻|完整|可行|科学|针对性|深入|准确|优|良|中|差|第一档|第二档|第三档|一档|二档|三档|酌情|比较|一般|欠缺|贴合`)
+	reObjectiveCue   = regexp.MustCompile(`每提供|每个得|每项得|每名|每人|每份|每套|具有.*证书|持有.*证书|具备.*资质|通过.*认证|认证证书|合同|业绩|案例|著作权|软著|专利|检测报告|测试报告|审计报告|社保|基准价|计算公式|低价优先`)
+)
+
+func stripScoringMeta(text string) string {
+	var lines []string
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "评分类别：") || strings.HasPrefix(t, "分值：") {
+			continue
+		}
+		t = reMetaPrefix.ReplaceAllString(t, "")
+		lines = append(lines, t)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func classifyClauseEval(clause, scoreGroup string) string {
+	if scoreGroup == ScoreGroupPrice {
+		return EvalObjective
+	}
+	obj := reObjectiveCue.MatchString(clause)
+	sub := reSubjectiveCue.MatchString(clause)
+	switch {
+	case obj && !sub:
+		return EvalObjective
+	case sub && !obj:
+		return EvalSubjective
+	case obj && sub:
+		if strings.Contains(clause, "档") || strings.Contains(clause, "优") || strings.Contains(clause, "良") {
+			return EvalSubjective
+		}
+		return EvalObjective
+	case scoreGroup == ScoreGroupCommercial:
+		return EvalObjective
+	default:
+		return EvalSubjective
+	}
+}
+
+func extractProofHint(clause string) string {
+	p := ParseProofRules(clause, ReqScoringItem, "")
+	if len(p.RequiredDocs) == 0 {
+		return ""
+	}
+	return strings.Join(p.RequiredDocs, "+")
+}
+
+// ParseScoringTiers 将评分标准文本拆解为结构化档次 / 得分点列表，并推断主客观属性（objective / subjective / mixed）与最低起评分。
+func ParseScoringTiers(text string, maxScore float64, scoreGroup string) ([]ScoringTier, string, float64) {
+	body := stripScoringMeta(text)
+	if body == "" {
+		body = strings.TrimSpace(text)
+	}
+	if scoreGroup == ScoreGroupPrice {
+		if body == "" {
+			body = "按评标基准价公式计算价格得分"
+		}
+		return []ScoringTier{{Seq: 1, Label: "基准价公式", Kind: "formula", EvalKind: EvalObjective, ScoreMin: 0, ScoreMax: maxScore, Criteria: body}}, EvalObjective, 0
+	}
+	scoreMin := 0.0
+	if m := reBaseScore.FindStringSubmatch(body); m != nil && !reDeductionScore.MatchString(body) {
+		if v, err := strconv.ParseFloat(m[1], 64); err == nil && v >= 0 && v <= maxScore {
+			scoreMin = v
+		}
+	}
+
+	// 将正文按分号或换行切分为候选子句。
+	rawParts := splitScoringClauses(body)
+	var tiers []ScoringTier
+	sumMax := 0.0
+	hasBand := reTierBandLabel.MatchString(body)
+	for _, part := range rawParts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		var sMin, sMax float64
+		kind := "point"
+		label := fmt.Sprintf("得分点%d", len(tiers)+1)
+		if bm := reTierBandLabel.FindStringSubmatch(part); bm != nil {
+			kind = "tier"
+			label = bm[1]
+			if bm[2] != "" {
+				v1, _ := strconv.ParseFloat(bm[2], 64)
+				if bm[3] != "" {
+					v2, _ := strconv.ParseFloat(bm[3], 64)
+					sMin, sMax = math.Min(v1, v2), math.Max(v1, v2)
+				} else {
+					sMax = v1
+				}
+			}
+		}
+		if sMax == 0 {
+			if dm := reDeductionScore.FindStringSubmatch(part); dm != nil {
+				kind = "deduction"
+				label = fmt.Sprintf("扣分项%d", len(tiers)+1)
+				sMax, _ = strconv.ParseFloat(dm[1], 64)
+			} else if sm := reClauseScore.FindAllStringSubmatch(part, -1); len(sm) > 0 {
+				last := sm[len(sm)-1]
+				v1, _ := strconv.ParseFloat(last[1], 64)
+				if last[2] != "" {
+					v2, _ := strconv.ParseFloat(last[2], 64)
+					sMin, sMax = math.Min(v1, v2), math.Max(v1, v2)
+				} else {
+					sMax = v1
+				}
+			}
+		}
+		if len(rawParts) > 1 && sMax == 0 && kind != "tier" {
+			// 若没有分值且上一条已有档次/得分点，并入上一条说明。
+			if len(tiers) > 0 {
+				tiers[len(tiers)-1].Criteria += "；" + part
+				if tiers[len(tiers)-1].ProofHint == "" {
+					tiers[len(tiers)-1].ProofHint = extractProofHint(part)
+				}
+				continue
+			}
+		}
+		if sMax == 0 && maxScore > 0 && len(rawParts) == 1 {
+			sMax = maxScore
+		}
+		ev := classifyClauseEval(part, scoreGroup)
+		if kind == "tier" {
+			ev = EvalSubjective
+		}
+		sumMax += sMax
+		tiers = append(tiers, ScoringTier{
+			Seq:       len(tiers) + 1,
+			Label:     label,
+			Kind:      kind,
+			EvalKind:  ev,
+			ScoreMin:  sMin,
+			ScoreMax:  sMax,
+			Criteria:  part,
+			ProofHint: extractProofHint(part),
+		})
+	}
+	if len(tiers) == 0 {
+		ev := classifyClauseEval(body, scoreGroup)
+		kind := "point"
+		if ev == EvalSubjective {
+			kind = "tier"
+		}
+		tiers = []ScoringTier{{Seq: 1, Label: "评分标准", Kind: kind, EvalKind: ev, ScoreMin: scoreMin, ScoreMax: maxScore,
+			Criteria: body, ProofHint: extractProofHint(body)}}
+	} else if len(tiers) > 1 && (hasBand || (maxScore > 0 && sumMax > maxScore*1.15 && classifyClauseEval(body, scoreGroup) == EvalSubjective)) {
+		// 多个互斥分值档次（如：得10分；得7分；得4分）：归一为 tier。
+		for i := range tiers {
+			if tiers[i].Kind == "point" {
+				tiers[i].Kind = "tier"
+				tiers[i].EvalKind = EvalSubjective
+				if strings.HasPrefix(tiers[i].Label, "得分点") {
+					tiers[i].Label = fmt.Sprintf("第%d档", i+1)
+				}
+			}
+		}
+	}
+	hasObj, hasSub := false, false
+	for _, t := range tiers {
+		switch t.EvalKind {
+		case EvalObjective:
+			hasObj = true
+		case EvalSubjective:
+			hasSub = true
+		}
+	}
+	evalKind := EvalSubjective
+	switch {
+	case hasObj && hasSub:
+		evalKind = EvalMixed
+	case hasObj:
+		evalKind = EvalObjective
+	}
+	return tiers, evalKind, scoreMin
+}
+
+func splitScoringClauses(body string) []string {
+	if idxs := reSubPointSplit.FindAllStringIndex(body, -1); len(idxs) >= 2 {
+		var out []string
+		start := 0
+		for _, idx := range idxs {
+			seg := strings.TrimSpace(body[start:idx[0]])
+			if seg != "" {
+				out = append(out, seg)
+			}
+			start = idx[0]
+			for start < len(body) && (body[start] == '\n' || body[start] == ';') {
+				start++
+			}
+			if strings.HasPrefix(body[start:], "；") {
+				start += len("；")
+			}
+		}
+		if tail := strings.TrimSpace(body[start:]); tail != "" {
+			out = append(out, tail)
+		}
+		if len(out) >= 2 {
+			return out
+		}
+	}
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		for _, sub := range strings.Split(line, "；") {
+			if s := strings.TrimSpace(sub); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+var (
+	reYearsWindow          = regexp.MustCompile(`近\s*([一二三四五六七八九十0-9]+)\s*年`)
+	reSinceDate            = regexp.MustCompile(`(20\d{2})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?\s*(?:以来|起|至今|后|（含）|\(含\))?`)
+	reSocialSecurityMonths = regexp.MustCompile(`(?:(?:近|连续|不少于|至少)\s*([一二三四五六七八九十0-9]+)\s*个月.{0,14}(?:社保|社会保险|养老保险)|(?:社保|社会保险|养老保险).{0,14}?([一二三四五六七八九十0-9]+)\s*个月)`)
+	reBidderOnly           = regexp.MustCompile(`(?:母公司|子公司|关联公司|总公司|分公司|分支机构|控股|上级单位).{0,16}(?:不予认可|不接受|不得|不算|无效|不计|不作为)|(?:不接受|不予认可|不认可|不得使用).{0,16}(?:母公司|子公司|关联公司|总公司|分公司|分支机构|控股|上级单位)|仅认可投标人(?:自身|本单位|独立)`)
+	reDateAnchorSign       = regexp.MustCompile(`以.{0,8}(?:合同)?签订(?:时间|日期)为准|按合同签订(?:时间|日期)`)
+	reDateAnchorAccept     = regexp.MustCompile(`以.{0,8}(?:项目|竣工|终验|合同|履约)?验收(?:合格)?(?:时间|日期)为准|按验收(?:时间|日期)`)
+	reNeedAcceptance       = regexp.MustCompile(`(?:同时|并|及|和|附|含|连同).{0,14}(?:验收报告|验收证明|验收合格|履约评价|用户评价|业主评价)|(?:合同|协议).{0,20}(?:验收报告|验收单|验收证明)`)
+	reValidDeadline        = regexp.MustCompile(`有效期内|有效的|在有效期|有效期至|处于有效`)
+	reMinCount             = regexp.MustCompile(`(?:不少于|至少|提供|具备)\s*([0-9]+)\s*(?:个|份|项|名|人|套)`)
+	reProofSentence        = regexp.MustCompile(`[^。；;\n]*(?:提供|须附|应附|复印件|扫描件|证明|原件|盖章|签章|有效期|不予认可|为准)[^。；;\n]*`)
+)
+
+func parseChineseInt(s string) int {
+	s = strings.TrimSpace(s)
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	m := map[string]int{"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10, "十二": 12}
+	return m[s]
+}
+
+// ParseProofRules 从要求或评分标准文本中抽取结构化证明材料硬规则。
+func ParseProofRules(text, category, scoreGroup string) ProofRules {
+	var p ProofRules
+	if strings.TrimSpace(text) == "" || scoreGroup == ScoreGroupPrice {
+		return p
+	}
+	docRules := []struct {
+		key string
+		re  *regexp.Regexp
+	}{
+		{"license", regexp.MustCompile(`营业执照|法人证书|事业单位法人|登记证书`)},
+		{"certificate", regexp.MustCompile(`证书|认证|资质|职称|执业资格|CCRC|CMMI|ITSS|ISO\s*\d+|等级保护`)},
+		{"contract", regexp.MustCompile(`合同|协议书|中标通知书|成交通知书`)},
+		{"acceptance_report", regexp.MustCompile(`验收报告|验收单|验收证明|履约验收|用户评价|业主评价|完工证明`)},
+		{"social_security", regexp.MustCompile(`社保|社会保险|养老保险|参保证明`)},
+		{"financial_report", regexp.MustCompile(`审计报告|财务报告|财务报表|资产负债表|资信证明`)},
+		{"tax_proof", regexp.MustCompile(`纳税|完税|税收证明`)},
+		{"test_report", regexp.MustCompile(`检测报告|测试报告|检验报告|测评报告`)},
+		{"ip_patent", regexp.MustCompile(`著作权|软著|专利|知识产权`)},
+		{"invoice", regexp.MustCompile(`发票`)},
+		{"commitment", regexp.MustCompile(`承诺函|承诺书|声明函|声明书|保证书|资格声明`)},
+	}
+	hasDoc := map[string]bool{}
+	for _, r := range docRules {
+		if r.re.MatchString(text) {
+			p.RequiredDocs = append(p.RequiredDocs, r.key)
+			hasDoc[r.key] = true
+		}
+	}
+	if hasDoc["contract"] {
+		for _, kw := range []string{"首页", "金额页", "标的页", "内容页", "清单页", "签章页", "签字盖章页", "签署页", "关键页"} {
+			if strings.Contains(text, kw) {
+				p.ContractPages = append(p.ContractPages, kw)
+			}
+		}
+	}
+	if (hasDoc["contract"] && hasDoc["acceptance_report"]) || reNeedAcceptance.MatchString(text) {
+		p.NeedAcceptance = true
+	}
+	switch {
+	case reDateAnchorAccept.MatchString(text):
+		p.DateAnchor = "acceptance_date"
+	case reDateAnchorSign.MatchString(text):
+		p.DateAnchor = "signing_date"
+	}
+	if m := reYearsWindow.FindStringSubmatch(text); m != nil {
+		p.YearsWindow = parseChineseInt(m[1])
+	}
+	if m := reSinceDate.FindStringSubmatch(text); m != nil {
+		mo, _ := strconv.Atoi(m[2])
+		day := 1
+		if m[3] != "" {
+			day, _ = strconv.Atoi(m[3])
+		}
+		if mo >= 1 && mo <= 12 && day >= 1 && day <= 31 {
+			p.SinceDate = fmt.Sprintf("%s-%02d-%02d", m[1], mo, day)
+		}
+	}
+	if reValidDeadline.MatchString(text) || hasDoc["certificate"] || hasDoc["license"] {
+		p.ValidOnBidDeadline = true
+	}
+	if m := reSocialSecurityMonths.FindStringSubmatch(text); m != nil {
+		raw := m[1]
+		if raw == "" {
+			raw = m[2]
+		}
+		p.SocialSecurityMonths = parseChineseInt(raw)
+	}
+	if reBidderOnly.MatchString(text) {
+		p.BidderOnly = true
+	}
+	if m := reMinCount.FindStringSubmatch(text); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 && n <= 100 {
+			p.MinCount = n
+		}
+	}
+	if matches := reProofSentence.FindAllString(text, 3); len(matches) > 0 {
+		var clean []string
+		for _, s := range matches {
+			if s = strings.TrimSpace(s); s != "" {
+				clean = append(clean, s)
+			}
+		}
+		p.RawSummary = truncateRunes(strings.Join(clean, "；"), 180)
+	}
+	return p
 }

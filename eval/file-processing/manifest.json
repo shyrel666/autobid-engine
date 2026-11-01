@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-10-31",
+  "level": "E",
+  "note": "合成工程样本清单；真实复杂材料计数为 0，不得用于 F2 启动关口。",
+  "fixtures_dir": "fixtures",
+  "expected": "expected.json",
+  "contract": "CONTRACT.md",
+  "f2_gate": {
+    "min_real_complex_samples": 3,
+    "min_real_projects": 2,
+    "container_backend_required": true,
+    "real_complex_samples_current": 0,
+    "real_projects_current": 0,
+    "container_backend_current": "unavailable: docker/podman absent, WSL not installed"
+  },
+  "limits": {
+    "upload_bytes": 67108864,
+    "zip_max_entries": 200,
+    "zip_max_total_bytes": 268435456,
+    "zip_max_entry_bytes": 67108864,
+    "zip_max_ratio": 100,
+    "xlsx_max_cells": 2000000,
+    "xlsx_max_rows": 200000,
+    "xlsx_max_cols": 512,
+    "xlsx_max_sheets": 200,
+    "table_window_max_tokens": 600,
+    "table_window_max_data_rows": 40
+  },
+  "samples": [
+    {"id": "xlsx-complex-01", "file": "fixtures/clean.xlsx", "sha256": "60a7f330c828a6e586090836d5f0593cc01a1ae9d78ad059a66e9b8c3426b5cf", "bytes": 8201, "format": "xlsx", "class": "fixed", "expected_key": "clean.xlsx", "note": "4 个工作表；隐藏页/隐藏行列/合并/公式无缓存/前导零/日期/金额/空表"},
+    {"id": "csv-gb18030-01", "file": "fixtures/gb18030.csv", "sha256": "59b4eb3812ebbd1ae978fc065da04527eb2de2b2569e76f1747ea7596a0546a8", "bytes": 143, "format": "csv", "class": "fixed", "expected_key": "gb18030.csv", "note": "GB18030、分号分隔、引号内换行"},
+    {"id": "tsv-leading-zero-01", "file": "fixtures/quote.tsv", "sha256": "04be906eaf73556561ebb15a70c0a3dd727092fb131fda3de6331aca83eb0a91", "bytes": 162, "format": "tsv", "class": "fixed", "expected_key": "quote.tsv", "note": "Tab 分隔、前导零、长编号"},
+    {"id": "zip-safe-01", "file": "fixtures/safe.zip", "sha256": "6dc86d62bfb187ecb627633ef236a09818b4babaf45b3699bda0cb9a243bf74b", "bytes": 9535, "format": "zip", "class": "fixed", "expected_key": "safe.zip", "note": "安全清单与受限展开"},
+    {"id": "zip-store-docx-01", "file": "fixtures/store-docx.zip", "sha256": "4fecbab3d4c1514b45587b527cce4702bed6f8a081ec6fa756265c1c1cae5529", "bytes": 1964, "format": "zip", "class": "fixed", "expected_key": "store-docx.zip", "note": ".zip 扩展名优先，不得判为 DOCX"},
+    {"id": "docx-fake-01", "file": "fixtures/not_docx.docx", "sha256": "057bb310ee1c95dc3f37814ede9ea6595619ce94eecc90993cd2ecd357160d91", "bytes": 177, "format": "docx", "class": "fixed-diagnostic", "expected_key": "not_docx.docx", "note": "中央目录缺少 word/document.xml"},
+    {"id": "zip-traversal-01", "file": "fixtures/zip-traversal.zip", "sha256": "707845c9045050801f427eb98ffa32d795ef285062d5f84b5b131be181c404d5", "bytes": 165, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-traversal.zip"},
+    {"id": "zip-absolute-01", "file": "fixtures/zip-absolute.zip", "sha256": "6fd4111c847e34c628485028b17f27f5e990229f6841e62da6b4dbe7a5b5aa10", "bytes": 165, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-absolute.zip"},
+    {"id": "zip-drive-01", "file": "fixtures/zip-drive.zip", "sha256": "6ffbf7386236fd38831eac9dcdabf9a764fafe4774d8e87ac842b2d3c0df03b8", "bytes": 165, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-drive.zip"},
+    {"id": "zip-backslash-01", "file": "fixtures/zip-backslash.zip", "sha256": "58bfa682fa8cd514564e6051d51b7e1144b92c4985c3c8396ea8bed9346880aa", "bytes": 157, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-backslash.zip"},
+    {"id": "zip-symlink-01", "file": "fixtures/zip-symlink.zip", "sha256": "d5677b3dab8e4a58e32c9183146613624d7f5895c4fdf88aa88b3bfa0f268e20", "bytes": 157, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-symlink.zip"},
+    {"id": "zip-duplicate-01", "file": "fixtures/zip-duplicate.zip", "sha256": "3cceb7b692ce121b6a0491f8ee5b348ce4e35bf4057493d3d19b27fc5e044a8e", "bytes": 294, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-duplicate.zip"},
+    {"id": "zip-nested-01", "file": "fixtures/zip-nested.zip", "sha256": "fab7071cc3be14ac4da90f0e65b4d7f166c4b560c6e79c1d0d500b4bd8ced58d", "bytes": 248, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-nested.zip"},
+    {"id": "zip-ratio-01", "file": "fixtures/zip-ratio.zip", "sha256": "80bf8722d25ede88cdb422f7e4ec27e6ef0e83406dc36784ada2048b5d0b3216", "bytes": 714, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-ratio.zip", "note": "512 KiB 零字节压缩后 714 B，压缩比超过 100"},
+    {"id": "zip-many-01", "file": "fixtures/zip-many.zip", "sha256": "76040fbd6b9ec304fb77ff8d7547ae5277969236485f2bdaa8cdb1671782ff1e", "bytes": 28966, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-many.zip", "note": "201 个条目，超过 200 上限"},
+    {"id": "zip-oversize-01", "file": "fixtures/zip-oversize.zip", "sha256": "89568828d24914f2e741d8285532477404992a95984d0f703828623ffa0f699c", "bytes": 276, "format": "zip", "class": "fixed-diagnostic", "expected_key": "zip-oversize.zip", "note": "使用 max_entry_bytes=65536 的测试覆盖"}
+  ],
+  "real_corpus": {
+    "dir": "../../ccgp_2026-10-06",
+    "source": "中国政府采购网公开招标文件（2026-10-06 收集）",
+    "complex_files": 0,
+    "files": [
+      {"file": "01_2026年度中国政府网运维服务采购项目采购文件.pdf", "sha256": "2ef11a75afbe514c36b74621d3f39bb9c0e55e50ec8cf49a07ec96e1fb235dab", "format": "pdf"},
+      {"file": "02_2026年中国疾病预防控制中心联邦计算管理平台-可信数据空间数字底座建设（二次）-招标文件.pdf", "sha256": "16b6749ee71e9c50c8154a41ce880f37326b8edd85d0044bdfe117449d4674fa", "format": "pdf"},
+      {"file": "03_ZZGJ20250268-中央政府采购管理系统升级改造项目公开招标文件.pdf", "sha256": "5b81d1368898ff18380d6d44d8460a9a7323431b6b2a86e15fc3384968d02847", "format": "pdf"},
+      {"file": "04_许昌职业技术学院“许昌职业技术学院网络安全及信息化建设运维服务项目”招标文件.pdf", "sha256": "37294398627270a6b16f01dc7048302ad26e8acb6b9b04c2879d1172ec21d552", "format": "pdf"},
+      {"file": "05_中经国际发布稿260617-社会服务场景运维（2026年）招标文件.pdf", "sha256": "2699303f562b2037da66ef8144172ee650ef841c91913e0eb7c7fd05aa3fdec7", "format": "pdf"},
+      {"file": "01_（上网稿）重庆市一体化智能化公共数据平台2025年度运维招标文件.docx", "sha256": "bf999504bf6ac14977491b01fe7131caca325cc6ae16f40cf477299a8f423cdf", "format": "docx"},
+      {"file": "02_（上网稿）“政务·数字审计”升级优化及AI场景构建技术服务采购招标文件.docx", "sha256": "9780e03e87d8374f803a16e1b28993ad76c51f1ed64372e454d33e45f87eafcb", "format": "docx"},
+      {"file": "03_招标文件（定稿）—重庆市发展和改革委员会2026年度政务数字化应用常规运维.docx", "sha256": "25b65c284d4ac31ba6e8c49b06df2c43761e8c8c2034e12b213ab3988d950539", "format": "docx"},
+      {"file": "04_公开招标-2026年网络安全服务CQS26C01245（终审稿）.docx", "sha256": "f953868d457de49883d26ccffb588a75c950ff44a80efec45c22842f6448be2f", "format": "docx"},
+      {"file": "05_数据治理项目（数据中台）（定稿）.docx", "sha256": "fc700b2977682b349e46ffd6a938222c6f60a18cba464ce53ea0773018c8fc31", "format": "docx"}
+    ]
+  },
+  "format_routing_cases": [
+    {"name": "csv_text_csv", "ext": ".csv", "mime": "text/csv", "data_prefix": "a,b\\n1,2", "expected": "csv"},
+    {"name": "csv_excel_mime", "ext": ".csv", "mime": "application/vnd.ms-excel", "data_prefix": "a,b\\n1,2", "expected": "csv"},
+    {"name": "csv_no_mime", "ext": ".csv", "mime": "", "data_prefix": "a,b\\n1,2", "expected": "csv"},
+    {"name": "xlsx", "ext": ".xlsx", "mime": "", "data_prefix": "PK\\x03\\x04", "expected": "xlsx"},
+    {"name": "zip_store_docx", "ext": ".zip", "mime": "application/zip", "data_prefix": "PK\\x03\\x04", "expected": "zip"},
+    {"name": "docx_sniff_central_directory", "ext": "", "mime": "", "data_prefix": "PK\\x03\\x04", "expected": "docx"},
+    {"name": "zip_sniff_generic", "ext": "", "mime": "", "data_prefix": "PK\\x03\\x04", "expected": "zip"}
+  ]
+}

@@ -44,7 +44,7 @@ func (d *DB) RetrievalCandidates(ctx context.Context, q KnowledgeQuery, indexID 
 	args = append(args, min(max(q.Limit, 1), 100))
 	tableOrder := ""
 	if q.PreferTables {
-		tableOrder = ",(c.table_count>0) DESC"
+		tableOrder = ",(jsonb_array_length(c.tables_json)>0) DESC"
 	}
 	rows, err := d.QueryContext(ctx, `SELECT `+kchunkCols+`, `+kchunkBodyCols+`,d.title,d.category,d.file_name,to_jsonb(d.tags),d.extra,`+expr+` AS score FROM knowledge_chunks c JOIN knowledge_documents d ON d.id=c.doc_id`+join+` WHERE `+filter+fmt.Sprintf(` ORDER BY score DESC`+tableOrder+`,c.id LIMIT $%d`, len(args)), args...)
 	if err != nil {

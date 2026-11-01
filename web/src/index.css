@@ -39,9 +39,35 @@
 
 :root {
   color-scheme: light;
-  --sidebar-expanded: 272px;
+  --sidebar-expanded: 240px;
   --sidebar-collapsed: 64px;
   --focus-ring: #a3a3a380;
+}
+
+html.dark {
+  color-scheme: dark;
+  --color-canvas: #0f172a;
+  --color-panel: #1e293b;
+  --color-fg: #f1f5f9;
+  --color-muted: #94a3b8;
+  --color-soft: #263349;
+  --color-line: #334155;
+  --color-line-soft: #1e293b;
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-link: #60a5fa;
+  --color-warm: #292524;
+
+  --color-slate-50: #1e293b;
+  --color-slate-100: #263349;
+  --color-slate-200: #334155;
+  --color-slate-300: #475569;
+  --color-slate-400: #64748b;
+  --color-slate-500: #94a3b8;
+  --color-slate-600: #cbd5e1;
+  --color-slate-700: #e2e8f0;
+  --color-slate-800: #f1f5f9;
+  --color-slate-900: #f8fafc;
 }
 
 html, body, #root {
@@ -55,8 +81,11 @@ body {
   font: 14px/20px var(--font-sans);
 }
 
-button, input, textarea, select {
-  font: inherit;
+/* 放在 base 层：未分层的规则优先于所有 Tailwind 工具类，会让按钮/输入框上的 text-*、leading-*、font-* 失效。 */
+@layer base {
+  button, input, textarea, select {
+    font: inherit;
+  }
 }
 
 :where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {

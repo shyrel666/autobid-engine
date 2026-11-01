@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/autobid/autobid-engine/compliance"
@@ -15,17 +16,35 @@ import (
 
 // 阻断原因类型。
 const (
-	BlockNoApprovedOutline  = "no_approved_outline"
-	BlockManifest           = "requirements_not_confirmed"
-	BlockUnmapped           = "requirement_unmapped"
-	BlockSectionUnapproved  = "section_not_approved"
-	BlockMatrixStale        = "matrix_stale"
-	BlockMatrixFailed       = "matrix_failed"
-	BlockMatrixUnverified   = "matrix_unverified"
-	BlockConsistencyMissing = "consistency_not_run"
-	BlockConsistencyStale   = "consistency_stale"
-	BlockFindingOpen        = "finding_open"
-	BlockEvidenceInvalid    = "evidence_invalid"
+	BlockNoApprovedOutline     = "no_approved_outline"
+	BlockManifest              = "requirements_not_confirmed"
+	BlockUnmapped              = "requirement_unmapped"
+	BlockSectionUnapproved     = "section_not_approved"
+	BlockMatrixStale           = "matrix_stale"
+	BlockMatrixFailed          = "matrix_failed"
+	BlockMatrixUnverified      = "matrix_unverified"
+	BlockConsistencyMissing    = "consistency_not_run"
+	BlockConsistencyStale      = "consistency_stale"
+	BlockFindingOpen           = "finding_open"
+	BlockEvidenceInvalid       = "evidence_invalid"
+	BlockVetoPending           = "veto_pending"                // 否决项尚未核对
+	BlockVetoFailed            = "veto_failed"                 // 否决项核对不通过：投标将被判无效
+	BlockNoBid                 = "no_bid_decision"             // 投/不投决策为放弃投标
+	BlockRequirementSuperseded = "requirement_superseded"      // 章节仍映射已被更正/澄清覆盖的旧要求
+	BlockSourcePending         = "requirements_source_changed" // 招标原文已变更，要求尚未按当前来源版本重新提取
+
+	// D2 持久化阻断：只在任务已启用 D2（存在绑定 / 可采性 / 台账 / 报价）时生效，不改变 M1 基线行为。
+	BlockAdmissibilityMissing      = "admissibility_missing"
+	BlockAdmissibilityStale        = "admissibility_stale"
+	BlockAdmissibilityManual       = "admissibility_manual"
+	BlockAdmissibilityInadmissible = "admissibility_inadmissible"
+	BlockObjectiveEvidenceMissing  = "objective_evidence_missing"
+	BlockObjectiveManual           = "objective_manual"
+	BlockCommitmentStale           = "commitment_stale"
+	BlockCommitmentUnconfirmed     = "commitment_unconfirmed"
+	BlockQuoteUnconfirmed          = "quote_unconfirmed"
+	BlockQuoteInconsistent         = "quote_inconsistent"
+	BlockQuoteOverCeiling          = "quote_over_ceiling"
 )
 
 // ExportBlocker 是一条阻止导出的原因。
@@ -41,6 +60,7 @@ type ExportBlocker struct {
 }
 
 type ExportReadiness struct {
+	Materials      []*TaskMaterial `json:"materials,omitempty"`
 	Ready          bool            `json:"ready"`
 	OutlineVersion int             `json:"outline_version"`
 	ConsistencyRun int64           `json:"consistency_run_id,omitempty"`
@@ -70,9 +90,31 @@ func (d *DB) ExportReadiness(ctx context.Context, tenant string, taskID int64) (
 // 一致性核验未运行 / 已过期 / 有 open 结论、当前修订或要求引用的证据失效（stale / 缺失 / 矛盾）。
 func exportReadinessTx(ctx context.Context, q queryer, tenant string, taskID int64) (*ExportReadiness, error) {
 	r := &ExportReadiness{CheckedAt: time.Now().UTC(), Counts: map[string]int{}, Blockers: []ExportBlocker{}}
+	materials, err := listTaskMaterials(ctx, q, tenant, taskID)
+	if err != nil {
+		return nil, err
+	}
+	r.Materials = materials
+	for _, material := range materials {
+		if material.Required && material.State != "complete" {
+			r.block(ExportBlocker{Kind: "required_material_incomplete", Message: fmt.Sprintf("必需材料 #%d %s：%s", material.ID, material.Name, material.StateLabel())})
+		}
+	}
+	m, err := ensureManifestTx(ctx, q, tenant, taskID, false)
+	if err != nil {
+		return nil, err
+	}
+	if m.BidDecision == BidDecisionNoBid {
+		r.block(ExportBlocker{Kind: BlockNoBid, Message: fmt.Sprintf("任务已决策不投标（no_bid）：%s", m.BidDecisionNote)})
+	}
+	// 独立于清单状态：即使清单被其他路径改回 confirmed，只要当前来源版本尚未重新提取，就阻断导出。
+	if m.SourceEpoch > m.ExtractedSourceEpoch {
+		r.block(ExportBlocker{Kind: BlockSourcePending,
+			Message: fmt.Sprintf("招标原文已变更（source epoch %d > extracted %d），需重新提取并复核要求", m.SourceEpoch, m.ExtractedSourceEpoch)})
+	}
 	var outlineID int64
 	var epoch int64
-	err := q.QueryRowContext(ctx, `SELECT id, version, requirements_epoch FROM proposal_outlines
+	err = q.QueryRowContext(ctx, `SELECT id, version, requirements_epoch FROM proposal_outlines
 		WHERE tenant_id = $1 AND task_id = $2 AND status = 'approved'`, tenant, taskID).Scan(&outlineID, &r.OutlineVersion, &epoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		r.block(ExportBlocker{Kind: BlockNoApprovedOutline, Message: "任务没有已批准的技术标大纲"})
@@ -81,12 +123,58 @@ func exportReadinessTx(ctx context.Context, q queryer, tenant string, taskID int
 	if err != nil {
 		return nil, err
 	}
-	m, err := ensureManifestTx(ctx, q, tenant, taskID, false)
+	if m.Status != ManifestConfirmed || m.Epoch != epoch {
+		r.block(ExportBlocker{Kind: BlockManifest, Message: fmt.Sprintf("要求清单状态 %s（epoch %d），批准大纲依据 epoch %d", m.Status, m.Epoch, epoch)})
+	}
+
+	// 否决项：本次投标分包内的每一项都须核对通过，待核对与不通过都阻断导出（已被后发文件覆盖的旧否决项除外）。
+	vrows, err := q.QueryContext(ctx, `SELECT id, code, title, veto_status FROM requirement_items
+		WHERE tenant_id = $1 AND task_id = $2 AND category = 'veto_item' AND NOT out_of_bid
+		  AND superseded_by_id IS NULL AND review_status <> 'stale' AND veto_status <> 'passed' ORDER BY code`, tenant, taskID)
 	if err != nil {
 		return nil, err
 	}
-	if m.Status != ManifestConfirmed || m.Epoch != epoch {
-		r.block(ExportBlocker{Kind: BlockManifest, Message: fmt.Sprintf("要求清单状态 %s（epoch %d），批准大纲依据 epoch %d", m.Status, m.Epoch, epoch)})
+	for vrows.Next() {
+		var id int64
+		var code, title, status string
+		if err := vrows.Scan(&id, &code, &title, &status); err != nil {
+			vrows.Close()
+			return nil, err
+		}
+		if status == VetoFailed {
+			r.block(ExportBlocker{Kind: BlockVetoFailed, RequirementID: id, RequirementCode: code, Message: fmt.Sprintf("否决项 %s %s 核对不通过，投标将被判无效", code, title)})
+		} else {
+			r.block(ExportBlocker{Kind: BlockVetoPending, RequirementID: id, RequirementCode: code, Message: fmt.Sprintf("否决项 %s %s 尚未核对", code, title)})
+		}
+	}
+	vrows.Close()
+	if err := vrows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 已被更正/澄清覆盖的旧要求不得仍挂在批准大纲的章节下。
+	srows, err := q.QueryContext(ctx, `SELECT s.id, s.section_code, r.id, r.code, r.title
+		FROM proposal_section_requirements m
+		JOIN proposal_sections s ON s.tenant_id = m.tenant_id AND s.id = m.section_id
+		JOIN requirement_items r ON r.tenant_id = m.tenant_id AND r.id = m.requirement_id
+		WHERE m.tenant_id = $1 AND s.outline_id = $2 AND (r.superseded_by_id IS NOT NULL OR r.review_status = 'stale')
+		ORDER BY s.seq, r.code`, tenant, outlineID)
+	if err != nil {
+		return nil, err
+	}
+	for srows.Next() {
+		var sid, rid int64
+		var scode, rcode, rtitle string
+		if err := srows.Scan(&sid, &scode, &rid, &rcode, &rtitle); err != nil {
+			srows.Close()
+			return nil, err
+		}
+		r.block(ExportBlocker{Kind: BlockRequirementSuperseded, SectionID: sid, SectionCode: scode, RequirementID: rid, RequirementCode: rcode,
+			Message: fmt.Sprintf("章节 %s 仍映射已被更正/澄清覆盖的旧要求 %s %s", scode, rcode, rtitle)})
+	}
+	srows.Close()
+	if err := srows.Err(); err != nil {
+		return nil, err
 	}
 
 	// 章节：须批准当前主版本。
@@ -231,6 +319,239 @@ func exportReadinessTx(ctx context.Context, q queryer, tenant string, taskID int
 		b.Message = fmt.Sprintf("证据 %d %s：%s", e.ID, what, e.Reason)
 		r.block(b)
 	}
+	if err := d2ReadinessTx(ctx, q, tenant, taskID, outlineID, r); err != nil {
+		return nil, err
+	}
 	r.Ready = len(r.Blockers) == 0
 	return r, nil
+}
+
+// d2ReadinessTx 汇总 D2 持久化阻断。只有任务已启用 D2 时才检查，M1 基线任务保持原行为。
+func d2ReadinessTx(ctx context.Context, q queryer, tenant string, taskID, outlineID int64, r *ExportReadiness) error {
+	active, err := taskHasD2ActivityQ(ctx, q, tenant, taskID)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return nil
+	}
+	// 1) 有证明规则或客观评分的当前要求，必须有当前可采性结论；manual / inadmissible 不得当作通过。
+	rows, err := q.QueryContext(ctx, `SELECT r.id, r.code, r.title, r.eval_kind,
+			(SELECT run.verdict FROM admissibility_runs run
+			  WHERE run.tenant_id=r.tenant_id AND run.task_id=r.task_id AND run.requirement_id=r.id AND run.status='current' LIMIT 1),
+			(SELECT run.status FROM admissibility_runs run
+			  WHERE run.tenant_id=r.tenant_id AND run.task_id=r.task_id AND run.requirement_id=r.id
+			  ORDER BY run.version DESC LIMIT 1),
+			(SELECT run.reasons::text FROM admissibility_runs run
+			  WHERE run.tenant_id=r.tenant_id AND run.task_id=r.task_id AND run.requirement_id=r.id AND run.status='current' LIMIT 1)
+		FROM requirement_items r
+		WHERE r.tenant_id=$1 AND r.task_id=$2 AND NOT r.out_of_bid AND r.superseded_by_id IS NULL AND r.review_status <> 'stale'
+		  AND r.category IN ('scoring_item','mandatory_clause','non_scoring_required')
+		  AND ((r.eval_kind='objective' AND r.score_group <> 'price') OR r.proof_rules <> '{}'::jsonb)
+		ORDER BY r.code`, tenant, taskID)
+	if err != nil {
+		return err
+	}
+	blockedReq := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		var code, title, evalKind string
+		var verdict, latest, reasons sql.NullString
+		if err := rows.Scan(&id, &code, &title, &evalKind, &verdict, &latest, &reasons); err != nil {
+			rows.Close()
+			return err
+		}
+		b := ExportBlocker{RequirementID: id, RequirementCode: code}
+		switch {
+		case !verdict.Valid && !latest.Valid:
+			b.Kind = BlockAdmissibilityMissing
+			b.Message = fmt.Sprintf("要求 %s %s 尚未执行证据可采性评估", code, title)
+		case !verdict.Valid:
+			b.Kind = BlockAdmissibilityStale
+			b.Message = fmt.Sprintf("要求 %s %s 的可采性结论已失效（%s），需重评", code, title, latest.String)
+		case verdict.String == compliance.Manual:
+			b.Kind = BlockAdmissibilityManual
+			b.Message = fmt.Sprintf("要求 %s %s 的可采性结论为待人工复核（manual），不能当作通过", code, title)
+		case verdict.String == compliance.Inadmissible:
+			if evalKind == EvalObjective && reasons.Valid &&
+				(strings.Contains(reasons.String, "\"min_count\"") || strings.Contains(reasons.String, "min_count")) {
+				b.Kind = BlockObjectiveEvidenceMissing
+				b.Message = fmt.Sprintf("客观评分项 %s %s 的可采证据数量不足", code, title)
+			} else {
+				b.Kind = BlockAdmissibilityInadmissible
+				b.Message = fmt.Sprintf("要求 %s %s 的证据不可采", code, title)
+			}
+		default:
+			continue
+		}
+		blockedReq[id] = true
+		r.block(b)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// 2) 章节引用的当前明细与台账：运行失效、台账未确认或台账变更导致章节降级均阻断。
+	secRows, err := q.QueryContext(ctx, `SELECT s.id, s.section_code, s.status, rv.status, rv.id,
+			EXISTS(SELECT 1 FROM section_revision_evidence sre
+			       JOIN admissibility_items i ON i.tenant_id=sre.tenant_id AND i.id=sre.admissibility_item_id
+			       JOIN admissibility_runs run ON run.tenant_id=i.tenant_id AND run.id=i.run_id
+			       WHERE sre.tenant_id=s.tenant_id AND sre.section_rev_id=rv.id
+			         AND (run.status <> 'current' OR i.verdict <> 'admissible'))
+		FROM proposal_sections s
+		JOIN section_revisions rv ON rv.tenant_id=s.tenant_id AND rv.section_id=s.id AND rv.rev_no=s.current_rev_no
+		WHERE s.tenant_id=$1 AND s.outline_id=$2 ORDER BY s.seq`, tenant, outlineID)
+	if err != nil {
+		return err
+	}
+	type secRef struct {
+		id, revID int64
+		code      string
+	}
+	var secs []secRef
+	for secRows.Next() {
+		var s ExportBlocker
+		var secStatus, revStatus string
+		var revID int64
+		var badRefs bool
+		if err := secRows.Scan(&s.SectionID, &s.SectionCode, &secStatus, &revStatus, &revID, &badRefs); err != nil {
+			secRows.Close()
+			return err
+		}
+		secs = append(secs, secRef{id: s.SectionID, revID: revID, code: s.SectionCode})
+		if secStatus == SectionStaleCommitment || revStatus == RevStaleCommitment {
+			b := s
+			b.Kind = BlockCommitmentStale
+			b.Message = fmt.Sprintf("章节 %s 引用的承诺台账已变更，需重新渲染并批准", s.SectionCode)
+			r.block(b)
+		}
+		if badRefs {
+			b := s
+			b.Kind = BlockAdmissibilityStale
+			b.Message = fmt.Sprintf("章节 %s 引用的可采性明细已失效或不属于当前运行", s.SectionCode)
+			r.block(b)
+		}
+	}
+	secRows.Close()
+	if err := secRows.Err(); err != nil {
+		return err
+	}
+
+	for _, s := range secs {
+		var raw []byte
+		if err := q.QueryRowContext(ctx, `SELECT to_jsonb(commitment_ids) FROM section_revisions WHERE tenant_id=$1 AND id=$2`,
+			tenant, s.revID).Scan(&raw); err != nil {
+			return err
+		}
+		ids := int64sJSON(raw)
+		for _, id := range ids {
+			var code, status string
+			err := q.QueryRowContext(ctx, `SELECT code, status FROM commitment_ledger WHERE tenant_id=$1 AND id=$2`, tenant, id).Scan(&code, &status)
+			if errors.Is(err, sql.ErrNoRows) {
+				r.block(ExportBlocker{Kind: BlockCommitmentUnconfirmed, SectionID: s.id, SectionCode: s.code,
+					Message: fmt.Sprintf("章节 %s 引用的承诺台账 %d 不存在", s.code, id)})
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if status != CommitmentConfirmed && status != CommitmentSignedOff {
+				r.block(ExportBlocker{Kind: BlockCommitmentUnconfirmed, SectionID: s.id, SectionCode: s.code,
+					Message: fmt.Sprintf("章节 %s 引用的承诺 %s 状态为 %s", s.code, code, status)})
+			}
+		}
+	}
+
+	// 3) 客观分：最新计算仍为 manual（规则无法解析）阻断；证据不足已由要求级运行给出。
+	objRows, err := q.QueryContext(ctx, `SELECT o.requirement_id, req.code, o.status, o.gaps::text
+		FROM objective_score_runs o JOIN requirement_items req ON req.tenant_id=o.tenant_id AND req.task_id=o.task_id AND req.id=o.requirement_id
+		WHERE o.tenant_id=$1 AND o.task_id=$2
+		  AND o.id=(SELECT MAX(x.id) FROM objective_score_runs x WHERE x.tenant_id=o.tenant_id AND x.task_id=o.task_id AND x.requirement_id=o.requirement_id)
+		ORDER BY req.code`, tenant, taskID)
+	if err != nil {
+		return err
+	}
+	for objRows.Next() {
+		var reqID int64
+		var code, status, gaps string
+		if err := objRows.Scan(&reqID, &code, &status, &gaps); err != nil {
+			objRows.Close()
+			return err
+		}
+		if status == "manual" && strings.Contains(gaps, "score_rule_unparsed") {
+			r.block(ExportBlocker{Kind: BlockObjectiveManual, RequirementID: reqID, RequirementCode: code,
+				Message: fmt.Sprintf("客观评分项 %s 的评分规则无法解析，需人工复核", code)})
+		}
+		if status == "manual" && strings.Contains(gaps, "admissibility_run_missing") && !blockedReq[reqID] {
+			r.block(ExportBlocker{Kind: BlockAdmissibilityMissing, RequirementID: reqID, RequirementCode: code,
+				Message: fmt.Sprintf("客观评分项 %s 尚未执行可采性评估", code)})
+		}
+	}
+	objRows.Close()
+	if err := objRows.Err(); err != nil {
+		return err
+	}
+
+	// 4) 报价：每个分包必须有已确认版本，且内部勾稽、限价与价格类承诺一致。
+	lotRows, err := q.QueryContext(ctx, `SELECT lot FROM bid_quotes WHERE tenant_id=$1 AND task_id=$2 GROUP BY lot ORDER BY lot`, tenant, taskID)
+	if err != nil {
+		return err
+	}
+	var lots []string
+	for lotRows.Next() {
+		var lot string
+		if err := lotRows.Scan(&lot); err != nil {
+			lotRows.Close()
+			return err
+		}
+		lots = append(lots, lot)
+	}
+	lotRows.Close()
+	if err := lotRows.Err(); err != nil {
+		return err
+	}
+	for _, lot := range lots {
+		var quoteID int64
+		err := q.QueryRowContext(ctx, `SELECT id FROM bid_quotes WHERE tenant_id=$1 AND task_id=$2 AND lot=$3 AND status='confirmed'
+			ORDER BY version DESC LIMIT 1`, tenant, taskID, lot).Scan(&quoteID)
+		if errors.Is(err, sql.ErrNoRows) {
+			r.block(ExportBlocker{Kind: BlockQuoteUnconfirmed, Message: fmt.Sprintf("分包 %q 尚无已确认报价", lot)})
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		val, err := validateBidQuoteQ(ctx, q, tenant, taskID, quoteID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				r.block(ExportBlocker{Kind: BlockQuoteUnconfirmed, Message: fmt.Sprintf("分包 %q 的已确认报价不可读", lot)})
+				continue
+			}
+			return err
+		}
+		if !val.OK {
+			over := false
+			for _, c := range val.Checks {
+				if c.Status == "fail" && c.Rule == "ceiling" {
+					over = true
+				}
+			}
+			kind := BlockQuoteInconsistent
+			if over {
+				kind = BlockQuoteOverCeiling
+			}
+			r.block(ExportBlocker{Kind: kind, Message: fmt.Sprintf("分包 %q 的报价 v%d 未通过内部勾稽 / 限价校验", lot, val.Version)})
+		}
+	}
+	return nil
+}
+
+func taskHasD2ActivityQ(ctx context.Context, q queryer, tenant string, taskID int64) (bool, error) {
+	var active bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM requirement_evidence_bindings WHERE tenant_id=$1 AND task_id=$2)
+		OR EXISTS(SELECT 1 FROM admissibility_runs WHERE tenant_id=$1 AND task_id=$2)
+		OR EXISTS(SELECT 1 FROM commitment_ledger WHERE tenant_id=$1 AND task_id=$2)
+		OR EXISTS(SELECT 1 FROM bid_quotes WHERE tenant_id=$1 AND task_id=$2)`, tenant, taskID).Scan(&active)
+	return active, err
 }

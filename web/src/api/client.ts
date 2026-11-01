@@ -1,22 +1,45 @@
 // AutoBid 控制面 HTTP 客户端：所有 /api/* 请求携带 Authorization: Bearer <token>；
 // SSE（EventSource 无法设置请求头）改用 ?token=。401 时广播 autobid:unauthorized 以弹出令牌设置。
 
+import type { ProcessingFile, ProcessingRecord, ProcessingDetail, TaskMaterial, FixedJobInput, FixedJob } from './processing-types'
 import type {
   Activity, Asset, CompanyCredential, CreateTaskReq, CredentialReq, DocumentWithChunks, EntityEdge, Finding,
-  InterceptAudit, InterceptPending, KnowledgeChunk, KnowledgeDocument, KnowledgeFileReq, KnowledgeSearchReq, RetrievalResult, RetrievalEvidence, KnowledgeIndex, EvidenceClaim,
+  InterceptApprovalsResp, InterceptAudit, InterceptConfigResp, InterceptPending, InterceptRule, InterceptRuleInput, JudgeConfig,
+  KnowledgeChunk, KnowledgeDocument, KnowledgeFileReq, KnowledgeSearchReq, RetrievalResult, RetrievalEvidence, KnowledgeIndex, EvidenceClaim,
   KnowledgeTextReq, KnowledgeUploadResp, LLMChain, LLMHealth, LLMProfile, LLMUsage, NodeDetail, Overview, Coverage,
-  Task, TaskReport, TaskView, UploadDocumentFileReq, UploadDocumentReq, UploadDocumentResp, ResearchRequest, RetrievalRun,
-  ExtractResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
+  Task, TaskReport, TaskView, UploadDocumentFileReq, UploadDocumentReq, UploadDocumentResp, UploadArchiveResp, ResearchRequest, RetrievalRun,
+  ExtractRequirementsResp, RFPGoalDecompResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
   RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionClaim, SectionDetail, BidScopeInput, VetoStatus,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
   ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
+  LLMSettings, LLMPoolStatus, LLMProfileInput, LLMTestResult, LLMRecordDetail, LLMRecordsResp, SystemCatalog, AgentRoleKey, TaskGraph,
+  CompanyPerformance, EvidenceOriginal, EvidenceBinding, AdmissibilityRun, AdmissibilityDecision,
+  Commitment, CommitmentInput, BidQuote, BidQuoteValidation, ObjectiveScoreRun,
 } from './types'
 
 const TOKEN_KEY = 'autobid.token'
+const OPERATOR_KEY = 'autobid.operator'
 
 export function getToken(): string {
   try {
     return localStorage.getItem(TOKEN_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function setOperator(name: string) {
+  try {
+    if (name) localStorage.setItem(OPERATOR_KEY, name)
+    else localStorage.removeItem(OPERATOR_KEY)
+  } catch {
+    /* 隐私模式等场景下仅本次会话生效 */
+  }
+}
+
+export function getOperator(): string {
+  try {
+    return localStorage.getItem(OPERATOR_KEY) ?? ''
   } catch {
     return ''
   }
@@ -59,11 +82,15 @@ async function send(method: string, path: string, body?: unknown): Promise<Respo
   const headers: Record<string, string> = {}
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
+  const operator = getOperator()
+  if (operator) headers['X-Autobid-User'] = operator
   const form = body instanceof FormData
-  if (body !== undefined && !form) headers['Content-Type'] = 'application/json'
+  const blob = body instanceof Blob
+  if (blob) headers['Content-Type'] = body.type || 'application/octet-stream'
+  else if (body !== undefined && !form) headers['Content-Type'] = 'application/json'
   let resp: Response
   try {
-    resp = await fetch(path, { method, headers, body: body === undefined ? undefined : form ? body : JSON.stringify(body) })
+    resp = await fetch(path, { method, headers, body: body === undefined ? undefined : form || blob ? body as BodyInit : JSON.stringify(body) })
   } catch (e) {
     throw new ApiError(0, e instanceof Error ? e.message : '无法连接服务')
   }
@@ -170,6 +197,7 @@ export const api = {
 
   // 推演图与产出物
   overview: (id: number) => get<Overview>(`${t(id)}/overview`),
+  taskGraph: (id: number) => get<TaskGraph>(`${t(id)}/graph`),
   node: (id: number, nodeID: number) => get<NodeDetail>(`${t(id)}/nodes/${nodeID}`),
   findings: (id: number, category?: string) => get<Finding[] | null>(`${t(id)}/findings${qs({ category })}`),
   assets: (id: number, types?: string[]) => get<Asset[] | null>(`${t(id)}/assets${qs({ types: types?.join(',') })}`),
@@ -181,19 +209,61 @@ export const api = {
 
   // 招标文档
   uploadDocument: (id: number, req: UploadDocumentReq) => post<UploadDocumentResp>(`${t(id)}/documents`, req),
-  uploadDocumentFile: (id: number, req: UploadDocumentFileReq) => post<UploadDocumentResp>(`${t(id)}/documents`,
+  processingFiles: (id: number, after = 0) => get<{ enabled: boolean; files: ProcessingFile[]; has_more: boolean }>(`${t(id)}/files?after=${after}`),
+  retainProcessingFile: (id: number, file: File) => post<ProcessingFile>(`${t(id)}/files?filename=${encodeURIComponent(file.name)}`, file),
+  materials: (id: number) => get<TaskMaterial[]>(`${t(id)}/materials`),
+  saveMaterial: (id: number, input: Pick<TaskMaterial, 'id' | 'name' | 'required' | 'file_id' | 'version' | 'note'>) => post<TaskMaterial>(`${t(id)}/materials`, input),
+  fixedJobs: (id: number, before = 0) => get<FixedJob[]>(`${t(id)}/file-jobs?before=${before}`),
+  enqueueFixedJob: (id: number, input: FixedJobInput) => post<FixedJob>(`${t(id)}/file-jobs`, input),
+  cancelFixedJob: (id: number, job: number) => post<FixedJob>(`${t(id)}/file-jobs/${job}/cancel`, {}),
+  processingRecords: (id: number, before = 0) => get<ProcessingRecord[]>(`${t(id)}/file-processing-records?before=${before}`),
+  processingDetail: (id: number, record: number, offset = 0) => get<ProcessingDetail>(`${t(id)}/file-processing-records/${record}?offset=${offset}`),
+  importProcessingFile: (id: number, file: number, req: { request_key: string; tender_no: string; lot_no: string; doc_role: string; published_at: string }) =>
+    post<ProcessingRecord>(`${t(id)}/files/${file}/import`, req),
+  reparseDocument: (id: number, doc: number, expected_revision: number, request_key: string) =>
+    post<ProcessingRecord>(`${t(id)}/documents/${doc}/reparse`, { expected_revision, request_key }),
+  adoptProcessingRecord: (id: number, record: number, expected_revision: number, review_note: string) =>
+    post<ProcessingRecord>(`${t(id)}/file-processing-records/${record}/adopt`, { expected_revision, review_note }),
+  uploadDocumentFile: (id: number, req: UploadDocumentFileReq) => post<UploadDocumentResp | UploadArchiveResp>(`${t(id)}/documents`,
     formData({ tender_no: req.tender_no, lot_no: req.lot_no, title: req.title, wake_planner: req.wake_planner,
-      doc_role: req.doc_role, published_at: req.published_at }, req.file)),
+      bootstrap_goals: req.bootstrap_goals, doc_role: req.doc_role, published_at: req.published_at }, req.file)),
   listDocuments: (id: number, content = true) =>
     get<DocumentWithChunks[]>(`${t(id)}/documents${content ? '?content=1' : ''}`),
 
   // 企业资信库
-  listCredentials: (f: { category?: string; q?: string; valid_on?: string; limit?: number }) =>
+  listCredentials: (f: { category?: string; q?: string; valid_on?: string; task_id?: number; limit?: number }) =>
     get<CompanyCredential[]>(`/api/company/credentials${qs(f)}`),
   createCredential: (req: CredentialReq) =>
     post<(CompanyCredential & { created: boolean })[]>('/api/company/credentials', req),
   updateCredential: (id: number, req: CredentialReq) => put<CompanyCredential>(`/api/company/credentials/${id}`, req),
   deleteCredential: (id: number) => del(`/api/company/credentials/${id}`),
+
+  // D2：企业证据、可采性、承诺台账与报价
+  listPerformance: (includeDeleted = false) => get<CompanyPerformance[]>(`/api/company/performance${includeDeleted ? '?include_deleted=1' : ''}`),
+  listOriginals: (domain: 'credential' | 'performance', ownerId: number) =>
+    get<EvidenceOriginal[]>(`/api/company/evidence/${domain}/${ownerId}/originals`),
+  listBindings: (taskId: number, reqId: number) => get<EvidenceBinding[]>(`${t(taskId)}/requirements/${reqId}/evidence-bindings`),
+  bindEvidence: (taskId: number, reqId: number, evidence_domain: string, evidence_id: number) =>
+    post<EvidenceBinding>(`${t(taskId)}/requirements/${reqId}/evidence-bindings`, { evidence_domain, evidence_id }),
+  listAdmissibility: (taskId: number, reqId?: number) =>
+    get<AdmissibilityRun[]>(`${t(taskId)}/admissibility${qs({ requirement_id: reqId })}`),
+  evaluateAdmissibility: (taskId: number, requirementId: number) =>
+    post<AdmissibilityRun>(`${t(taskId)}/admissibility/evaluate`, { requirement_id: requirementId }),
+  resolveAdmissibility: (taskId: number, runId: number, decisions: AdmissibilityDecision[]) =>
+    post<AdmissibilityRun>(`${t(taskId)}/admissibility/${runId}/resolve`, { decisions }),
+  listCommitments: (taskId: number) => get<Commitment[]>(`${t(taskId)}/commitments`),
+  upsertCommitment: (taskId: number, input: CommitmentInput) =>
+    put<Commitment>(`${t(taskId)}/commitments/${encodeURIComponent(input.code)}`, input),
+  confirmCommitment: (taskId: number, code: string) =>
+    post<Commitment>(`${t(taskId)}/commitments/${encodeURIComponent(code)}/confirm`),
+  signOffCommitment: (taskId: number, code: string, note: string) =>
+    post<Commitment>(`${t(taskId)}/commitments/${encodeURIComponent(code)}/signoff`, { note }),
+  listQuotes: (taskId: number) => get<BidQuote[]>(`${t(taskId)}/quotes`),
+  validateQuote: (taskId: number, quoteId: number) => post<BidQuoteValidation>(`${t(taskId)}/quotes/${quoteId}/validate`),
+  confirmQuote: (taskId: number, quoteId: number) =>
+    post<{ quote: BidQuote; validation: BidQuoteValidation }>(`${t(taskId)}/quotes/${quoteId}/confirm`),
+  listObjectiveScores: (taskId: number) => get<ObjectiveScoreRun[]>(`${t(taskId)}/objective-scores`),
+  computeObjectiveScores: (taskId: number) => post<ObjectiveScoreRun[]>(`${t(taskId)}/objective-scores/compute`, {}),
 
   // 企业方案知识库
   listKnowledge: (f: { category?: string; tags?: string; q?: string; limit?: number }) =>
@@ -218,7 +288,8 @@ export const api = {
 
   // 投标要求清单、技术标大纲审批与章节写作（Phase 5）
   requirements: (id: number) => get<RequirementsView>(`${t(id)}/requirements`),
-  extractRequirements: (id: number) => post<{ result: ExtractResult; requirements: RequirementsView }>(`${t(id)}/requirements/extract`),
+  extractRequirements: (id: number, initOutline = false) => post<ExtractRequirementsResp>(`${t(id)}/requirements/extract`, { init_outline: initOutline }),
+  bootstrapRFPGoals: (id: number, initOutline = true) => post<RFPGoalDecompResult>(`${t(id)}/goals/bootstrap`, { init_outline: initOutline }),
   createRequirement: (id: number, req: RequirementInput) => post<RequirementItem>(`${t(id)}/requirements`, req),
   updateRequirement: (id: number, reqID: number, req: RequirementInput) => put<RequirementItem>(`${t(id)}/requirements/${reqID}`, req),
   deleteRequirement: (id: number, reqID: number) => del(`${t(id)}/requirements/${reqID}`),
@@ -273,21 +344,45 @@ export const api = {
 
   // LLM 配置
   listProfiles: () => get<LLMProfile[] | null>('/api/llm/profiles'),
-  createProfile: (p: Partial<LLMProfile>) => post<LLMProfile>('/api/llm/profiles', p),
-  updateProfile: (id: number, p: Partial<LLMProfile>) => put<LLMProfile>(`/api/llm/profiles/${id}`, p),
+  createProfile: (p: LLMProfileInput) => post<LLMProfile>('/api/llm/profiles', p),
+  updateProfile: (id: number, p: LLMProfileInput) => put<LLMProfile>(`/api/llm/profiles/${id}`, p),
+  activateProfile: (id: number) => post<{ ok: boolean }>('/api/llm/profiles/active', { id }),
+  llmSettings: () => get<LLMSettings>('/api/llm/settings'),
+  saveLLMSettings: (s: LLMSettings) => put<LLMSettings>('/api/llm/settings', s),
+  llmPool: () => get<LLMPoolStatus>('/api/llm/pool'),
+  resetLLMPool: (id = 0) => post<LLMPoolStatus>('/api/llm/pool/reset', { id }),
+  llmBindings: () => get<Record<AgentRoleKey, number>>('/api/llm/bindings'),
+  testLLM: (p: LLMProfileInput) => post<LLMTestResult>('/api/llm/test', p),
+  discoverModels: (p: LLMProfileInput) => post<{ ok: boolean; models?: string[]; error?: string }>('/api/llm/models', p),
   deleteProfile: (id: number) => del(`/api/llm/profiles/${id}`),
-  bindAgent: (agent: 'planner' | 'worker' | 'judge', profileID: number) =>
+  bindAgent: (agent: AgentRoleKey, profileID: number) =>
     put<{ agent: string; profile_id: number }>(`/api/llm/bindings/${agent}`, { profile_id: profileID }),
   llmUsage: (id: number) => get<LLMUsage[]>(`${t(id)}/llm-usage`),
   llmChain: (id: number) => get<LLMChain>(`${t(id)}/llm-chain`),
-  setLLMChain: (id: number, profileIDs: number[]) => put<LLMChain>(`${t(id)}/llm-chain`, { profile_ids: profileIDs }),
+  setLLMChain: (id: number, profileIDs: number[], activeProfileID?: number) =>
+    put<LLMChain>(`${t(id)}/llm-chain`, { profile_ids: profileIDs, active_profile_id: activeProfileID ?? 0 }),
   resetLLMChain: (id: number) => post<LLMChain>(`${t(id)}/llm-chain/reset`),
+  llmRecords: (f: { task_id?: number; session_id?: string; profile_name?: string; limit?: number; offset?: number } = {}) =>
+    get<LLMRecordsResp>(`/api/llm/records${qs(f)}`),
+  llmRecordDetail: (recordID: number) => get<LLMRecordDetail>(`/api/llm/records/${recordID}`),
+  deleteLLMRecords: (taskID?: number) => json<{ deleted: number }>('DELETE', `/api/llm/records${qs({ task_id: taskID })}`),
+  systemCatalog: () => get<SystemCatalog>('/api/system/catalog'),
 
-  // 拦截审批
+  // 拦截审批与控制面
   listIntercepts: (taskID?: number) => get<InterceptPending[]>(`/api/intercepts${qs({ task_id: taskID })}`),
   decideIntercept: (pendingID: number, allow: boolean, reason: string) =>
     post<InterceptPending>(`/api/intercepts/${pendingID}/decide`, { allow, reason }),
   interceptAudit: (id: number) => get<InterceptAudit[] | null>(`${t(id)}/intercept-audit`),
+  interceptRules: () => get<InterceptRule[]>('/api/intercept/rules'),
+  createInterceptRule: (r: Partial<InterceptRuleInput>) => post<InterceptRule>('/api/intercept/rules', r),
+  updateInterceptRule: (id: number, r: Partial<InterceptRuleInput>) => put<InterceptRule>(`/api/intercept/rules/${id}`, r),
+  toggleInterceptRule: (id: number, enabled: boolean) => put<{ id: number; enabled: boolean }>(`/api/intercept/rules/${id}`, { enabled }),
+  deleteInterceptRule: (id: number) => del(`/api/intercept/rules/${id}`),
+  interceptConfig: () => get<InterceptConfigResp>('/api/intercept/config'),
+  saveInterceptConfig: (req: { enabled_tools?: string[]; reset_tools?: boolean; judge?: JudgeConfig }) =>
+    put<InterceptConfigResp>('/api/intercept/config', req),
+  interceptApprovals: (f: { task_id?: number; status?: string; limit?: number; offset?: number } = {}) =>
+    get<InterceptApprovalsResp>(`/api/intercept/approvals${qs(f)}`),
 }
 
 export function eventsURL(taskID: number): string {

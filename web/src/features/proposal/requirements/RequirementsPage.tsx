@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CheckCircle2, FileSearch, Pencil, Plus, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { api, errorText } from '../../../api/client'
-import type { ExtractResult, RequirementCategory, RequirementInput, RequirementItem, ScoreGroup, ScoringSummary } from '../../../api/types'
+import type { ExtractRequirementsResp, RequirementCategory, RequirementInput, RequirementItem, ScoreGroup, ScoringSummary } from '../../../api/types'
 import {
   Badge, Button, Card, Empty, ErrorBanner, Field, IconButton, Input, Modal, Notice, Select, Spinner, Stat, TextArea, cx, useConfirm, useToast,
 } from '../../../components/ui'
@@ -10,7 +10,7 @@ import type { Tone } from '../../../components/ui'
 import { useAsync } from '../../../hooks/useAsync'
 import { useScrollTo } from '../../../hooks/useScrollTo'
 import {
-  fmtTime, manifestStatusLabel, pageRange, requirementCategoryLabel, reviewStatusLabel, scoreGroupLabel,
+  evalKindLabel, fmtTime, manifestStatusLabel, pageRange, requirementCategoryLabel, reviewStatusLabel, scoreGroupLabel,
 } from '../../../lib/format'
 import { linkProps, useSearchParams } from '../../../lib/router'
 import { REQUIREMENT_FILTERS, optionalId, pickEnum, taskUrl } from '../../../lib/routes'
@@ -65,12 +65,26 @@ function ScoringSummaryCard({ scoring }: { scoring: ScoringSummary[] }) {
   )
 }
 
-function ExtractSummary({ r, onClose }: { r: ExtractResult; onClose: () => void }) {
+function ExtractSummary({ taskId, resp, onClose }: { taskId: number; resp: ExtractRequirementsResp; onClose: () => void }) {
+  const r = resp.result
+  const goals = resp.goals ?? []
   return (
     <Notice tone={r.orphaned ? 'warn' : 'info'} action={<Button size="sm" variant="ghost" onClick={onClose}>收起</Button>}>
-      <div className="font-medium">提取完成：遍历 {r.scanned_chunks} 个原文分块（提取成功不等于清单已确认）</div>
+      <div className="font-medium">提取与目标分解完成：遍历 {r.scanned_chunks} 个原文分块（提取成功不等于清单已确认）</div>
       <div className="mt-1 text-xs">新增 {r.created} · 原文变更 {r.updated} · 未变 {r.unchanged} · 保留人工项 {r.skipped_manual} · 评分项 {r.scoring_items} · 否决项 {r.veto_items}
-        {r.bid_deadline ? ' · 识别到投标截止时间' : ''}</div>
+        {r.superseded ? ` · 更正/澄清覆盖旧要求 ${r.superseded}` : ''}
+        {r.bid_deadline ? ' · 识别到投标截止时间' : ''}
+        {resp.synced_assets ? ` · 同步招标静态要素 ${resp.synced_assets} 个` : ''}</div>
+      {goals.length > 0 && (
+        <div className="mt-1 text-xs">
+          已初始化推演图谱 Goal 根节点：{goals.map((g) => `${g.code}「${g.title}」(#${g.node_id})`).join('、')}
+        </div>
+      )}
+      {resp.outline_created && resp.outline_version && (
+        <div className="mt-1 text-xs">
+          已自动生成技术标目录大纲草案 <a {...linkProps(taskUrl(taskId, 'outline'))} className="font-medium text-link underline">v{resp.outline_version}（去查看）</a>
+        </div>
+      )}
       {r.orphaned > 0 && <div className="mt-1 text-xs">{r.orphaned} 条旧提取项本次未再产出，已标记需复核：{r.orphan_codes.join('、')}</div>}
     </Notice>
   )
@@ -145,9 +159,12 @@ function RequirementEditor({ taskId, item, onClose, onSaved }: { taskId: number;
 function SourceLink({ taskId, it }: { taskId: number; it: RequirementItem }) {
   if (!it.source_chunk_id) return <span className="text-muted">无原文绑定</span>
   const doc = it.source_loc.doc_id ?? it.source_doc_id
+  const spreadsheet = it.source_loc.kind === 'spreadsheet'
   return (
     <a {...linkProps(taskUrl(taskId, 'documents', { query: { doc, chunk: it.source_chunk_id } }))} className="text-link hover:underline">
-      {it.source_loc.section_code || '原文'} {pageRange(it.source_loc.page_start, it.source_loc.page_end)}
+      {spreadsheet
+        ? `${it.source_loc.sheet ?? '工作表'} ${it.source_loc.range ?? ''}`
+        : `${it.source_loc.section_code || '原文'} ${pageRange(it.source_loc.page_start, it.source_loc.page_end)}`}
       {it.source_loc.table !== undefined && ` · 表${Number(it.source_loc.table) + 1}行${Number(it.source_loc.row) + 1}`}
     </a>
   )
@@ -166,9 +183,10 @@ export default function RequirementsPage() {
   const [editing, setEditing] = useState<RequirementItem | 'new'>()
   const [evidence, setEvidence] = useState<{ run: number; id: number }>()
   const [busy, setBusy] = useState('')
-  const [extracted, setExtracted] = useState<ExtractResult>()
+  const [extracted, setExtracted] = useState<ExtractRequirementsResp>()
 
   const v = data.data
+  const sourcePending = !!v && v.manifest.source_epoch > v.manifest.extracted_source_epoch
   const items = (v?.items ?? []).filter((i) => matches(i, filter) && (!category || i.category === category))
   const targetItem = target && !Number.isNaN(target) ? v?.items.find((i) => i.id === target) : undefined
   useScrollTo(targetItem ? `req-${targetItem.id}` : undefined, !!v)
@@ -180,7 +198,8 @@ export default function RequirementsPage() {
   if (data.loading && !v) return <Spinner />
   if (!v) return <ErrorBanner error={data.error} onRetry={data.reload} />
   const s = v.stats
-  const denominator = s.total - s.out_of_scope - s.out_of_bid - s.veto.total
+  const codeById = new Map(v.items.map((i) => [i.id, i.code]))
+  const denominator = s.total - s.out_of_scope - s.out_of_bid - s.veto.total - (s.superseded ?? 0)
 
   let locate: ReactNode = null
   if (target !== undefined) {
@@ -200,16 +219,47 @@ export default function RequirementsPage() {
         </tr></thead>
         <tbody>
           {items.map((it) => (
-            <tr key={it.id} id={`req-${it.id}`} className={cx('border-b border-line-soft align-top', target === it.id && 'bg-soft outline outline-1 outline-fg')}>
-              <td className="py-2 pr-2 font-mono text-xs">{it.code}{it.origin === 'manual' && <div className="mt-1"><Badge>人工</Badge></div>}</td>
+            <tr key={it.id} id={`req-${it.id}`} className={cx('border-b border-line-soft align-top', !!it.superseded_by_id && 'opacity-60', target === it.id && 'bg-soft outline outline-1 outline-fg')}>
+              <td className="py-2 pr-2 font-mono text-xs">
+                {it.code}
+                {it.origin === 'manual' && <div className="mt-1"><Badge>人工</Badge></div>}
+                {it.superseded_by_id && (
+                  <div className="mt-1">
+                    <Badge tone="slate">已被 {it.superseded_by_code || `#${it.superseded_by_id}`} 覆盖</Badge>
+                  </div>
+                )}
+              </td>
               <td className="pr-2">
                 <Badge tone={it.category === 'mandatory_clause' || it.category === 'veto_item' ? 'red' : it.category === 'scoring_item' ? 'blue' : 'slate'}>{requirementCategoryLabel[it.category]}</Badge>
                 {it.category === 'scoring_item' && <div className="mt-1"><Badge tone={scoreGroupTone(it.score_group)}>{scoreGroupLabel[it.score_group]}</Badge></div>}
+                {it.eval_kind && evalKindLabel[it.eval_kind] && (
+                  <div className="mt-1"><Badge tone={it.eval_kind === 'objective' ? 'green' : 'amber'}>{evalKindLabel[it.eval_kind]}</Badge></div>
+                )}
                 {it.lot && <div className="mt-1 text-xs text-muted">包{it.lot}{it.out_of_bid ? '（不投）' : ''}</div>}
               </td>
               <td className="max-w-md pr-2">
                 <div className="font-medium">{it.is_mandatory && <span className="text-danger">★ </span>}{it.title}
                   {it.score_weight > 0 && <span className="ml-1 text-xs text-link">{it.score_weight} 分</span>}</div>
+                {it.proof_rules?.raw_summary && (
+                  <p className="mt-0.5 text-xs text-amber-700">证明要求：{it.proof_rules.raw_summary}</p>
+                )}
+                {it.scoring_tiers && it.scoring_tiers.length > 0 && (
+                  <details className="mt-0.5">
+                    <summary className="cursor-pointer text-xs text-link">评分档次与判据（{it.scoring_tiers.length} 档）</summary>
+                    <ul className="mt-1 list-disc pl-4 text-xs text-slate-600">
+                      {it.scoring_tiers.map((t, idx) => (
+                        <li key={idx}>
+                          <span className="font-medium">{t.label}（{t.score_min && t.score_min !== t.score_max ? `${t.score_min}–${t.score_max ?? 0}分` : `${t.score_max ?? 0}分`}）</span>：{t.criteria}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                {it.linked_requirement_ids && it.linked_requirement_ids.length > 0 && (
+                  <p className="mt-0.5 text-xs text-muted">
+                    关联采购需求：{it.linked_requirement_ids.map((id) => codeById.get(id) ?? `#${id}`).join('、')}
+                  </p>
+                )}
                 {it.description && it.description !== it.title && <details><summary className="cursor-pointer text-xs text-muted">原文摘录</summary>
                   <p className="text-xs whitespace-pre-wrap text-slate-600">{it.description}</p></details>}
               </td>
@@ -223,11 +273,12 @@ export default function RequirementsPage() {
               </td>
               <td className="pr-2 text-xs">{it.mapped_section_codes.length
                 ? <a {...linkProps(taskUrl(taskId, 'outline', { query: { requirement: it.id } }))} className="text-link hover:underline">{it.mapped_section_codes.join('、')}</a>
+                : it.superseded_by_id || it.review_status === 'stale' ? <span className="text-muted">已覆盖不计入</span>
                 : it.out_of_bid ? <span className="text-muted">不投分包</span>
                 : it.category === 'veto_item' ? <span className="text-muted">否决项核对</span>
                 : it.category === 'scoring_item' && it.score_group === 'price' ? <span className="text-muted">报价文件响应</span>
                 : <a {...linkProps(taskUrl(taskId, 'outline', { query: { requirement: it.id } }))} className="text-warn hover:underline">未映射</a>}</td>
-              <td className="pr-2"><Badge dot tone={it.review_status === 'confirmed' ? 'green' : it.review_status === 'needs_revision' ? 'red' : 'amber'}>{reviewStatusLabel[it.review_status]}</Badge></td>
+              <td className="pr-2"><Badge dot tone={it.review_status === 'confirmed' ? 'green' : it.review_status === 'needs_revision' ? 'red' : it.review_status === 'stale' ? 'slate' : 'amber'}>{reviewStatusLabel[it.review_status] ?? it.review_status}</Badge></td>
               <td className="whitespace-nowrap">
                 {it.review_status === 'needs_revision' && <IconButton label={`已核对原文变更：${it.code}`}
                   onClick={() => run(`r${it.id}`, () => api.updateRequirement(taskId, it.id, { review_status: 'confirmed' }), '已标记复核')}><CheckCircle2 className="size-4" /></IconButton>}
@@ -259,27 +310,33 @@ export default function RequirementsPage() {
           tone={s.veto.failed ? 'red' : s.veto.pending ? 'amber' : s.veto.total ? 'green' : undefined} />
       </div>
       {locate}
-      {extracted && <ExtractSummary r={extracted} onClose={() => setExtracted(undefined)} />}
+      {extracted && <ExtractSummary taskId={taskId} resp={extracted} onClose={() => setExtracted(undefined)} />}
       <BidScopeCard taskID={taskId} view={v} onChanged={() => invalidate('bid_scope_changed')} />
       <VetoChecklist taskID={taskId} items={v.items} onChanged={() => invalidate('veto_checked')} highlightId={filter === 'veto' ? target : undefined} />
       {v.scoring.length > 0 && filter !== 'veto' && <ScoringSummaryCard scoring={v.scoring} />}
 
       <Card title={<>要求清单 <Badge dot tone={v.manifest.status === 'confirmed' ? 'green' : v.manifest.status === 'stale' ? 'red' : 'amber'}>
-        {manifestStatusLabel[v.manifest.status]} · epoch {v.manifest.epoch}</Badge></>}
+        {manifestStatusLabel[v.manifest.status]} · epoch {v.manifest.epoch}</Badge>
+        {sourcePending && <Badge tone="amber">原文已变更 · 待重新提取</Badge>}</>}
         subtitle={v.manifest.confirmed_at ? `由 ${v.manifest.approved_by || '—'} 于 ${fmtTime(v.manifest.confirmed_at)} 确认` : '提取与人工复核后，确认清单完整才能审批大纲'}
         actions={<>
           <Button size="sm" icon={<FileSearch className="size-3.5" />} loading={busy === 'extract'}
-            onClick={() => run('extract', async () => { const r = await api.extractRequirements(taskId); setExtracted(r.result) }, '提取完成，请复核结果')}>从招标文件提取</Button>
+            onClick={() => run('extract', async () => { const r = await api.extractRequirements(taskId, false); setExtracted(r) }, '提取与目标分解完成，请复核结果')}>从招标文件提取</Button>
+          {s.outline_version === 0 && (
+            <Button size="sm" loading={busy === 'bootstrap'}
+              onClick={() => run('bootstrap', async () => { const r = await api.extractRequirements(taskId, true); setExtracted(r) }, '已拆解目标并生成大纲草案')}>提取并生成大纲草案</Button>
+          )}
           <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setEditing('new')}>新增要求</Button>
           <Button size="sm" variant="primary" icon={<ShieldCheck className="size-3.5" />} loading={busy === 'confirm'}
-            disabled={s.total === 0 || s.needs_revision > 0 || v.manifest.status === 'confirmed'}
-            title={s.needs_revision > 0 ? '仍有原文变更待复核的要求' : v.manifest.status === 'confirmed' ? '清单已确认' : ''}
+            disabled={s.total === 0 || s.needs_revision > 0 || v.manifest.status === 'confirmed' || sourcePending}
+            title={sourcePending ? '招标原文已变更，需先重新提取' : s.needs_revision > 0 ? '仍有原文变更待复核的要求' : v.manifest.status === 'confirmed' ? '清单已确认' : ''}
             onClick={() => run('confirm', () => api.confirmRequirements(taskId, v.manifest.epoch), '要求清单已确认完整', 'manifest_confirmed')}>确认清单完整</Button>
           <IconButton label="刷新要求清单" onClick={() => void data.reload()}><RefreshCw className="size-4" /></IconButton>
         </>}>
         <div className="space-y-3">
           <ErrorBanner error={data.error} />
           {v.manifest.status === 'stale' && <Notice>清单在确认后发生了实质变更（或招标原文变更），已批准 / 待审批大纲已失效，请复核后重新确认。</Notice>}
+          {sourcePending && <Notice>招标原文已变更（source epoch {v.manifest.source_epoch}，已提取 {v.manifest.extracted_source_epoch}）。请先“从招标文件提取”，复核新增/变化的要求后再确认；导出会持续阻断。</Notice>}
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="筛选">
             {REQUIREMENT_FILTERS.map((k) => {
               const n = k === 'all' ? s.total : v.items.filter((i) => matches(i, k)).length
@@ -299,7 +356,7 @@ export default function RequirementsPage() {
           {items.length === 0 ? <Empty>{s.total === 0 ? '暂无要求。请先导入招标文件并点击「从招标文件提取」，或人工新增。' : '当前筛选下没有要求。'}</Empty> : rowTable}
           <p className="text-xs text-muted">完整清单来自逐分块遍历与人工复核，不以检索 Top-K 代替；查无证据的要求请记录缺口，不要删除。
             修改编码、类别、标题、描述、强制性、分值、评分分组或原文来源会使清单 epoch 递增并使大纲失效；仅绑定证据不会。
-            文件先后效力目前只部分实现（截止时间等按后发布文件优先）；后发澄清并未逐条覆盖旧要求，请对照更正 / 澄清公告人工复核。</p>
+            后发更正公告、澄清或答疑修改同一要求时，旧要求自动标记为「已被更正/澄清覆盖」并指向新要求，同时触发大纲、关联已定稿章节与响应矩阵失敏重检。</p>
         </div>
       </Card>
       <RequirementEditor taskId={taskId} item={editing} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); invalidate('requirements_changed') }} />

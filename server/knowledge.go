@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/filework"
 	"github.com/autobid/autobid-engine/ingest"
 )
 
@@ -81,6 +82,29 @@ func (a *API) embedder() db.Embedder {
 	return db.DefaultEmbedder()
 }
 
+// retainOriginal 在解析前保存上传原件或文本快照；FileStore 未启用时返回 nil（保持旧行为）。
+func (a *API) retainOriginal(r *http.Request, t *Task, file *ingest.File, text string) (*db.TaskFileObject, error) {
+	if a.cfg.FileStore == nil {
+		return nil, nil
+	}
+	opts := filework.PutOptions{TenantID: db.DefaultTenant, TaskID: t.ID, CreatedBy: operator(r)}
+	if file != nil {
+		opts.Kind, opts.OriginalName, opts.MediaType = db.FileKindOriginal, file.Name, file.MIME
+		opts.Format = ingest.DetectFormat(file.Name, file.MIME, file.Data)
+		if opts.Format == "" {
+			opts.Format = "unsupported"
+		}
+		obj, err := a.cfg.FileStore.PutBytes(r.Context(), opts, file.Data)
+		if err == nil {
+			file.ObjectID, file.SHA256 = obj.ID, obj.SHA256
+		}
+		return obj, err
+	}
+	opts.Kind, opts.OriginalName, opts.MediaType = db.FileKindTextSnapshot, "text.txt", "text/plain"
+	opts.Format, opts.ProcessStatus = ingest.FormatText, "parsed"
+	return a.cfg.FileStore.PutBytes(r.Context(), opts, []byte(text))
+}
+
 // uploadDocument 解析、切分并入库招标文档；wake_planner 为 true 且产生了新文档时向 Planner 投递 document_added 触发。
 func (a *API) uploadDocument(w http.ResponseWriter, r *http.Request, t *Task) {
 	var req uploadDocumentReq
@@ -92,7 +116,8 @@ func (a *API) uploadDocument(w http.ResponseWriter, r *http.Request, t *Task) {
 			return
 		}
 		req = uploadDocumentReq{TenderNo: r.FormValue("tender_no"), LotNo: r.FormValue("lot_no"), Title: r.FormValue("title"),
-			Text: r.FormValue("text"), WakePlanner: formBool(r.FormValue("wake_planner"))}
+			Text: r.FormValue("text"), WakePlanner: formBool(r.FormValue("wake_planner")),
+			DocRole: r.FormValue("doc_role"), PublishedAt: r.FormValue("published_at")}
 		if file == nil && strings.TrimSpace(req.Text) == "" {
 			fail(w, badRequest("multipart upload requires a file field (or a text field)"))
 			return
@@ -105,9 +130,34 @@ func (a *API) uploadDocument(w http.ResponseWriter, r *http.Request, t *Task) {
 		fail(w, badRequest("tender_no and text (or file) are required"))
 		return
 	}
-	res, err := ingest.Ingest(r.Context(), a.pg, t.Assets, ingest.Input{TenderNo: req.TenderNo, LotNo: req.LotNo, Title: req.Title,
-		Text: req.Text, File: file, OCR: a.ocr(), CreatedBy: operator(r)})
+	published, err := req.publishedAt()
 	if err != nil {
+		fail(w, err)
+		return
+	}
+	retained, err := a.retainOriginal(r, t, file, req.Text)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var originalID *int64
+	if retained != nil {
+		originalID = &retained.ID
+	}
+	if file != nil && ingest.DetectFormat(file.Name, file.MIME, file.Data) == ingest.FormatZIP {
+		a.uploadArchive(w, r, t, file, retained)
+		return
+	}
+	res, err := ingest.Ingest(r.Context(), a.pg, t.Assets, ingest.Input{TenderNo: req.TenderNo, LotNo: req.LotNo, Title: req.Title,
+		Text: req.Text, File: file, OCR: a.ocr(), CreatedBy: operator(r), DocRole: strings.TrimSpace(req.DocRole),
+		PublishedAt: published, TenantID: db.DefaultTenant, OriginalFileID: originalID})
+	if err != nil {
+		// 解析失败也保留原件：响应带上 file ID，用户可修正后重试，而不是重新上传。
+		if retained != nil {
+			writeJSON(w, errorStatus(err), map[string]any{"error": err.Error(), "original_file_id": retained.ID,
+				"file_sha256": retained.SHA256, "retryable": true})
+			return
+		}
 		fail(w, err)
 		return
 	}
@@ -120,11 +170,17 @@ func (a *API) uploadDocument(w http.ResponseWriter, r *http.Request, t *Task) {
 		t.NotifyDocument(fmt.Sprintf("#%d %s（招标编号 %s）", res.Document.ID, res.Document.Title, res.Document.TenderNo), detail)
 		woke = true
 	}
+	resp := map[string]any{"result": res, "planner_notified": woke}
+	if formBool(r.URL.Query().Get("bootstrap_goals")) {
+		if decomp, bErr := a.pg.BootstrapRFPGoals(r.Context(), db.DefaultTenant, t.ID, operator(r), true); bErr == nil {
+			resp["goal_decomposition"] = decomp
+		}
+	}
 	status := http.StatusCreated
 	if !res.Created {
 		status = http.StatusOK
 	}
-	writeJSON(w, status, map[string]any{"result": res, "planner_notified": woke})
+	writeJSON(w, status, resp)
 }
 
 // ---------------------------------------------------------------------------

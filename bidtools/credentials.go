@@ -179,32 +179,39 @@ func numeric(v any) (float64, bool) {
 func (k *Kit) queryCredentialsTool() tool.CoreTool {
 	return readTool(tool.Spec{
 		Name: ToolQueryCredentials,
-		Description: "Check our company credential library (qualifications, past performance, personnel certificates) against one tender requirement. " +
-			"Returns each candidate's match score, satisfied checks and gaps, plus an overall verdict (satisfied | partial | missing).",
+		Description: "对照招标资格要求或评分项核验本企业资信库（企业资质 qualification、项目业绩 performance、人员证书 personnel、财务信誉 financial、体系认证 certificate）。" +
+			"返回每条候选资信的匹配得分、满足项与差距说明，并给出总体判定结论 verdict（satisfied 满足 | partial 部分满足 | missing 缺失）。",
 		Schema: obj(map[string]any{
-			"requirement": str("the tender requirement being checked, quoted or paraphrased"),
-			"category":    str("qualification | performance | personnel | financial | certificate | ... (omit to search all)"),
-			"keywords":    strs("terms that a matching credential must mention, e.g. [\"信息系统集成\",\"一级\"]"),
-			"attributes": map[string]any{"type": "object", "description": "thresholds on credential attributes: numbers compare >=, strings by containment, " +
-				"e.g. {\"level\":\"一级\",\"amount\":5000000}"},
-			"min_count":      integer("how many fully matching credentials are required, default 1"),
-			"reference_date": str("YYYY-MM-DD for validity checks (e.g. bid deadline), default today"),
+			"requirement": str("待核验的招标资格或评分要求原文摘录或概括描述"),
+			"category":    str("资信类别过滤：qualification（企业资质）| performance（项目业绩）| personnel（人员证书）| financial（财务信誉）| certificate（体系认证），不填则检索全部类别"),
+			"keywords":    strs("匹配资信必须包含的关键词列表（如 [\"信息系统集成\", \"一级\"]）"),
+			"attributes": map[string]any{"type": "object", "description": "资信结构化属性阈值要求：数值按 >= 比对，文本按包含关系比对，" +
+				"例如 {\"level\":\"一级\",\"amount\":5000000}"},
+			"min_count":      integer("要求完全满足条件的资信最低数量（如要求 3 个同类业绩则填 3，默认 1）"),
+			"reference_date": str("证书有效期核验基准日期 YYYY-MM-DD（不填时优先取本任务投标截止日，否则取今天）"),
 		}),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		req, err := decode[credentialRequirement](in)
 		if err != nil {
 			return tool.Errorf("invalid input: %v", err), nil
 		}
-		ref := time.Now()
+		refDate := time.Now().Format(time.DateOnly)
 		if req.ReferenceDate != "" {
-			if ref, err = time.Parse(time.DateOnly, req.ReferenceDate); err != nil {
+			if _, err := time.Parse(time.DateOnly, req.ReferenceDate); err != nil {
 				return tool.Errorf("reference_date must be YYYY-MM-DD"), nil
 			}
+			refDate = req.ReferenceDate
+		} else if k.pg != nil && k.taskID > 0 {
+			if m, err := k.pg.RequirementManifest(ctx, k.tenant, k.taskID); err == nil && m != nil && m.BidDeadline != nil {
+				refDate = m.BidDeadline.In(time.FixedZone("CST", 8*3600)).Format(time.DateOnly)
+			}
 		}
+		ref, _ := time.Parse(time.DateOnly, refDate)
 		if req.Category == "" && len(req.Keywords) == 0 {
 			return tool.Errorf("category or keywords is required"), nil
 		}
-		creds, err := k.pg.ListCompanyCredentials(ctx, db.CredentialFilter{Category: req.Category, Terms: req.Keywords, Limit: 50})
+		creds, err := k.pg.ListCompanyCredentials(ctx, db.CredentialFilter{Category: req.Category, Terms: req.Keywords, Limit: 50,
+			Tenant: k.tenant, TaskID: k.taskID})
 		if err != nil {
 			return tool.Result{}, err
 		}

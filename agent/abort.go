@@ -16,9 +16,18 @@ func (c *AbortCause) Error() string {
 	return "abort: " + c.Code + ": " + c.Message
 }
 
+func (c *AbortCause) Is(target error) bool {
+	if c == nil || target == nil {
+		return c == target
+	}
+	t, ok := target.(*AbortCause)
+	return ok && t != nil && c.Code != "" && c.Code == t.Code
+}
+
 var (
 	AbortGoalMet             = &AbortCause{Code: "goal_met", Message: "all goals met"}
 	AbortKilledByPlanner     = &AbortCause{Code: "killed_by_planner"}
+	AbortKilledByWatchdog    = &AbortCause{Code: "killed_by_watchdog"}
 	AbortWorkPausedByUser    = &AbortCause{Code: "work_paused_by_user"}
 	AbortWorkCancelledByUser = &AbortCause{Code: "work_cancelled_by_user"}
 	AbortWorkFinished        = &AbortCause{Code: "work_finished"}

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  AlertTriangle, ArrowDown, ChevronDown, CircleCheck, Clock3, Ellipsis, ListTree, PanelLeft, Pause, Send, ShieldAlert, Square, Wrench, XCircle,
+  AlertTriangle, ArrowDown, Check, ChevronDown, CircleCheck, CircleSlash, Clock3, Copy, Ellipsis, ListTree, Loader2, Network, PanelLeft, Pause, Send, ShieldAlert, Square, Wrench, XCircle, ZapOff,
 } from 'lucide-react'
 import { ApiError, api, errorText } from '../../api/client'
 import type { NodeBrief } from '../../api/types'
@@ -14,6 +14,7 @@ import { ACTIVITY_KINDS, parseWork, pickEnum, taskUrl } from '../../lib/routes'
 import type { ActivityKind } from '../../lib/routes'
 import { useTaskWorkspace } from '../task-workspace/TaskWorkspaceProvider'
 import { NodeDetailModal, OverviewSummary } from './NodeParts'
+import ExplorationGraph from './ExplorationGraph'
 
 // 执行记录 · 实时过程（图 2 / 图 4 / 图 7，V02 / V04 / V07）：
 // 选择工作 → 查看对应活动 → 展开工具详情 → 发送工作引导。左栏 288px 工作列表，右栏三行：标题控制 / 独立滚动活动 / 底部引导区。
@@ -35,12 +36,30 @@ type Group = { key: string; label: string; nodes: NodeBrief[] }
 
 // 引导草稿按 任务 + 工作 在内存中隔离，切换工作不会把 A 的草稿发给 B。
 const steerDrafts = new Map<string, string>()
+const SEND_MODE_KEY = 'autobid.chat_send_mode'
+
+function statusIcon(group: string, state?: string): ReactNode {
+  if (group === 'running' || state === 'running') return <Loader2 className="size-3.5 shrink-0 animate-spin text-blue-600" aria-hidden />
+  if (group === 'paused' || state === 'paused') return <Pause className="size-3.5 shrink-0 text-amber-600" aria-hidden />
+  if (state === 'done') return <CircleCheck className="size-3.5 shrink-0 text-emerald-600" aria-hidden />
+  if (state === 'blocked') return <XCircle className="size-3.5 shrink-0 text-red-600" aria-hidden />
+  if (state === 'exhausted') return <ZapOff className="size-3.5 shrink-0 text-purple-600" aria-hidden />
+  if (state === 'stopped') return <CircleSlash className="size-3.5 shrink-0 text-amber-600" aria-hidden />
+  return <Clock3 className="size-3.5 shrink-0 text-slate-400" aria-hidden />
+}
 
 function EventItem({ e, open, onToggle }: { e: StreamEvent; open: boolean; onToggle: () => void }) {
   const t = new Date(e.at)
   const time = Number.isNaN(t.getTime()) ? '—' : t.toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
   const detail = useMemo(() => (open && e.detail ? pretty(e.detail) : ''), [open, e.detail])
   const toolish = e.kind === 'tool' || e.kind === 'tool_error'
+  const [copied, setCopied] = useState(false)
+  const copyDetail = () => {
+    if (!detail) return
+    void navigator.clipboard?.writeText(detail)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
   return (
     <li className={cx('rounded-[10px] bg-soft p-3', e.kind === 'intercept_request' && 'bg-[#fffbeb]', (e.kind === 'tool_error' || e.kind === 'error') && 'bg-[#fef2f2]')}>
       <div className="mb-1.5 text-xs leading-4 text-muted">
@@ -49,11 +68,17 @@ function EventItem({ e, open, onToggle }: { e: StreamEvent; open: boolean; onTog
       {toolish || e.detail ? (
         <div className="flex items-start justify-between gap-3">
           <span className="flex min-w-0 items-start gap-2">{kindIcon[e.kind] ?? null}<span className="min-w-0 break-words">{e.summary}</span></span>
-          {e.detail && <button type="button" aria-expanded={open} onClick={onToggle} className="shrink-0 text-xs text-muted hover:text-fg">{open ? '收起详情' : '展开详情'}</button>}
+          {e.detail && <button type="button" aria-expanded={open} onClick={onToggle} className="shrink-0 text-xs leading-5 text-muted hover:text-fg">{open ? '收起详情' : '展开详情'}</button>}
         </div>
       ) : <p className="break-words">{e.summary}</p>}
       {open && e.detail && <>
-        <pre className="mt-2.5 max-h-80 overflow-auto rounded-lg border border-line bg-panel p-3 font-mono text-xs leading-[18px] whitespace-pre-wrap [overflow-wrap:anywhere]">{detail}</pre>
+        <div className="mt-2.5 flex items-center justify-between rounded-t-lg border border-b-0 border-line bg-slate-50 px-3 py-1 text-xs text-muted">
+          <span>工具载荷 / 活动详情</span>
+          <button type="button" onClick={copyDetail} className="inline-flex items-center gap-1 text-xs text-muted hover:text-fg">
+            {copied ? <><Check className="size-3 text-emerald-600" />已复制</> : <><Copy className="size-3" />复制</>}
+          </button>
+        </div>
+        <pre className="max-h-80 overflow-auto rounded-b-lg border border-line bg-panel p-3 font-mono text-xs leading-[18px] whitespace-pre-wrap [overflow-wrap:anywhere]">{detail}</pre>
         <p className="mt-2 text-xs text-muted">活动摘要；可能经过截断，不代表完整工具输入或返回。</p>
       </>}
     </li>
@@ -71,10 +96,23 @@ export default function ExecutionPage() {
   const narrow = width > 0 && width < 800
   const [pickerOpen, setPickerOpen] = useState(false)
   const [summaryOpen, setSummaryOpen] = useState(false)
+  const [graphOpen, setGraphOpen] = useState(false)
   const [nodeDetail, setNodeDetail] = useState<number | null>(null)
   const [busy, setBusy] = useState('')
   const [sending, setSending] = useState<string>('')
   const [, rerender] = useState(0)
+  const [sendMode, setSendMode] = useState<'enter' | 'ctrl_enter'>(() => {
+    try {
+      return localStorage.getItem(SEND_MODE_KEY) === 'ctrl_enter' ? 'ctrl_enter' : 'enter'
+    } catch {
+      return 'enter'
+    }
+  })
+  const toggleSendMode = () => {
+    const next = sendMode === 'enter' ? 'ctrl_enter' : 'enter'
+    setSendMode(next)
+    try { localStorage.setItem(SEND_MODE_KEY, next) } catch { /* ignore */ }
+  }
 
   const o = overview.data
   const groups: Group[] = [
@@ -144,13 +182,36 @@ export default function ExecutionPage() {
     expanded.current.set(viewKey, set)
     rerender((n) => n + 1)
   }
-  // 被缓存淘汰的条目不再显示；其展开状态随之丢弃。
+  // 被缓存淘汰的条目不再显示；其展开状态随之丢弃。同时追踪非当前工作的未读活动计数。
+  const seenUids = useRef(new Set<string>())
+  const [unreadByWork, setUnreadByWork] = useState<Map<number, number>>(() => new Map())
   useEffect(() => {
     const live = new Set(stream.events.map((e) => e.uid))
     for (const [k, set] of expanded.current) expanded.current.set(k, new Set([...set].filter((u) => live.has(u))))
-  }, [stream.events])
 
-  const select = (w: 'all' | number) => { setQuery({ work: w === 'all' ? undefined : w }, { replace: false }); setPickerOpen(false) }
+    let changed = false
+    const nextUnread = new Map(unreadByWork)
+    for (const e of stream.events) {
+      if (seenUids.current.has(e.uid)) continue
+      seenUids.current.add(e.uid)
+      if (selectedId !== undefined && e.node_id && e.node_id !== selectedId) {
+        nextUnread.set(e.node_id, (nextUnread.get(e.node_id) ?? 0) + 1)
+        changed = true
+      }
+    }
+    if (changed) setUnreadByWork(nextUnread)
+  }, [stream.events, selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const select = (w: 'all' | number) => {
+    if (w === 'all') setUnreadByWork(new Map())
+    else if (unreadByWork.has(w)) {
+      const next = new Map(unreadByWork)
+      next.delete(w)
+      setUnreadByWork(next)
+    }
+    setQuery({ work: w === 'all' ? undefined : w }, { replace: false })
+    setPickerOpen(false)
+  }
 
   const control = async (action: 'pause' | 'cancel') => {
     if (!selectedId) return
@@ -188,39 +249,46 @@ export default function ExecutionPage() {
   const pending = (intercepts.data ?? []).filter((p) => selectedId === undefined || p.intent_id === selectedId).length
   const title = selectedId ? `工作 #${selectedId}${selected?.summary ? ` · ${selected.summary}` : ''}` : '全部实时活动'
 
-  const row = (n: NodeBrief, group: string) => (
-    <button key={`${group}-${n.id}`} type="button" aria-current={selectedId === n.id ? 'true' : undefined} onClick={() => select(n.id)}
-      title={`#${n.id} ${n.summary}${n.blocked_reason ? `\n阻塞：${n.blocked_reason}` : ''}`}
-      className={cx('flex min-h-11 w-full items-center gap-2 rounded-lg p-2 text-left hover:bg-soft', selectedId === n.id && 'bg-soft')}>
-      {group === 'paused' ? <Pause className="size-3.5 shrink-0" aria-hidden /> : group === 'terminal' ? <CircleCheck className="size-3.5 shrink-0" aria-hidden /> : <Clock3 className="size-3.5 shrink-0" aria-hidden />}
-      <span className="min-w-0 flex-1 truncate">#{n.id} {n.summary || '（无摘要）'}</span>
-      {group === 'running' && <Badge dot tone="blue">实时</Badge>}
-      {group === 'terminal' && n.state && <span className="shrink-0 text-xs text-muted">{stateLabel[n.state] ?? n.state}</span>}
-    </button>
-  )
+  const row = (n: NodeBrief, group: string) => {
+    const unread = selectedId !== n.id ? (unreadByWork.get(n.id) ?? 0) : 0
+    return (
+      <button key={`${group}-${n.id}`} type="button" aria-current={selectedId === n.id ? 'true' : undefined} onClick={() => select(n.id)}
+        title={`#${n.id} ${n.summary}${n.blocked_reason ? `\n阻塞：${n.blocked_reason}` : ''}`}
+        className={cx('flex min-h-11 w-full items-center gap-2 rounded-lg p-2 text-left hover:bg-soft', selectedId === n.id && 'bg-soft')}>
+        {statusIcon(group, n.state)}
+        <span className="min-w-0 flex-1 truncate">#{n.id} {n.summary || '（无摘要）'}</span>
+        {unread > 0 && <span className="size-2 shrink-0 rounded-full bg-blue-600" title={`${unread} 条新活动`} aria-hidden />}
+        {/* 「实时」标记当前正在查看的运行中工作；正常完成只用图标表示，异常结束才显示状态文字。 */}
+        {group === 'running' && selectedId === n.id && <Badge dot tone="blue">实时</Badge>}
+        {group === 'terminal' && n.state && n.state !== 'done' && <span className="shrink-0 text-xs text-muted">{stateLabel[n.state] ?? n.state}</span>}
+      </button>
+    )
+  }
   const list = (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <div className="px-2 pt-3 pb-1 text-xs text-muted">项目动态</div>
+        <div className="px-2 pt-3 pb-1 text-xs leading-5 text-muted">项目动态</div>
         <button type="button" aria-current={selectedId === undefined ? 'true' : undefined} onClick={() => select('all')}
           className={cx('flex min-h-11 w-full items-center gap-2 rounded-lg p-2 text-left hover:bg-soft', selectedId === undefined && 'bg-soft')}>
           <Clock3 className="size-3.5" aria-hidden /><span className="flex-1">全部实时活动</span>
-          {stream.events.length > 0 && <span className="text-xs text-muted">{stream.events.length}</span>}
         </button>
         {overview.loading && !o ? <Spinner /> : overview.error && !o ? <p className="px-2 py-3 text-xs text-danger">工作摘要读取失败：{overview.error}</p> : groups.filter((g) => g.nodes.length > 0).map((g) => (
           <div key={g.key}>
-            <div className="px-2 pt-3 pb-1 text-xs text-muted">{g.label}</div>
+            <div className="px-2 pt-3 pb-1 text-xs leading-5 text-muted">{g.label}</div>
             {g.nodes.map((n) => row(n, g.key))}
           </div>
         ))}
         {o && total === 0 && <p className="px-2 py-3 text-xs text-muted">当前摘要中没有待执行、执行中或最近结束的工作。</p>}
         {selected && !known && (
-          <div><div className="px-2 pt-3 pb-1 text-xs text-muted">不在当前摘要中</div>{row(selected, 'other')}</div>
+          <div><div className="px-2 pt-3 pb-1 text-xs leading-5 text-muted">不在当前摘要中</div>{row(selected, 'other')}</div>
         )}
       </div>
       <div className="flex items-center justify-between gap-2 border-t border-line px-4 py-3 text-xs text-muted">
         <span>本次打开期间的实时活动</span>
-        <button type="button" className="inline-flex items-center gap-1 hover:text-fg" onClick={() => setSummaryOpen(true)}><ListTree className="size-3.5" aria-hidden />推演摘要</button>
+        <div className="flex items-center gap-2.5">
+          <button type="button" className="inline-flex items-center gap-1 hover:text-fg" onClick={() => setGraphOpen(true)}><Network className="size-3.5" aria-hidden />推演图</button>
+          <button type="button" className="inline-flex items-center gap-1 hover:text-fg" onClick={() => setSummaryOpen(true)}><ListTree className="size-3.5" aria-hidden />推演摘要</button>
+        </div>
       </div>
     </div>
   )
@@ -242,7 +310,7 @@ export default function ExecutionPage() {
       )}
 
       <section data-region="activity-pane" aria-label={title} className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[10px] border border-line bg-panel">
-        <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+        <div className={cx('flex min-h-12 flex-wrap items-center justify-between border-b border-line', narrow ? 'gap-1.5 px-3 py-2.5' : 'gap-2 px-4 py-3')}>
           <div className="flex min-w-0 items-center gap-2">
             <h2 className={cx('min-w-0 truncate font-semibold', narrow ? 'text-[13px]' : 'text-sm')} title={title}>{title}</h2>
             {selectedId ? state && <Badge dot tone={statusTone(state)}>{stateLabel[state] ?? state}</Badge>
@@ -272,7 +340,7 @@ export default function ExecutionPage() {
           </div>
           )}
         </div>
-        <div ref={scrollRef} onScroll={onScroll} data-region="activity-scroll" className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        <div ref={scrollRef} onScroll={onScroll} data-region="activity-scroll" className={cx('relative flex min-h-0 flex-1 flex-col overflow-y-auto', narrow ? 'gap-2.5 p-3' : 'gap-3 p-4')}>
           {probeError && <Notice tone="danger" action={<Button size="sm" onClick={() => select('all')}>查看全部活动</Button>}>{probeError}</Notice>}
           {work === undefined && <Notice tone="danger" action={<Button size="sm" onClick={() => select('all')}>查看全部活动</Button>}>工作参数无效：work 只能是 all 或正整数工作 ID。</Notice>}
           {pending > 0 && <Notice tone="warn" action={<a {...linkProps(taskUrl(taskId, 'approvals'))} className="text-sm font-medium underline">去审批</a>}>有 {pending} 项工具调用等待人工审批。</Notice>}
@@ -283,7 +351,7 @@ export default function ExecutionPage() {
           {events.length === 0 ? (
             <Empty>{stream.status !== 'open' ? `活动流${statusLabel}` : selectedId ? '本次打开期间尚未收到该工作的活动。没有工作编号的项目级活动在「全部实时活动」中查看。' : '等待活动事件…（Worker 的工具调用、阶段结论与审批请求会实时出现）'}</Empty>
           ) : (
-            <ul className="flex flex-col gap-3">{events.map((e) => <EventItem key={e.uid} e={e} open={openSet.has(e.uid)} onToggle={() => toggle(e.uid)} />)}</ul>
+            <ul className={cx('flex flex-col', narrow ? 'gap-2.5 [&>li]:p-2.5' : 'gap-3')}>{events.map((e) => <EventItem key={e.uid} e={e} open={openSet.has(e.uid)} onToggle={() => toggle(e.uid)} />)}</ul>
           )}
           <p className="text-center text-xs text-muted">仅展示本次收到的活动，业务状态以刷新结果为准。</p>
           {unseen > 0 && (
@@ -292,22 +360,42 @@ export default function ExecutionPage() {
               <ArrowDown className="size-3.5" aria-hidden />有 {unseen} 条新活动</button>
           )}
         </div>
-        <div data-region="composer" className="shrink-0 border-t border-line p-3">
+        <div data-region="composer" className={cx('shrink-0 border-t border-line', narrow ? 'p-2.5' : 'p-3')}>
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void send() }}>
             <Input aria-label="引导内容" className="h-9" value={text} disabled={mode === 'all' || mode === 'readonly'}
+              maxLength={4000}
               placeholder={mode === 'all' ? '选择一个工作后可发送引导' : mode === 'readonly' ? `该工作${stateLabel[state] ?? state ?? ''}，不能发送引导` : mode === 'message' ? '补充说明并恢复该工作…' : '给当前工作补充要求…'}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && sendMode === 'ctrl_enter' && !(e.ctrlKey || e.metaKey)) {
+                  e.preventDefault()
+                } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault()
+                  void send()
+                }
+              }}
               onChange={(e) => { setText(e.target.value); if (draftKey) steerDrafts.set(draftKey, e.target.value) }} />
             <Button type="submit" variant="primary" className="h-9" icon={<Send className="size-4" />} loading={!!sending && sending === draftKey}
               disabled={(mode !== 'steer' && mode !== 'message') || !text.trim() || !!sending}>{mode === 'message' ? '发送并恢复' : '引导'}</Button>
           </form>
-          <p className="mt-1.5 text-xs leading-5 text-muted">{mode === 'all' ? '项目级「补充提示」「追加目标」在标题栏的「执行操作」中，不是聊天回复。'
-            : mode === 'readonly' ? '待执行或已结束的工作只读；不提供会误发的引导。' : '发送后排队处理；不会自动批准要求或章节。'}</p>
+          <div className={cx('mt-1.5 flex flex-wrap items-center justify-between gap-2 leading-5 text-muted', narrow ? 'text-[11px]' : 'text-xs')}>
+            <span>{mode === 'all' ? '项目级「补充提示」「追加目标」在标题栏的「执行操作」中，不是聊天回复。'
+              : mode === 'readonly' ? '待执行或已结束的工作只读；不提供会误发的引导。' : '发送后排队处理；不会自动批准要求或章节。'}</span>
+            <span className="flex items-center gap-2 font-mono text-[11px]">
+              <button type="button" onClick={toggleSendMode} className="rounded border border-line px-1.5 py-0.5 hover:bg-soft hover:text-fg" title="切换发送快捷键">
+                {sendMode === 'enter' ? 'Enter 发送' : 'Ctrl+Enter 发送'}
+              </button>
+              <span>{text.length} / 4000</span>
+            </span>
+          </div>
         </div>
       </section>
 
       <Drawer open={pickerOpen} side="left" title="工作列表" onClose={() => setPickerOpen(false)} width={320}>{list}</Drawer>
       <Drawer open={summaryOpen} title="推演摘要（有界概览）" onClose={() => setSummaryOpen(false)} width={560}>
         <div className="p-4"><OverviewSummary taskID={taskId} overview={overview} /></div>
+      </Drawer>
+      <Drawer open={graphOpen} title="推演探索图（Exploration DAG）" onClose={() => setGraphOpen(false)} width={920}>
+        <div className="p-4"><ExplorationGraph taskID={taskId} active={graphOpen} /></div>
       </Drawer>
       <NodeDetailModal taskID={taskId} nodeID={nodeDetail} onClose={() => setNodeDetail(null)} onOpen={setNodeDetail} />
     </div>

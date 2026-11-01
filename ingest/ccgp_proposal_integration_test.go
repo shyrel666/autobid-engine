@@ -20,6 +20,26 @@ import (
 
 const ccgpCorpusDir = "../ccgp_2026-10-06"
 
+// ccgpExpect 是开发集（eval/bid/corpus.json）的工程回归期望：招标公告中的投标截止时间（北京时间），
+// 以及文件是否带有资格性 / 符合性审查标准表（中国政府网项目只有投标文件格式中的承诺表，中经项目没有审查表）。
+// 编写 D1 规则时已查看过这些文件，因此这里的通过不构成 eval/bid/PROTOCOL.md 的 O1 验收。
+var ccgpExpect = []struct {
+	key         string
+	deadline    string
+	reviewTable bool
+}{
+	{"公共数据平台2025", "2025-03-25 10:00", true},
+	{"数字审计", "2026-08-26 10:00", true},
+	{"发展和改革委员会", "2026-05-20 10:00", true},
+	{"网络安全服务CQS26C01245", "2026-08-03 10:00", true},
+	{"数据中台", "2026-07-13 10:00", true},
+	{"中国政府网", "2026-05-29 09:00", false},
+	{"疾病预防控制中心", "2026-08-20 09:30", true},
+	{"ZZGJ20250268", "2026-01-26 09:30", true},
+	{"许昌职业技术学院", "2026-09-01 08:30", true},
+	{"社会服务场景运维", "2026-07-08 09:00", false},
+}
+
 func ccgpTenderFiles(t *testing.T) []string {
 	t.Helper()
 	entries, err := os.ReadDir(ccgpCorpusDir)
@@ -95,10 +115,21 @@ func TestCCGPRealTendersRequirementsAndOutline(t *testing.T) {
 			if res.Mandatory > 0 && by[db.ReqMandatoryClause] == 0 {
 				t.Fatalf("%d mandatory chunks but no mandatory_clause requirement", res.Mandatory)
 			}
-			price := 0
+			price, statutory, reviewRows := 0, 0, 0
 			for _, it := range view.Items {
+				if it.VetoKind == db.VetoStatutory {
+					statutory++
+					continue
+				}
 				if it.SourceChunkID == nil || it.SourceHash == "" || it.Origin != "extracted" {
 					t.Fatalf("requirement without versioned source: %+v", it)
+				}
+				if it.Category == db.ReqVetoItem {
+					reviewRows++
+					// 本语料的审查表都对全部分包适用：否决项不得因前文出现过「包1」被归入某个分包（否则只投包2时门禁被绕过）。
+					if (it.VetoKind == db.VetoQualification) != strings.HasPrefix(it.Code, "VQ-") || it.InTechnicalScope() || it.VetoStatus != db.VetoPending || it.Lot != "" {
+						t.Fatalf("review veto item: %+v", it)
+					}
 				}
 				if it.Category == db.ReqScoringItem && strings.Contains(it.Description, "序号") && strings.Contains(it.Description, "分值") {
 					t.Fatalf("scoring table header row extracted as a requirement: %q", it.Description)
@@ -106,9 +137,21 @@ func TestCCGPRealTendersRequirementsAndOutline(t *testing.T) {
 				if it.Category == db.ReqScoringItem && (it.ScoreGroup == "" || it.ScoreWeight <= 0) {
 					t.Fatalf("scoring item without group or score: %+v", it)
 				}
-				if !it.InTechnicalScope() {
+				if it.Category == db.ReqScoringItem && it.ScoreGroup == db.ScoreGroupPrice {
 					price++
 				}
+			}
+			// D1：每个任务 6 条法定否决项；有审查标准表的文件逐行产出否决项；投标截止时间与招标公告一致。
+			for _, want := range ccgpExpect {
+				if !strings.Contains(name, want.key) {
+					continue
+				}
+				at, _ := time.ParseInLocation("2006-01-02 15:04", want.deadline, time.FixedZone("CST", 8*3600))
+				if statutory != 6 || (reviewRows > 0) != want.reviewTable || view.Manifest.BidDeadline == nil || !view.Manifest.BidDeadline.Equal(at) {
+					t.Fatalf("D1: statutory=%d review rows=%d deadline=%v source=%s, want deadline %s review table %v",
+						statutory, reviewRows, view.Manifest.BidDeadline, view.Manifest.BidDeadlineSource, want.deadline, want.reviewTable)
+				}
+				t.Logf("%s: veto items %d (review rows %d) deadline %s", name, statutory+reviewRows, reviewRows, view.Manifest.BidDeadline.In(at.Location()).Format("2006-01-02 15:04"))
 			}
 			// 评分表结构化提取：每个分包都有价格分，评分项合计恰为 100 分（本语料全部满足；类别声明分值与提取不符时仅提示）。
 			if len(view.Scoring) == 0 || price != len(view.Scoring) {
@@ -133,8 +176,8 @@ func TestCCGPRealTendersRequirementsAndOutline(t *testing.T) {
 			if err != nil {
 				t.Fatalf("create outline: %v", err)
 			}
-			// 价格评分项由报价文件响应，不进入技术标目录；其余要求全部映射。
-			if outline.Coverage.Total+outline.Coverage.OutOfScope != view.Stats.Total || outline.Coverage.OutOfScope != price ||
+			// 价格评分项由报价文件响应、否决项由投标方逐项核对，都不进入技术标目录；其余要求全部映射。
+			if outline.Coverage.Total+outline.Coverage.OutOfScope+view.Stats.Veto.Total != view.Stats.Total || outline.Coverage.OutOfScope != price ||
 				len(outline.Coverage.Unmapped) != 0 || len(outline.Sections) < 2 {
 				t.Fatalf("default outline must map every in-scope requirement: sections=%d coverage=%+v", len(outline.Sections), outline.Coverage)
 			}

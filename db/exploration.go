@@ -53,6 +53,8 @@ func NewExplorationStore(d *DB, expID int64) *ExplorationStore {
 
 func (s *ExplorationStore) ID() int64 { return s.expID }
 
+func (s *ExplorationStore) DB() *DB { return s.db }
+
 const nodeCols = `id, exploration_id, kind, payload, priority, state,
 	COALESCE(origin,''), COALESCE(owner,''), COALESCE(blocked_reason,''), COALESCE(delete_reason,''),
 	content_version, active_round, cold_since_round, lease_until, lease_epoch, created_at, updated_at, completed_at`
@@ -279,6 +281,54 @@ func (s *ExplorationStore) NodesByKind(ctx context.Context, kind string, states 
 		return nil, err
 	}
 	return scanNodes(rows)
+}
+
+// AllNodes 读取本推演空间全部节点（含锚点列表与关联 FindingID），用于推演图与覆盖图可视化。
+func (s *ExplorationStore) AllNodes(ctx context.Context, limit int) ([]*Node, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 1000
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+nodeCols+` FROM exploration_nodes
+		WHERE exploration_id = $1 ORDER BY id ASC LIMIT $2`, s.expID, limit)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := scanNodes(rows)
+	if err != nil || len(nodes) == 0 {
+		return nodes, err
+	}
+	byID := make(map[int64]*Node, len(nodes))
+	ids := make([]int64, 0, len(nodes))
+	for _, n := range nodes {
+		byID[n.ID] = n
+		ids = append(ids, n.ID)
+	}
+	arows, err := s.db.QueryContext(ctx, `SELECT node_id, asset_id FROM exploration_anchors
+		WHERE node_id = ANY($1) ORDER BY node_id, asset_id`, ids)
+	if err == nil {
+		for arows.Next() {
+			var nid, aid int64
+			if err := arows.Scan(&nid, &aid); err == nil {
+				if n := byID[nid]; n != nil {
+					n.Anchors = append(n.Anchors, aid)
+				}
+			}
+		}
+		arows.Close()
+	}
+	frows, err := s.db.QueryContext(ctx, `SELECT id, node_id FROM findings WHERE node_id = ANY($1)`, ids)
+	if err == nil {
+		for frows.Next() {
+			var fid, nid int64
+			if err := frows.Scan(&fid, &nid); err == nil {
+				if n := byID[nid]; n != nil {
+					n.FindingID = fid
+				}
+			}
+		}
+		frows.Close()
+	}
+	return nodes, nil
 }
 
 // Edges 读取本空间边（有界）。

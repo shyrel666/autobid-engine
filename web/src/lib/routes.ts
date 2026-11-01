@@ -4,20 +4,28 @@
 
 export type TaskPage =
   | 'overview' | 'documents' | 'requirements' | 'research' | 'outline' | 'writing'
-  | 'matrix' | 'consistency' | 'report' | 'export' | 'monitor' | 'elements' | 'approvals' | 'llm'
+  | 'matrix' | 'consistency' | 'report' | 'export' | 'monitor' | 'elements' | 'approvals' | 'llm' | 'evidence'
 
 export const TASK_PAGES: readonly TaskPage[] = [
   'overview', 'documents', 'requirements', 'research', 'outline', 'writing',
-  'matrix', 'consistency', 'report', 'export', 'monitor', 'elements', 'approvals', 'llm',
+  'matrix', 'consistency', 'report', 'export', 'monitor', 'elements', 'approvals', 'llm', 'evidence',
 ]
 
 export type Route =
+  | { name: 'dashboard' }
   | { name: 'tasks' }
   | { name: 'task'; taskId: number; page: TaskPage; sectionId?: number }
+  | { name: 'findings' }
+  | { name: 'assets' }
+  | { name: 'llm-records' }
   | { name: 'intercepts' }
+  | { name: 'intercept-rules' }
   | { name: 'credentials' }
   | { name: 'knowledge' }
   | { name: 'llm' }
+  | { name: 'agents' }
+  | { name: 'skills' }
+  | { name: 'tools' }
   | { name: 'proposal'; intent: 'outline' | 'export' }
   | { name: 'redirect'; to: string }
   | { name: 'notfound'; reason: string }
@@ -33,6 +41,7 @@ export function parseRoute(pathname: string, search = ''): Route {
   const q = new URLSearchParams(search)
   if (parts.length === 0) return { name: 'redirect', to: '/tasks' }
   switch (parts[0]) {
+    case 'dashboard': return parts.length === 1 ? { name: 'dashboard' } : notFound()
     case 'tasks': {
       if (parts.length === 1) return { name: 'tasks' }
       const taskId = parseId(parts[1])
@@ -50,10 +59,33 @@ export function parseRoute(pathname: string, search = ''): Route {
       if (parts.length > 3) return { name: 'notfound', reason: '页面地址不存在' }
       return { name: 'task', taskId, page }
     }
-    case 'intercepts': return parts.length === 1 ? { name: 'intercepts' } : notFound()
+    case 'findings': return parts.length === 1 ? { name: 'findings' } : notFound()
+    case 'assets': return parts.length === 1 ? { name: 'assets' } : notFound()
+    case 'llm-records': return parts.length === 1 ? { name: 'llm-records' } : notFound()
+    case 'intercepts':
+      if (parts.length === 1) return { name: 'intercepts' }
+      if (parts.length === 2 && parts[1] === 'rules') return { name: 'intercept-rules' }
+      return notFound()
     case 'credentials': return parts.length === 1 ? { name: 'credentials' } : notFound()
     case 'knowledge': return parts.length === 1 ? { name: 'knowledge' } : notFound()
     case 'llm': return parts.length === 1 ? { name: 'llm' } : notFound()
+    case 'agents': return parts.length === 1 ? { name: 'agents' } : notFound()
+    case 'skills': return parts.length === 1 ? { name: 'skills' } : notFound()
+    case 'tools': return parts.length === 1 ? { name: 'tools' } : notFound()
+    case 'function':
+      if (parts.length === 2 && parts[1] === 'tasks') return { name: 'redirect', to: '/tasks' }
+      if (parts.length === 2 && parts[1] === 'findings') return { name: 'redirect', to: '/findings' }
+      if (parts.length === 2 && parts[1] === 'assets') return { name: 'redirect', to: '/assets' }
+      if (parts.length === 2 && parts[1] === 'llm-records') return { name: 'redirect', to: '/llm-records' }
+      return notFound()
+    case 'system':
+      if (parts.length === 2 && parts[1] === 'llm') return { name: 'redirect', to: '/llm' }
+      if (parts.length === 2 && parts[1] === 'agents') return { name: 'redirect', to: '/agents' }
+      if (parts.length === 2 && parts[1] === 'skills') return { name: 'redirect', to: '/skills' }
+      if (parts.length === 2 && parts[1] === 'tools') return { name: 'redirect', to: '/tools' }
+      if (parts.length === 2 && parts[1] === 'intercept') return { name: 'redirect', to: '/intercepts/rules' }
+      if (parts.length === 3 && parts[1] === 'intercept' && parts[2] === 'approvals') return { name: 'redirect', to: '/intercepts' }
+      return notFound()
     case 'proposal':
       return parts.length === 1 ? { name: 'proposal', intent: q.get('intent') === 'export' ? 'export' : 'outline' } : notFound()
     case 'roadmap':
@@ -100,7 +132,7 @@ export interface NavGroup { key: string; label: string; pages: NavPage[] }
 export const TASK_NAV: readonly NavGroup[] = [
   { key: 'overview', label: '项目概览', pages: [{ page: 'overview', label: '项目概览' }] },
   { key: 'tender', label: '招标解读', pages: [
-    { page: 'documents', label: '招标包文件' }, { page: 'requirements', label: '要求与否决项' }, { page: 'research', label: '证据检索' },
+    { page: 'documents', label: '招标包文件' }, { page: 'requirements', label: '要求与否决项' }, { page: 'research', label: '证据检索' }, { page: 'evidence', label: '证据与承诺' },
   ] },
   { key: 'writing', label: '大纲与写作', pages: [{ page: 'outline', label: '大纲及审批' }, { page: 'writing', label: '章节写作' }] },
   { key: 'review', label: '核验', pages: [

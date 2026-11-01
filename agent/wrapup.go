@@ -18,16 +18,17 @@ var (
 const defaultWrapupTurns = 10
 
 var builtinWrapup = map[string]string{
-	AgentWorker: "【收尾】本轮预算已用尽，请停止新的检索与分析。立即把已经核实的内容写回推演图：" +
+	AgentWorker: "【收尾】本轮预算已用尽，请停止新的检索与分析。立即把已经核实或撰写的内容持久化写回：" +
 		"新识别的招标要素用 insert_assets，要素之间的关系用 link_assets，核验过程事实用 record_fact，" +
-		"已确认的合规/投策结论用 report_finding。写回完成后用两三句话总结进展与未完成事项，然后结束。",
+		"已确认的合规/投策结论用 report_finding；若正在执行技术标章节写作或正文审查，请用 requirement_bind_evidence / section_write_draft / chart_generate / compliance_verify / fulltext_consistency_check 完成写回。" +
+		"写回完成后用两三句话总结进展与未完成事项，然后结束。",
 	AgentPlanner: "【收尾】本轮规划预算已用尽。请只做必要的收束：如有证据充分的目标立即 prove_goal，" +
 		"用 TodoWrite 记录尚未投放的后续步骤，然后简短总结并结束。",
 }
 
 var builtinTaskTimeoutWrapup = map[string]string{
 	AgentWorker: "【任务即将超时】整个投标推演任务的时间已到。不要再做任何新的探索，" +
-		"只把已掌握的事实、要素与结论写回推演图（insert_assets / link_assets / record_fact / report_finding），" +
+		"只把已掌握的事实、要素、结论或章节草稿写回数据库（insert_assets / link_assets / record_fact / report_finding / requirement_bind_evidence / section_write_draft），" +
 		"然后用一句话说明未完成部分并结束。",
 	AgentPlanner: "【任务即将超时】请勿投放新意图，只核对目标是否已有充分证据并 prove_goal，然后结束。",
 }

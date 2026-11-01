@@ -38,6 +38,9 @@ func (a *Accumulator) Add(ev StreamEvent) {
 	case SERedactedThinking:
 		a.closeTool()
 		a.blocks = append(a.blocks, ContentBlock{Type: BlockRedactedThinking, Text: ev.Text})
+	case SEResponseItem:
+		a.closeTool()
+		a.blocks = append(a.blocks, ContentBlock{Type: BlockResponseItem, Input: json.RawMessage(ev.Text)})
 	case SEToolUseStart:
 		a.closeTool()
 		b := ContentBlock{Type: BlockToolUse}

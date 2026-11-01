@@ -266,3 +266,21 @@ func IsDeferredWrapper(name string, input json.RawMessage) (string, bool) {
 	}
 	return req.Name, true
 }
+
+// UnwrapDeferred 解包 ExecuteExtraTool 的目标工具名与内层入参；非包装调用或未携带合法目标名时原样返回。
+func UnwrapDeferred(name string, input json.RawMessage) (string, json.RawMessage) {
+	if name != ExecuteExtraToolName {
+		return name, input
+	}
+	var req struct {
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(input, &req) != nil || req.Name == "" {
+		return name, input
+	}
+	if len(req.Input) == 0 {
+		req.Input = json.RawMessage("{}")
+	}
+	return req.Name, req.Input
+}

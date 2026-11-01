@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { Button, ErrorBanner, Spinner, cx } from '../components/ui'
-import { InterceptAuditTable, InterceptList } from '../components/Intercepts'
+import { ApprovalRecordsTable, InterceptAuditTable, InterceptList } from '../components/Intercepts'
 import { useAsync } from '../hooks/useAsync'
 import { api } from '../api/client'
 import { linkProps, useLocation } from '../lib/router'
@@ -22,6 +22,7 @@ import ElementsTab from './task/ElementsTab'
 import ReportTab from './task/ReportTab'
 import TaskLLMTab from './task/TaskLLMTab'
 import ResearchTab from './task/ResearchTab'
+import D2EvidencePage from '../features/proposal/evidence/D2EvidencePage'
 
 function ApprovalsPage() {
   const { taskId, intercepts, invalidate } = useTaskWorkspace()
@@ -32,6 +33,7 @@ function ApprovalsPage() {
       <p className="text-sm text-muted">这里是 Worker 在途<b className="font-medium text-fg">工具调用</b>的短时审批；大纲与章节的业务审批在「大纲与写作」中进行，二者互不替代。</p>
       <InterceptList rows={intercepts.data} loading={intercepts.loading} error={intercepts.error} onReload={intercepts.reload}
         onDecided={() => invalidate('intercept_decided')} />
+      <ApprovalRecordsTable taskID={taskId} onDecided={() => invalidate('intercept_decided')} />
       <InterceptAuditTable rows={audit.data ?? undefined} loading={audit.loading} error={audit.error} onReload={audit.reload} />
     </div>
   )
@@ -61,6 +63,7 @@ function Body({ page, sectionId }: { page: TaskPage; sectionId?: number }) {
     case 'documents': content = <DocumentsPage />; break
     case 'requirements': content = <RequirementsPage />; break
     case 'research': content = <div className="mx-auto max-w-6xl"><ResearchTab taskID={taskId} /></div>; break
+    case 'evidence': content = <D2EvidencePage taskId={taskId} />; break
     case 'outline': content = <OutlinePage />; break
     case 'writing': content = <WritingPage sectionId={sectionId} />; break
     case 'matrix': content = <MatrixPage />; break

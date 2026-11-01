@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { CheckCircle2, Eye, History, ListChecks, PanelRight, Pencil, RotateCcw, Save, ShieldCheck, Sparkles, XCircle } from 'lucide-react'
+import { CheckCircle2, Eye, History, ListChecks, PanelRight, Pencil, RotateCcw, ShieldCheck, Sparkles, XCircle } from 'lucide-react'
 import { ApiError, api, errorText } from '../../../api/client'
 import type { SaveRevisionResult, SectionDetail, SectionRevision } from '../../../api/types'
 import {
@@ -176,13 +176,13 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
   // ---------- 正文区 ----------
   const center = (
     <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[10px] border border-line bg-panel" aria-label="章节正文">
-      <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-line px-4 py-2">
+      <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-line px-4 py-3">
         {tocButton}
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold" title={`${s.section_code} ${s.title}`}>{s.section_code} {s.title}</h2>
         <Badge dot tone={sectionTone(s.status)}>{sectionStatusLabel[s.status] ?? s.status}</Badge>
         {s.writing && <Badge dot tone="purple">AI 撰写中</Badge>}
         {layout !== 'three' && <Button size="sm" icon={<PanelRight className="size-3.5" />} onClick={() => setPanelDrawer(true)}>写作依据</Button>}
-        <Button size="sm" variant="primary" icon={<Save className="size-3.5" />} loading={saving} disabled={!dirty || !d.writable}
+        <Button size="sm" variant="primary" loading={saving} disabled={!dirty || !d.writable}
           title={!d.writable ? d.blocked_reason : !dirty ? '没有未保存的修改' : ''} onClick={() => void save()}>保存</Button>
       </div>
       {(state === 'behind' || conflict || saveError || d.warnings.length > 0 || (d.blocked_reason && !d.writable)) && (
@@ -286,11 +286,26 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
           <article key={r.id} className="rounded-[10px] border border-line p-3">
             <div className="flex items-start justify-between gap-2">
               <a {...linkProps(taskUrl(taskId, 'requirements', { query: { requirement: r.id } }))} className="font-semibold hover:underline">{r.is_mandatory && <span className="text-danger">★</span>}{r.code}</a>
-              <Badge dot tone={r.review_status === 'confirmed' ? 'green' : r.review_status === 'needs_revision' ? 'red' : 'amber'}>{reviewStatusLabel[r.review_status]}</Badge>
+              <Badge dot tone={r.review_status === 'confirmed' ? 'green' : r.review_status === 'needs_revision' || r.review_status === 'stale' ? 'red' : 'amber'}>{reviewStatusLabel[r.review_status] ?? r.review_status}</Badge>
             </div>
             <p className="my-1.5 text-sm">{r.title}</p>
+            {r.superseded_by_id && (
+              <p className="mb-1 text-xs text-danger">已被更正/澄清要求 {r.superseded_by_code || `#${r.superseded_by_id}`} 覆盖，请更新大纲映射</p>
+            )}
+            {r.proof_rules?.raw_summary && (
+              <p className="mb-1 text-xs text-amber-700">证明要求：{r.proof_rules.raw_summary}</p>
+            )}
+            {r.scoring_tiers && r.scoring_tiers.length > 0 && (
+              <ul className="mb-1.5 list-disc pl-4 text-xs text-slate-600">
+                {r.scoring_tiers.map((t, idx) => (
+                  <li key={idx}><span className="font-medium">{t.label}（{t.score_min && t.score_min !== t.score_max ? `${t.score_min}–${t.score_max ?? 0}分` : `${t.score_max ?? 0}分`}）</span>：{t.criteria}</li>
+                ))}
+              </ul>
+            )}
             {r.source_chunk_id ? <a {...linkProps(taskUrl(taskId, 'documents', { query: { doc: r.source_loc.doc_id ?? r.source_doc_id, chunk: r.source_chunk_id } }))} className="text-xs text-link hover:underline">
-              招标原文 {r.source_loc.section_code} {pageRange(r.source_loc.page_start, r.source_loc.page_end)}</a> : <span className="text-xs text-muted">无原文绑定</span>}
+              招标原文 {r.source_loc.kind === 'spreadsheet'
+                ? `${r.source_loc.sheet ?? '工作表'} ${r.source_loc.range ?? ''}`
+                : `${r.source_loc.section_code} ${pageRange(r.source_loc.page_start, r.source_loc.page_end)}`}</a> : <span className="text-xs text-muted">无原文绑定</span>}
             {r.evidence_gap ? <p className="mt-1 text-xs text-warn">证据缺口：{r.evidence_gap}</p>
               : !r.evidence_ids.length ? <p className="mt-1 text-xs text-warn">尚未检索证据 · <a {...linkProps(taskUrl(taskId, 'research'))} className="underline">去检索</a></p>
               : <p className="mt-1 text-xs text-muted">已绑定 {r.evidence_ids.length} 条证据（检索运行 #{r.evidence_run_id}）</p>}

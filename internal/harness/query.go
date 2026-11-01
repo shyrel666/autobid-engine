@@ -43,6 +43,7 @@ type queryLoop struct {
 	registry      *tool.Registry
 	deferredNames map[string]bool
 	activeTools   []tool.CoreTool
+	deferredTools []tool.CoreTool
 	messages      []llm.Message
 	usage         llm.Usage
 	yield         func(Event) bool
@@ -70,9 +71,13 @@ func newQueryLoop(ctx context.Context, opts Options, messages []llm.Message, yie
 		reg.Register(t)
 	}
 	deferred := map[string]bool{}
+	var deferredNames []string
 	for _, t := range opts.DeferredTools {
 		if t == nil || visible[t.Name()] {
 			continue
+		}
+		if !deferred[t.Name()] {
+			deferredNames = append(deferredNames, t.Name())
 		}
 		deferred[t.Name()] = true
 		reg.Register(t)
@@ -82,12 +87,18 @@ func newQueryLoop(ctx context.Context, opts Options, messages []llm.Message, yie
 		t, _ := reg.Get(n)
 		active = append(active, t)
 	}
+	deferredTools := make([]tool.CoreTool, 0, len(deferredNames))
+	for _, n := range deferredNames {
+		t, _ := reg.Get(n)
+		deferredTools = append(deferredTools, t)
+	}
 	return &queryLoop{
 		ctx:           ctx,
 		opts:          opts,
 		registry:      reg,
 		deferredNames: deferred,
 		activeTools:   active,
+		deferredTools: deferredTools,
 		messages:      append([]llm.Message(nil), messages...),
 		yield:         yield,
 	}
@@ -242,6 +253,7 @@ func (l *queryLoop) beginSettlement(reason TerminalReason, toolCtx *context.Cont
 	}
 	// Patch ②：模型可见 Schema 与 Dispatch 闸门使用同一规则收缩。
 	l.activeTools = filterSettlementTools(l.activeTools, st)
+	l.deferredTools = filterSettlementTools(l.deferredTools, st)
 	return true
 }
 
@@ -268,13 +280,23 @@ func (l *queryLoop) snapshot() []llm.Message {
 }
 
 func (l *queryLoop) toolSpecs() []llm.ToolSpec {
-	specs := make([]llm.ToolSpec, 0, len(l.activeTools))
-	for _, t := range l.activeTools {
+	specs := make([]llm.ToolSpec, 0, len(l.activeTools)+len(l.deferredTools))
+	appendSpec := func(t tool.CoreTool) {
 		desc := t.Prompt()
 		if desc == "" {
 			desc = t.Description()
 		}
 		specs = append(specs, llm.ToolSpec{Name: t.Name(), Description: desc, InputSchema: t.InputSchema()})
+	}
+	for _, t := range l.activeTools {
+		appendSpec(t)
+	}
+	if l.opts.UnlockSet != nil {
+		for _, t := range l.deferredTools {
+			if l.opts.UnlockSet.IsUnlocked(t.Name()) {
+				appendSpec(t)
+			}
+		}
 	}
 	return specs
 }

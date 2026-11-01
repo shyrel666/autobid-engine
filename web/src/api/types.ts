@@ -178,9 +178,34 @@ export interface ParseMeta {
   tables: number
   styled_headings?: number
   encoding?: string
+  delimiter?: string
+  parser_version?: string
+  sheets?: SheetCoverage[]
   ocr?: string
   ocr_pages?: number[]
   warnings?: string[]
+}
+
+/** 表格类文档的工作表覆盖状态；无物理页码。 */
+export interface SheetCoverage {
+  name: string
+  hidden?: boolean
+  rows: number
+  cols: number
+  windows?: number
+  empty?: boolean
+  note?: string
+}
+
+/** 表格来源定位；kind=spreadsheet 时没有物理页码。 */
+export interface SourceLocator {
+  kind: 'page' | 'spreadsheet'
+  file_id?: number
+  sha256?: string
+  sheet?: string
+  range?: string
+  row?: number
+  column?: string
 }
 
 // 还原的结构化表格（ingest.Table）：cells 为合并区域左上角原始单元格，grid 为展开网格。
@@ -192,6 +217,11 @@ export interface TableCell {
   text: string
   header?: boolean
   page: number
+  raw?: string
+  display?: string
+  formula?: string
+  formula_cached?: boolean
+  hidden?: boolean
 }
 
 export interface ParsedTable {
@@ -205,6 +235,15 @@ export interface ParsedTable {
   cells: TableCell[]
   grid: string[][]
   markdown: string
+  sheet?: string
+  sheet_index?: number
+  sheet_hidden?: boolean
+  range?: string
+  merges?: string[]
+  hidden_rows?: number[]
+  hidden_cols?: string[]
+  page_is_physical?: boolean
+  source_locator?: SourceLocator
 }
 
 export interface BBox { page: number; x0: number; y0: number; x1: number; y1: number; confidence?: number }
@@ -214,6 +253,8 @@ export interface BBoxMeta {
   block_start?: number
   block_end?: number
   boxes?: BBox[]
+  page_is_physical?: boolean
+  source_locator?: SourceLocator
 }
 
 export interface TenderDocument {
@@ -234,6 +275,9 @@ export interface TenderDocument {
   /** 招标包内的文件角色；后发布的更正 / 澄清优先于原招标文件。 */
   doc_role: 'tender' | 'correction' | 'clarification' | 'qa' | 'attachment'
   published_at?: string
+  /** F1 原件登记；旧数据没有原件时为空。parse_revision 为重新解析修订的乐观锁版本。 */
+  original_file_id?: number
+  parse_revision?: number
 }
 
 export interface DocumentChunk {
@@ -253,6 +297,8 @@ export interface DocumentChunk {
   table_count: number
   tables?: ParsedTable[]
   bbox_meta?: BBoxMeta
+  /** 为 false 时 page_no/page_start 只是表格行窗口的兼容占位值，不得展示为页码。 */
+  page_is_physical: boolean
 }
 
 export interface DocumentWithChunks extends TenderDocument {
@@ -265,6 +311,7 @@ export interface UploadDocumentReq {
   title?: string
   text: string
   wake_planner?: boolean
+  bootstrap_goals?: boolean
   /** 招标包内的文件角色（空时按标题推断）与公告发布时间（2006-01-02），决定效力先后。 */
   doc_role?: string
   published_at?: string
@@ -284,6 +331,29 @@ export interface UploadDocumentResp {
     lot_asset_id?: number
   }
   planner_notified: boolean
+  goals_bootstrapped?: RFPGoalDecompResult
+}
+
+export interface ArchiveEntry {
+  path: string
+  size: number
+  compressed_size: number
+  ratio?: number
+  sha256: string
+  format: string
+  media_type?: string
+  file_id?: number
+}
+
+/** ZIP 招标包只登记原件和子文件，不自动变成正式文档。 */
+export interface UploadArchiveResp {
+  result: {
+    original_file_id: number
+    archive: { entries: ArchiveEntry[]; total_bytes: number; warnings?: string[] }
+    child_file_ids: number[]
+    note: string
+  }
+  planner_notified: boolean
 }
 
 // 多格式文件上传（multipart/form-data）。
@@ -292,6 +362,7 @@ export interface UploadDocumentFileReq {
   lot_no?: string
   title?: string
   wake_planner?: boolean
+  bootstrap_goals?: boolean
   /** 招标包内的文件角色（空时按标题推断）与公告发布时间（2006-01-02），决定效力先后。 */
   doc_role?: string
   published_at?: string
@@ -405,9 +476,16 @@ export interface KnowledgeSearchReq {
 
 export interface CompanyCredential {
   id: number
+  tenant_id?: string
   category: string
   code?: string
   title: string
+  subject_name?: string
+  subject_type?: string
+  certificate_no?: string
+  issuer?: string
+  issued_on?: string | null
+  scope?: string
   attributes?: Record<string, unknown> | null
   valid_until?: string | null
   created_at: string
@@ -418,6 +496,12 @@ export interface CredentialReq {
   category: string
   code?: string
   title: string
+  subject_name?: string
+  subject_type?: string
+  certificate_no?: string
+  issuer?: string
+  issued_on?: string | null
+  scope?: string
   attributes?: Record<string, unknown>
   valid_until?: string | null
 }
@@ -439,7 +523,92 @@ export interface LLMProfile {
   in_global_pool: boolean
   proxy?: string
   session_header_key?: string
+  is_default?: boolean
+  key_configured?: boolean
+  api_key_hint?: string
+  thinking_type?: string
+  streaming?: boolean
+  max_tokens_field?: string
+  rate_per_second?: number
+  rate_per_minute?: number
+  retry?: LLMRetryOverride
 }
+
+export interface LLMRetryRule { attempts: number; interval_ms: number }
+export interface LLMRetryOverride { connect: LLMRetryRule; empty: LLMRetryRule; stream: LLMRetryRule }
+export interface LLMRetryPolicy extends LLMRetryOverride { breaker: LLMRetryRule; intent: LLMRetryRule }
+export interface LLMSettings { pool_enabled: boolean; bind_fallback: boolean; record_bodies?: boolean; retry: LLMRetryPolicy }
+
+export interface LLMRecordSummary {
+  id: number
+  task_id: number
+  exploration_id: number
+  session_id: string
+  worker: string
+  profile_id: number
+  profile_name: string
+  method: string
+  url: string
+  status_code: number
+  latency_ms: number
+  truncated: boolean
+  error: string
+  created_at: string
+}
+
+export interface LLMRecordDetail extends LLMRecordSummary {
+  request_body: string
+  response_body: string
+}
+
+export interface LLMRecordsResp {
+  items: LLMRecordSummary[]
+  total: number
+}
+
+export type AgentRoleKey = 'goals' | 'planner' | 'worker' | 'watchdog' | 'judge'
+
+export interface CatalogAgent {
+  key: AgentRoleKey
+  name: string
+  description: string
+  bound_profile_id: number
+}
+
+export interface CatalogSkill {
+  Name: string
+  Description: string
+  Body?: string
+  Prompt?: string
+  Tools: string[]
+}
+
+export interface CatalogTool {
+  name: string
+  description: string
+  category: 'resident' | 'deferred' | 'system'
+  unlocked_by?: string
+  input_schema?: Record<string, unknown>
+}
+
+export interface SystemCatalog {
+  agents: CatalogAgent[]
+  skills: CatalogSkill[]
+  tools: CatalogTool[]
+}
+
+export interface TaskGraph {
+  nodes: GraphNode[] | null
+  edges: GraphEdge[] | null
+}
+export interface LLMPoolMember {
+  profile_id: number; name: string; model: string; active: boolean; priority: number; excluded: boolean
+  order: number; state: 'untested' | 'ok' | 'degraded' | 'tripped' | 'missing_key' | 'disabled'
+  fails: number; trips: number; cooldown_secs: number; last_error: string
+}
+export interface LLMPoolStatus { enabled: boolean; bind_fallback: boolean; chain: LLMPoolMember[] }
+export type LLMProfileInput = Partial<LLMProfile> & { api_key?: string; clear_api_key?: boolean; profile_id?: number }
+export interface LLMTestResult { ok: boolean; latency_ms?: number; model?: string; reply?: string; error?: string }
 
 export interface LLMHealth {
   profile_id: number
@@ -468,8 +637,11 @@ export interface ChainEntry {
 
 export interface LLMChain {
   chain: ChainEntry[] | null
-  active_profile_id: number
+  active_profile_id: number | null
   revision: number
+  failover_state?: string
+  failover_reason?: string
+  reopened_intents?: number
 }
 
 export interface InterceptPending {
@@ -507,6 +679,70 @@ export interface InterceptAudit {
   effective_action: string
   pending_id: number
   reason: string
+}
+
+export type InterceptAction = 'allow' | 'deny' | 'ask'
+
+export interface InterceptRule {
+  id: number
+  name: string
+  tool_filter: string
+  match_target: 'tool_name' | 'tool_input'
+  match_type: 'string' | 'regex'
+  pattern: string
+  action: InterceptAction
+  message: string
+  priority: number
+  enabled: boolean
+  timeout_enabled: boolean
+  timeout_seconds: number
+  timeout_action: 'allow' | 'deny'
+}
+
+export type InterceptRuleInput = Omit<InterceptRule, 'id'>
+
+export interface JudgeConfig {
+  enabled: boolean
+  profile_id: number
+  prompt: string
+  timeout_seconds: number
+  fail_action: InterceptAction
+  ask_timeout_seconds: number
+  ask_timeout_action: 'allow' | 'deny'
+}
+
+export interface JudgeDayUsage {
+  date: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface JudgeUsageStats {
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  daily: JudgeDayUsage[]
+}
+
+export interface InterceptConfigResp {
+  enabled_tools: string[]
+  default_tools: string[]
+  judge: JudgeConfig
+  default_prompt: string
+  judge_usage: JudgeUsageStats
+}
+
+export interface InterceptApprovalRow extends InterceptPending {
+  rule_name?: string
+  decision_source?: 'rule' | 'model' | string
+}
+
+export interface InterceptApprovalsResp {
+  items: InterceptApprovalRow[]
+  total: number
 }
 
 // db.Activity，经 SSE event: activity 推送。
@@ -617,15 +853,57 @@ export type RequirementCategory = 'scoring_item' | 'mandatory_clause' | 'non_sco
 export type VetoKind = '' | 'qualification' | 'conformity' | 'statutory'
 /** 否决项核对结论：待核对与不通过都阻断导出。 */
 export type VetoStatus = 'pending' | 'passed' | 'failed'
+/** D1：原子要求类型与主客观属性。 */
+export type RequirementAtomType = 'scoring_item' | 'scoring_point' | 'demand_item' | 'format_rule' | 'veto_item'
+export type EvalKind = '' | 'objective' | 'subjective' | 'mixed'
+export type BidDecision = 'pending' | 'bid' | 'no_bid'
+
+export interface ScoringTier {
+  seq: number
+  label: string
+  kind: 'tier' | 'point' | 'deduction' | 'formula'
+  eval_kind?: EvalKind
+  score_min?: number
+  score_max?: number
+  criteria: string
+  proof_hint?: string
+}
+
+export interface ProofRules {
+  required_docs?: string[]
+  contract_pages?: string[]
+  need_acceptance?: boolean
+  date_anchor?: string
+  years_window?: number
+  since_date?: string
+  valid_on_bid_deadline?: boolean
+  social_security_months?: number
+  bidder_only?: boolean
+  min_count?: number
+  raw_summary?: string
+}
+
+export interface BidEvaluation {
+  decision: BidDecision; decision_note: string; decided_by: string; decided_at?: string
+  veto_gate: 'passed' | 'pending' | 'blocked'
+  total_score: number; price_score: number; objective_score: number; subjective_score: number
+  evidence_backed_score: number; mandatory_count: number; mandatory_with_evidence: number
+  superseded_count: number; recommendation: 'bid' | 'caution' | 'no_bid'
+  gaps: string[]
+}
 
 export interface RequirementItem {
   id: number; tenant_id: string; task_id: number; code: string; category: RequirementCategory
-  title: string; description: string; is_mandatory: boolean; score_weight: number; score_group: ScoreGroup
+  atom_type: RequirementAtomType; parent_id?: number
+  title: string; description: string; is_mandatory: boolean; score_weight: number; score_min: number
+  score_group: ScoreGroup; eval_kind: EvalKind
+  scoring_tiers: ScoringTier[]; proof_rules?: ProofRules; linked_requirement_ids: number[]
+  superseded_by_id?: number; superseded_by_code?: string
   origin: 'extracted' | 'manual'
   source_asset_id?: number; source_doc_id?: number; source_chunk_id?: number; source_hash: string
-  source_loc: { doc_id?: number; chunk_id?: number; section_code?: string; section_title?: string; page_start?: number; page_end?: number; doc_title?: string; table?: number; row?: number; covered_by?: string[]; [k: string]: unknown }
+  source_loc: { doc_id?: number; chunk_id?: number; section_code?: string; section_title?: string; page_start?: number; page_end?: number; doc_title?: string; kind?: 'page' | 'spreadsheet'; file_id?: number; sha256?: string; sheet?: string; range?: string; table?: number; row?: number; covered_by?: string[]; [k: string]: unknown }
   evidence_run_id?: number; evidence_ids: number[]; evidence_gap: string
-  review_status: 'draft' | 'confirmed' | 'needs_revision'
+  review_status: 'draft' | 'confirmed' | 'needs_revision' | 'stale'
   created_by: string; updated_by: string; approved_by: string; created_at: string; updated_at: string
   mapped_section_codes: string[]
   veto_kind: VetoKind; veto_status: VetoStatus; veto_note: string; veto_checked_by: string; veto_checked_at?: string
@@ -634,22 +912,29 @@ export interface RequirementItem {
 }
 export interface RequirementManifest {
   tenant_id: string; task_id: number; epoch: number; status: 'draft' | 'confirmed' | 'stale'
+  source_epoch: number; extracted_source_epoch: number
   confirmed_at?: string; approved_by: string; updated_by: string; updated_at: string
   /** 投标截止时间；bid_deadline_source.origin 为 extracted（附原文位置）或 manual。 */
   bid_deadline?: string
   bid_deadline_source: { origin?: 'extracted' | 'manual'; text?: string; page?: number; doc_role?: string; by?: string; [k: string]: unknown }
   /** 本次投标分包，空数组表示全部分包。 */
   bid_lots: string[]
+  /** D1：Bid / No-Bid 决策与留痕。 */
+  bid_decision: BidDecision; bid_decision_note: string; bid_decided_by: string; bid_decided_at?: string
 }
 export interface VetoStats { total: number; passed: number; failed: number; pending: number }
 export interface RequirementStats {
   total: number; by_category: Record<string, number>; mandatory: number; confirmed: number; needs_revision: number
+  superseded: number
   with_evidence: number; evidence_gaps: number; no_evidence: number; outline_version: number; mapped: number; unmapped: string[]
   out_of_scope: number
   out_of_bid: number; veto: VetoStats; lots: string[]
 }
 /** PUT /api/tasks/{id}/requirements/bid-scope：未给出的字段不变；bid_deadline 为空串时清除人工值。 */
-export interface BidScopeInput { bid_lots?: string[]; bid_deadline?: string }
+export interface BidScopeInput {
+  bid_lots?: string[]; bid_deadline?: string
+  bid_decision?: BidDecision; bid_decision_note?: string
+}
 /** 评分项分组：technical 技术 / commercial 商务 / price 价格（由报价文件响应，不进入技术标大纲）；空串为未分类。 */
 export type ScoreGroup = '' | 'technical' | 'commercial' | 'price'
 export interface ScoringGroupSummary { group: string; score_group: ScoreGroup; declared: number; extracted: number; items: number }
@@ -658,15 +943,41 @@ export interface ScoringSummary {
   lot: string; items: number; total: number; technical: number; commercial: number; price: number; unclassified: number
   groups: ScoringGroupSummary[]; warnings: string[]
 }
-export interface RequirementsView { manifest: RequirementManifest; items: RequirementItem[]; stats: RequirementStats; scoring: ScoringSummary[] }
+export interface RequirementsView {
+  manifest: RequirementManifest; items: RequirementItem[]; stats: RequirementStats; scoring: ScoringSummary[]
+  bid_evaluation: BidEvaluation
+}
 export interface ExtractResult {
   created: number; updated: number; unchanged: number; skipped_manual: number; scanned_chunks: number; codes: string[]
   scoring_items: number; orphaned: number; orphan_codes: string[]
-  veto_items: number; bid_deadline?: string
+  veto_items: number; superseded: number; bid_deadline?: string
+}
+export interface IntentMandate {
+  allowed_section_ids?: number[]
+  allowed_requirement_ids?: number[]
+  target_words_min?: number
+  target_words_max?: number
+  max_tool_calls?: number
+  forbidden_tools?: string[]
+  require_writeback?: boolean
+}
+export interface RFPGoalBootstrap {
+  code: string; node_id: number; title: string; summary: string; anchors?: number[]; created: boolean
+}
+export interface RFPGoalDecompResult {
+  extract: ExtractResult; synced_assets: number; goals: RFPGoalBootstrap[]
+  outline_id?: number; outline_version?: number; outline_created: boolean
+}
+export interface ExtractRequirementsResp {
+  result: ExtractResult; requirements: RequirementsView
+  synced_assets?: number; goals?: RFPGoalBootstrap[]
+  outline_id?: number; outline_version?: number; outline_created?: boolean
 }
 export interface RequirementInput {
-  code?: string; category?: RequirementCategory; title?: string; description?: string; is_mandatory?: boolean; score_weight?: number
-  score_group?: ScoreGroup
+  code?: string; category?: RequirementCategory; atom_type?: RequirementAtomType; parent_id?: number
+  title?: string; description?: string; is_mandatory?: boolean; score_weight?: number; score_min?: number
+  score_group?: ScoreGroup; eval_kind?: EvalKind; scoring_tiers?: ScoringTier[]; proof_rules?: ProofRules
+  linked_requirement_ids?: number[]; superseded_by_id?: number
   source_chunk_id?: number; evidence_run_id?: number; evidence_ids?: number[]; evidence_gap?: string; review_status?: string
   veto_kind?: VetoKind; lot?: string
 }
@@ -841,3 +1152,82 @@ export interface ExportJob {
 }
 
 export interface CreateExportReq { formats: ExportFormat[]; template_id?: number; bidder?: string }
+
+// ---------------------------------------------------------------------------
+// D2：企业证据可采性、承诺台账与最小报价门禁
+// ---------------------------------------------------------------------------
+
+export interface CompanyPerformance {
+  id: number; tenant_id: string; code: string; project_name: string; buyer?: string; contract_no?: string
+  contract_date?: string; acceptance_date?: string; amount?: string; currency?: string
+  subject_name?: string; subject_type?: string; is_subsidiary: boolean; scope?: string
+  created_by?: string; updated_by?: string; created_at: string; updated_at: string
+}
+
+export interface EvidenceOriginal {
+  id: number; tenant_id: string; owner_domain: 'credential' | 'performance'; owner_id: number
+  document_kind: string; page_label: string; original_path: string; original_sha256: string
+  page_start: number; page_end: number; superseded_at?: string; created_at: string
+}
+
+export interface EvidenceBinding {
+  id: number; tenant_id: string; task_id: number; requirement_item_id: number
+  evidence_domain: 'credential' | 'performance'; evidence_id: number; created_at: string
+}
+
+export interface AdmissibilityItem {
+  id: number; run_id: number; binding_id: number; evidence_domain: 'credential' | 'performance'
+  evidence_id: number; verdict: 'admissible' | 'inadmissible' | 'manual'
+  checks: { rule: string; status: string; expected?: string; actual?: string; detail?: string }[]
+  reasons: { code: string; kind?: string; message: string }[]
+}
+
+export interface AdmissibilityRun {
+  id: number; task_id: number; requirement_item_id: number; requirement_code: string; requirement_title: string
+  rule_version: string; bid_deadline?: string; source_fingerprint: string
+  verdict: 'admissible' | 'inadmissible' | 'manual'; status: 'current' | 'stale' | 'superseded'
+  checks: { rule: string; status: string; expected?: string; actual?: string; detail?: string }[]
+  reasons: { code: string; kind?: string; message: string }[]
+  evaluated_by: string; evaluated_at: string; version: number; items?: AdmissibilityItem[]
+}
+
+export interface AdmissibilityDecision { item_id: number; verdict: 'admissible' | 'inadmissible'; reason: string }
+
+export interface Commitment {
+  id: number; task_id: number; code: string; requirement_item_id?: number; requirement_code?: string
+  metric: string; metric_label: string; unit: string; threshold_cmp: string
+  tender_threshold_raw: string; tender_threshold_value?: number; committed_raw: string; committed_value?: number
+  capability_limit?: number; capability_basis: string; owner: string; rationale: string
+  source_admissibility_item_ids: number[]; status: 'draft' | 'confirmed' | 'signed_off' | 'rejected'
+  requires_delivery_signoff: boolean; signed_off_by?: string; signed_off_at?: string; version: number
+  created_by?: string; updated_by?: string; created_at: string; updated_at: string
+}
+
+export interface CommitmentInput {
+  code: string; requirement_item_id?: number; metric: string; metric_label: string; unit: string; threshold_cmp: string
+  tender_threshold_raw: string; tender_threshold_value?: number; committed_raw: string; committed_value?: number
+  capability_limit?: number; capability_basis: string; owner: string; rationale: string; source_admissibility_item_ids?: number[]
+}
+
+export interface BidQuoteItem {
+  id: number; quote_id: number; line_no: number; code: string; name: string
+  unit_price: string; quantity: string; line_amount: string; requirement_item_id?: number; model?: string
+}
+
+export interface BidQuote {
+  id: number; task_id: number; lot: string; version: number; declared_total: string; ceiling?: string; currency: string
+  status: 'draft' | 'confirmed' | 'rejected'; note?: string; confirmed_by?: string; confirmed_at?: string
+  created_at: string; updated_at: string; items?: BidQuoteItem[]
+}
+
+export interface BidQuoteValidationCheck { rule: string; status: 'pass' | 'fail'; detail?: string }
+export interface BidQuoteValidation {
+  quote_id?: number; lot: string; version: number; declared_total: string
+  checks: BidQuoteValidationCheck[]; ok: boolean
+}
+
+export interface ObjectiveScoreRun {
+  id: number; task_id: number; requirement_item_id: number; requirement_code: string; requirement_title: string
+  admissibility_run_id?: number; rule_version: string; status: 'computed' | 'manual'
+  score: number; max_score: number; evidence_ids: number[]; gaps: string[]; computed_at: string
+}

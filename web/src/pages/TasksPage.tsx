@@ -3,8 +3,10 @@ import { ArrowRight, ChevronDown, ChevronRight, Ellipsis, Plus, RefreshCw, Searc
 import { api, errorText } from '../api/client'
 import type { CreateTaskReq, LLMProfile, Task } from '../api/types'
 import { PageFrame } from '../components/layout/AppShell'
-import { Button, Empty, ErrorBanner, Field, IconButton, Input, Menu, Modal, Select, Spinner, TextArea, cx, useConfirm, useToast } from '../components/ui'
+import { Button, Empty, ErrorBanner, Field, IconButton, Input, Menu, Modal, Select, Spinner, TextArea, useConfirm, useToast } from '../components/ui'
+import { TaskLLMProfileChain } from '../features/models/TaskLLMProfileChain'
 import { RunStatusBadge } from '../features/task-workspace/TaskHeader'
+import { TaskTemplateControls } from '../features/tasks/TaskTemplateControls'
 import { useAsync } from '../hooks/useAsync'
 import { fmtTime, taskStatusLabel } from '../lib/format'
 import { rememberProjects } from '../lib/projectCache'
@@ -92,6 +94,26 @@ function CreateTaskDialog({ open, onClose, onCreated }: { open: boolean; onClose
     <Modal open={open} wide title="新建投标项目" onClose={onClose} dirty={dirty}
       footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={submit}>创建项目</Button></>}>
       <div className="space-y-5">
+        <TaskTemplateControls
+          seed={{
+            description: form.description,
+            goal: form.goal,
+            goals: form.goals,
+            timeout_seconds: Number(form.timeout) || 0,
+            llm_profile_ids: chain,
+          }}
+          onApply={(tpl) => {
+            setForm((cur) => ({
+              ...cur,
+              description: tpl.description || cur.description,
+              goal: tpl.goal || cur.goal,
+              goals: tpl.goals || cur.goals,
+              timeout: String(tpl.timeout_seconds ?? 0),
+            }))
+            if (tpl.llm_profile_ids?.length) setChain(tpl.llm_profile_ids)
+            if (tpl.goals || tpl.timeout_seconds || tpl.llm_profile_ids?.length) setAdvanced(true)
+          }}
+        />
         <section className="grid gap-4 md:grid-cols-2">
           <h3 className="text-sm font-semibold md:col-span-2">基本信息</h3>
           <Field label="项目名称 *"><Input autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="如：市政设施运维服务项目" /></Field>
@@ -129,21 +151,16 @@ function CreateTaskDialog({ open, onClose, onCreated }: { open: boolean; onClose
                 <Input type="number" min={0} value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} />
               </Field>
               <div className="md:col-span-2">
-                <div className="mb-1.5 text-sm">模型配额链（按点选顺序；留空使用全局模型池）</div>
+                <div className="mb-1.5 text-sm">模型配额链（按顺序故障转移；留空使用全局模型池）</div>
                 {profiles.loading && !profiles.data ? <Spinner /> : profiles.error ? <ErrorBanner error={profiles.error} onRetry={profiles.reload} /> : enabledProfiles.length === 0 ? (
                   <p className="text-xs text-muted">暂无启用的模型配置，可在「模型配置」页添加。</p>
                 ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {enabledProfiles.map((p) => {
-                      const idx = chain.indexOf(p.id)
-                      return (
-                        <button key={p.id} type="button" aria-pressed={idx >= 0} onClick={() => setChain(idx >= 0 ? chain.filter((x) => x !== p.id) : [...chain, p.id])}
-                          className={cx('h-7 rounded-lg border px-2 text-xs', idx >= 0 ? 'border-fg bg-soft font-medium' : 'border-line hover:bg-soft')}>
-                          {idx >= 0 && <b className="mr-1">{idx + 1}.</b>}{p.name} <span className="text-muted">（{p.model}）</span>
-                        </button>
-                      )
-                    })}
-                  </div>
+                  <TaskLLMProfileChain
+                    profiles={enabledProfiles}
+                    value={chain}
+                    onValueChange={setChain}
+                    inputId="create-task-llm-profiles"
+                  />
                 )}
               </div>
             </div>
@@ -228,8 +245,8 @@ export default function TasksPage() {
               </thead>
               <tbody>
                 {rows.map((t) => (
-                  <tr key={t.id} className="border-b border-line-soft last:border-b-0 hover:bg-[#fafafa]">
-                    <td className="h-12 px-4"><span className="rounded bg-soft px-1.5 py-px text-xs text-muted tabular-nums">{t.id}</span></td>
+                  <tr key={t.id} className="border-b border-line-soft last:border-b-0 hover:bg-[#fafafa] [&>td]:py-2">
+                    <td className="h-12 px-4"><span className="rounded bg-soft px-1.5 py-px text-xs leading-5 text-muted tabular-nums">{t.id}</span></td>
                     <td className="truncate px-4 font-semibold" title={t.name}>
                       <a {...linkProps(taskUrl(t.id, 'overview'))} className="hover:underline">{t.name}</a>
                     </td>
@@ -239,7 +256,7 @@ export default function TasksPage() {
                     <td className="px-4">
                       <div className="flex items-center gap-2">
                         <a {...linkProps(taskUrl(t.id, 'overview'))}
-                          className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2 text-[13px] font-medium text-[#fafafa] hover:bg-primary-hover">
+                          className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-primary bg-primary px-2.5 text-[13px] text-[#fafafa] hover:bg-primary-hover">
                           <ArrowRight className="size-4" aria-hidden />进入</a>
                         <RowMenu task={t} onDone={() => void tasks.reload()} />
                       </div>

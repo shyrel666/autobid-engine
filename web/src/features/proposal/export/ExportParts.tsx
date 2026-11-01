@@ -180,6 +180,7 @@ function ChartModal({ taskID, sectionID, onClose, onDone }: { taskID: number; se
   }
   return (
     <Modal open wide title="生成章节图表" onClose={onClose}
+      dirty={title !== chartExamples[type].title || spec !== JSON.stringify(chartExamples[type].spec, null, 2)}
       footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={submit}>生成</Button></>}>
       <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-2">

@@ -123,6 +123,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 			return harness.ReasonModelError, set.Writes(), err
 		}
 		fresh = renderWorkerInput(overview)
+		// A work item may be paused before its first transcript is saved. In that
+		// case Resume uses fresh input, so retain the explicit continuation here too.
+		if message != "" {
+			fresh += "\n\n" + message
+		}
 	}
 	cont := workerContinueInput
 	if message != "" {
@@ -199,7 +204,7 @@ func assembleDeferred(tools []tool.CoreTool, def DeferredInfo) ([]tool.CoreTool,
 	}
 	block := ""
 	if len(def.Deferred) > 0 {
-		tools = append(tools, tool.NewSearchExtraTools(def.Deferred, unlock))
+		tools = append(tools, tool.NewSearchExtraTools(def.Deferred, unlock), tool.NewExecuteExtraTool(def.Deferred, unlock))
 		block = tool.RenderDeferredToolsBlock(global)
 	}
 	return tools, block, unlock, def

@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,6 +34,12 @@ func TestSkillProgressiveDisclosureLoop(t *testing.T) {
 	res := toolResults(term)
 	if len(res) != 4 {
 		t.Fatalf("results: %+v", res)
+	}
+	if slices.Contains(prov.toolNamesAt(0), "cert_query") || slices.Contains(prov.toolNamesAt(1), "cert_query") {
+		t.Fatalf("locked deferred tool schema must not be exposed before Skill unlock: %v / %v", prov.toolNamesAt(0), prov.toolNamesAt(1))
+	}
+	if !slices.Contains(prov.toolNamesAt(2), "cert_query") {
+		t.Fatalf("unlocked deferred tool schema must be exposed after Skill unlock: %v", prov.toolNamesAt(2))
 	}
 	if !res[0].IsError || !strings.Contains(res[0].Text, "locked") {
 		t.Fatalf("stage 0 must be denied: %+v", res[0])

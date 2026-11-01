@@ -27,9 +27,9 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 | # | 能力 | 已有（E） | 按专家标准的缺口 → 深化阶段 |
 | :--- | :--- | :--- | :--- |
 | 9 | 网页工作台 | `web/` 覆盖从导入到导出的全流程 | 审批只有"一个人点批准"，没有撰写与评审分离的色队评审 → D3 |
-| 1 | 解析 PDF / Word / 扫描件 | 自研 DOCX / PDF 解析、框线表格、跨页表、OCR 接口 | 一个任务能导入多个文件，但不识别它们在招标包中的角色（更正、澄清、答疑）和效力先后 → D1 |
-| 4 | 复用企业资料 | 知识库、混合检索、证据快照（检索质量未验收） | 资信库只有整理后的字段，没有原件和页码，无法判定证明材料是否"可采" → D2 |
-| 2 | 按评分标准生成目录 | 评分表结构化解析，16 个分包合计均为 100 分；按评分表顺序成节 | 一个评分项只是一条要求，没有档次和判据；资格性 / 符合性审查表被跳过，没有否决项门禁；不能选择投标分包 → D1 |
+| 1 | 解析 PDF / Word / 扫描件 | 自研 DOCX / PDF 解析、框线表格、跨页表、OCR 接口；文件角色、发布时间与后发更正/澄清逐条覆盖（2026-10-30，E） | 更正/澄清逐条覆盖尚未在保留集上做外部评测 → D1（V） |
+| 4 | 复用企业资料 | 知识库、混合检索、证据快照（检索质量未验收）；证书有效期默认按项目投标截止日（含澄清顺延）核验（2026-10-30，E） | 资信库只有整理后的字段，没有原件和页码，无法判定证明材料是否"可采" → D2 |
+| 2 | 按评分标准生成目录 | 评分表结构化解析，16 个分包合计均为 100 分；评分档次/得分点拆解、主客观属性、证明规则抽取、关联采购需求条目、否决项门禁、投标分包选择与 Bid/No-Bid 决策门禁（2026-10-30，E） | 档次判据尚未接入实质响应核验器（仍按字面覆盖判定） → D2、D4 |
 | 3 | 编写章节 | 依赖门禁、单次 LLM 调用（测试用替身 Writer） | "不得编造"只写在提示词里；没有故事板；"针对性"没有度量 → D3 |
 | 5 | 草稿、修订与确认 | 乐观锁、批准绑定版本、自动撤销、回滚 | 机制已够用；缺的是由谁批准、按什么标准批准 → D3、D5 |
 | 6 | 一致性与逐条响应 | 双层矩阵；实质响应以关键词二元组覆盖率（≥ 45%）加数值、否定等字面规则判定；技术标章节之间做数值比对 | 判据是字面覆盖，而不是得分点；只比较技术标内部，不比商务响应、报价、承诺函和人员表；没有承诺台账 → D2、D4 |
@@ -40,13 +40,25 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 ### 1.2 六条代码证据：为什么现在只算"辅助起草的工程骨架"
 
 1. **"不编造"只靠提示词。** [`server/proposal.go:50`](server/proposal.go#L50) 的 system prompt 和 [`bidtools/proposal.go:88`](bidtools/proposal.go#L88) 的 `sectionRules` 写着不得编造；而 `ParseSectionDraft`（[`bidtools/proposal.go:223`](bidtools/proposal.go#L223)）只检查章节级 `evidence_ids` 是否在上下文里出现过，不检查正文中任何一句关于投标人的断言。这正是 CLAUDE.md 第 3.1 条禁止的"靠 Prompt 充当产品特性"。
-2. **得分判据停留在字面层面。** [`compliance/verifier.go:301`](compliance/verifier.go#L301) 判定"实质响应"的核心门槛是 0.45 的关键词二元组覆盖率，其余是条款号、响应句式、数值门槛和否定表述等字面规则；评分项在 `requirement_items` 中只占一行（[`db/schema.sql:787`](db/schema.sql#L787) 只有四种类别），没有档次、判据，也不对应具体的采购需求条目。
-3. **没有否决项门禁。** 评分表解析器把资格性 / 符合性审查表识别为非评分表（[`db/scoring.go:107`](db/scoring.go#L107)），这些表不会被逐行转成门禁；要求清单只有四种类别，没有"通过 / 不通过"的否决项语义。任务没有投标截止时间字段，资信有效期的比较日期由调用方传入（[`db/documents.go:436`](db/documents.go#L436)）。
+2. **得分判据在核验环节仍停留在字面层面。** [`compliance/verifier.go:301`](compliance/verifier.go#L301) 判定"实质响应"的核心门槛仍是 0.45 的关键词二元组覆盖率，其余是条款号、响应句式、数值门槛和否定表述等字面规则；2026-10-30 的 D1 已在 `requirement_items` 中拆出 `scoring_tiers`、`proof_rules`、`eval_kind` 与 `linked_requirement_ids` 并注入大纲写作要点与章节上下文，但响应核验器尚未按档次判据逐点计分（待 D2/D4）。
+3. **否决项与投标决策已具备工程门禁（E 级）。** 2026-10-29 ~ 2026-10-30 的 D1 补齐了审查表逐行否决项、6 条法定否决项、核对门禁、投标截止时间（含澄清顺延）、资信有效期按投标截止日默认核验、后发更正/澄清对旧要求的逐条 `stale + superseded_by_id` 覆盖联动以及 Bid / No-Bid 决策留痕与导出阻断，但尚未经过保留集外部评测（V 级）。
 4. **一致性是事后正则比对。** 6A 从写好的正文里抽取数值再做比较，而且只在技术标章节之间比；商务响应、报价、承诺函、人员表、偏离表都不在比对范围内。
 5. **导出文件带统一指纹。** 默认模板的 `docProps/core.xml` 写死了 `<dc:creator>AutoBid Engine</dc:creator>`（[`export/default_template.go:39`](export/default_template.go#L39)），所有企业导出的文件作者字段都一样。导出也没有使用 `PAGEREF`，评委无法按页码找到得分点。
 6. **验证素材只有输入侧。** 现有验证只用了 10 份招标文件、合成样本和替身 Writer。"工期 90 天对 180 天 100% 检出"这类结论，只能说明规则能处理我们自己构造的样本。
 
 ### 1.3 基座的既有边界（仍然有效）
+
+- [x] E **ARTEX 推演与长文上下文增强**（2026-11-01）：按 [`docs/ARTEX架构技术标系统解析.md`](docs/ARTEX架构技术标系统解析.md) 与 [`docs/implementation_plan.md`](docs/implementation_plan.md) 落地三大运行期机制，验收见 [`docs/walkthrough.md`](docs/walkthrough.md)：① Goals 目标分解器（`db/rfp_goals.go` `BootstrapRFPGoals` 串联要求拆解、`assets` 同步、四大图谱 Goal 根节点 `G-VETO/G-DEVIATION/G-SCORING/G-OUTLINE` 幂等初始化与 `v1 draft` 大纲生成）；② Intent `Mandate` 硬件门禁、确定性 `Watchdog` 跑偏纠偏/熔断（`server/watchdog.go`）与 `AddHint` 锚点事件直通；③ 章节上下文 `UsableEvidence/SpilledEvidence` 分离、`read_chunk` 分页预算与 `prepareContext` 两级 `ToolResult` Spill + 工具回合边界压缩（消除连续工具调用 `413` 崩溃）。不改变 D0~D5 外部验证（V/P）状态。
+
+- [ ] E **模型设置复刻**（2026-10-29）：[`实施与验证记录`](docs/MODEL_SETTINGS_PLAN.md) 的 M1 存储/API、M2 调用层、M3 页面已完成；模型相关竞态测试与浏览器 5/5 通过。M4 全量收口尚受本机 LibreOffice 启动失败影响（2 个导出测试），暂不勾选；不改变 D0~D5 业务验收状态。
+
+- [ ] E **复杂文件处理与受限脚本执行**（2026-10-31 启动）：按 [`docs/file-processing/PLAN.md`](docs/file-processing/PLAN.md) 分阶段实施，跟踪进度见 [`docs/file-processing/PROGRESS.md`](docs/file-processing/PROGRESS.md)。
+  - [x] E F0 基线与样本（2026-10-31）：样本/人工期望/契约/限额/导入基线与容器探测完成；证据见 [`eval/file-processing/`](eval/file-processing/)。
+  - [x] E F1 原件与固定处理（2026-10-31）：原件留存与哈希校验、XLSX/CSV/TSV/ZIP 固定解析、表格行窗口与单元格溯源、`AdoptTenderParseRevision`、`source_epoch` 确认/导出门禁；验收见 [`F1_ACCEPTANCE.md`](docs/file-processing/F1_ACCEPTANCE.md)。
+  - [ ] F2 执行服务：启动关口未通过（无 Linux 容器后端、无真实复杂样本），未建 F2 表、未注册脚本工具。
+  - [ ] E F3a 固定解析闭环：ZIP 页面导入、修订预览/采用、事务与幂等、浏览器 3/3、独立旧库升级恢复演练已完成；全量验收尚有 2 个既有 LibreOffice 环境失败，暂不勾选。见 [`F3A_ACCEPTANCE.md`](docs/file-processing/F3A_ACCEPTANCE.md)。
+  - [ ] E F3a+ 固定处理增强（2026-10-31）：必需材料清单/导出事务门禁、流式原件上传、持久化固定解析队列与租约恢复/取消/重试、浏览器 4/4 与独立升级恢复演练已完成；完整 E 仍受 LibreOffice 真实导出失败阻塞。见 [`F3A_PLUS_ACCEPTANCE.md`](docs/file-processing/F3A_PLUS_ACCEPTANCE.md)。不依赖或启用 F2。
+  - [ ] F3b / F4：脚本业务闭环与外部验证未开始。本条目不改变 D0~D5 状态。
 
 - `ExplorationStore.Frontier` 不检查前置依赖；依赖门禁只存在于 Phase 5 的状态机中。
 - `Guard.Stop()` 恒不干预；完成度门禁只能在业务状态机和导出门禁中实现。
@@ -143,7 +155,7 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 
 ### D0 原始素材与评测协议（关键路径的起点）
 
-- **状态**：`[ ]`。不需要先写代码就可以开始。
+- **状态**：`[ ]` 进行中（2026-10-29）。公开部分已完成：[`eval/bid/corpus.json`](eval/bid/corpus.json) 登记了 10 个项目的来源、哈希与公开结果，[`eval/bid/PROTOCOL.md`](eval/bid/PROTOCOL.md) 草案待冻结。合作企业、标注员和外部评审组尚未到位。编写 D1 规则时开发方已查看过这 10 个项目，因此它们只能作开发集。
 - **交付**：
   1. 建立 `eval/bid/` 语料清单。每份材料记录来源（URL 或提供方）、获取日期、SHA-256、使用许可与保密级别、所属项目族。先为现有 10 个项目补齐更正 / 澄清公告和结果侧公告，再扩展到至少 30 个公开项目，覆盖多个品目和地区。
   2. 找到至少 1 家合作企业，取得至少 10 份历史投标（盖章终版，附得分 / 排序或结果）、对应的证明材料原件和交付侧事实。签订使用与保密协议，数据只在该企业的租户内使用。
@@ -156,6 +168,17 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 
 ### D1 招标解读：招标包效力、否决项与得分点（深化 Phase 5 的要求清单）
 
+- **状态**：`[x] E`（2026-10-30），`[ ] V`，`[ ] P`。
+  - **已完成（E 级）**：
+    - 文件角色与发布时间；
+    - 投标截止时间（后发布的文件优先，人工指定的值不被覆盖；企业资信检索与工具默认按任务投标截止日核验有效期）；
+    - 后发更正 / 澄清 / 答疑对原招标文件同一事项的逐条覆盖：旧要求自动标为 `review_status = 'stale'` 并记录 `superseded_by_id`，触发清单 `epoch` 递增、已批准大纲降为 `superseded`、关联已定稿章节撤销 `approved_rev_no`、响应矩阵与一致性结论置 `stale`，且派生新大纲时自动将旧要求 ID 替换为新要求 ID；
+    - 评分项细化拆解：结构化档次与得分点（`scoring_tiers`）、主客观属性（`eval_kind`: `objective` / `subjective` / `mixed`）、最低起评分（`score_min`）、证明材料硬规则（`proof_rules`：合同关键页、验收报告、社保月数、仅限投标人自身、截止日有效等）及关联采购需求条目（`linked_requirement_ids`），并注入默认大纲写作要点与章节写作上下文（`BuildSectionContext`）；
+    - 资格性 / 符合性审查表逐行生成否决项，另加 6 条法定否决项（[`db/veto.go`](db/veto.go)）；
+    - 否决项核对与导出门禁（通过和不通过都须写明依据）；
+    - 投标分包选择（`out_of_bid`）与 Bid / No-Bid 评估决策留痕（`bid_decision` / `bid_decision_note` / `bid_evaluation`，否决项不通过时禁止决策为 `bid`，决策为 `no_bid` 时阻断导出 `BlockNoBid`）。
+  - **开发集回归**：10 个 CCGP 真实招标项目的截止时间全部与招标公告一致，16 个分包评分合计均为 100 分，有审查标准表的 8 个项目逐行产出了否决项；更正公告逐条覆盖、大纲与章节失敏降级、派生大纲自动换绑与 Bid/No-Bid 门禁通过真实 PostgreSQL 集成测试。
+  - V 级验收要等 PROTOCOL 冻结并取得保留集。
 - **落点**：
   - `ingest/` 与 `tender_documents`：记录文件角色（招标文件 / 更正 / 澄清 / 答疑 / 附件）和发布时间。后发布的文件修改同一事项时覆盖前文，被覆盖的要求置为 `stale`，复用现有的 epoch 与触发器。
   - 任务增加投标截止时间（随澄清顺延）和投标分包选择；不投的分包，其要求不进入清单和大纲。
@@ -166,6 +189,9 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 
 ### D2 证据可采性与承诺台账（深化资信库、`retrieval_evidence` 与 6A）
 
+- **状态**：`[x] E`（2026-10-31），`[ ] V`，`[ ] P`。
+  - **已完成（E 级）**：企业证据主表补齐租户 / 主体 / 证书编号 / 签发日 / 范围 / 软删除；业绩独立表；`company_evidence_originals` 多原件与页码；`evidence/` 内容寻址原件存储；`requirement_evidence_bindings`、`admissibility_runs/items`（要求级聚合 + 逐证据明细，MinCount 只在运行级统计）、`manual` 人工复核生成新版本；`objective_score_runs` 只统计当前 admissible 证据；`commitment_ledger`（阈值 / 承诺值 / 能力上限 / 状态 / 版本 / 会签）与章节 `commitment_ids`；`bid_quotes/bid_quote_items` 定点十进制勾稽与限价；`section_revision_evidence` 只允许引用当前 admissible 明细；证据 / 原件 / 绑定 / 截止日 / 台账变化由触发器使运行 stale、章节降级、矩阵与一致性失效；`ExportReadiness` 新增 D2 阻断；D2-G01 ~ G14 写入拒绝与持久化 blocker 在真实 PostgreSQL 上全部通过。
+  - **E 级验收**：`D2_ACCEPTANCE_REPORT.md`（本地生成，不提交 Git）主链 S1~S16 ready=true、DOCX 导出与回读通过、两轮归一化一致、`go vet ./...` 与真实 PostgreSQL `go test -race ./...` 通过、M1 回归通过。V 级仍缺真实企业原件与人工金标准，P 级仍缺 RBAC / 预算 / 监控。
 - **落点**：
   - `company_credentials` 增加原件（文件 + 页码）、主体、日期和金额字段。历史标书中的承诺仍归知识库（域 D），不能作为当前能力的证明。
   - 可采性判定：对"证明规则 × 证据"给出可采 / 不可采 / 待人工三种结论，并附理由。日期、金额、数量和主体名称由代码判定；"同类项目"这类语义判断由人确认并记录理由。

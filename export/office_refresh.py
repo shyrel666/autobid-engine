@@ -5,6 +5,7 @@
 import json
 import sys
 import time
+import traceback
 
 import uno
 from com.sun.star.beans import PropertyValue
@@ -112,5 +113,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
+        traceback.print_exc(file=sys.stderr)
         print(json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)}))
         sys.exit(2)

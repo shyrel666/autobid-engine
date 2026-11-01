@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { CheckCircle2, Download, FileJson, FileText, RefreshCw, Star } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Download, FileJson, FileText, GitBranch, RefreshCw, Star } from 'lucide-react'
 import { api, errorText } from '../../api/client'
 import type { ReportAnchor, ReportFinding } from '../../api/types'
 import { Badge, Button, Card, Empty, ErrorBanner, Pre, Spinner, Stat, cx, severityTone, useToast } from '../../components/ui'
 import { useAsync } from '../../hooks/useAsync'
 import { assetTypeLabel, downloadText, findingCategoryLabel, fmtPct, fmtTime, pretty, severityLabel, severityOrder } from '../../lib/format'
+import { NodeDetailModal } from '../../features/execution/NodeParts'
 
 function refText(v: unknown): string {
   if (v == null) return ''
@@ -20,7 +21,7 @@ function AnchorChip({ a }: { a: ReportAnchor }) {
   )
 }
 
-function FindingCard({ f }: { f: ReportFinding }) {
+function FindingCard({ f, onInspectNode }: { f: ReportFinding; onInspectNode: (id: number) => void }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="rounded-md border border-slate-200 p-3">
@@ -30,24 +31,89 @@ function FindingCard({ f }: { f: ReportFinding }) {
         <span className="ml-auto text-xs text-slate-400">#{f.id} · 证据 {f.evidence.length}</span>
       </div>
       {f.summary && <p className="mt-1 text-sm text-slate-600">{f.summary}</p>}
+
+      {/* Compact visual lineage summary bar */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-md border border-slate-200/80 bg-slate-50/70 px-2.5 py-1.5 text-xs">
+        <GitBranch className="size-3.5 text-slate-400" />
+        <button type="button" onClick={() => onInspectNode(f.node_id)} className="rounded bg-red-50 px-1.5 py-0.5 font-mono text-red-700 hover:underline">
+          结论节点 #{f.node_id}
+        </button>
+        {f.evidence.length > 0 && (
+          <>
+            <ArrowRight className="size-3 text-slate-400" />
+            <span className="text-slate-500">事实依据 ({f.evidence.length})：</span>
+            {f.evidence.map((ev) => (
+              <button
+                key={ev.node_id}
+                type="button"
+                onClick={() => onInspectNode(ev.node_id)}
+                className="rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-emerald-700 hover:underline"
+              >
+                #{ev.node_id}
+              </button>
+            ))}
+          </>
+        )}
+        {(f.anchors?.length ?? 0) > 0 && (
+          <>
+            <ArrowRight className="size-3 text-slate-400" />
+            <span className="text-slate-500">锚定要素 ({f.anchors!.length})</span>
+          </>
+        )}
+        <button className="ml-auto text-xs text-blue-600 hover:underline" onClick={() => setOpen(!open)}>
+          {open ? '收起证据血缘' : '展开证据血缘'}
+        </button>
+      </div>
+
       {(f.anchors?.length ?? 0) > 0 && <div className="mt-2 flex flex-wrap gap-1">{f.anchors!.map((a) => <AnchorChip key={a.asset_id} a={a} />)}</div>}
-      <button className="mt-2 text-xs text-blue-600 hover:underline" onClick={() => setOpen(!open)}>{open ? '收起证据链' : '展开证据链'}</button>
       {open && (
-        <div className="mt-2 space-y-2 border-l-2 border-blue-200 pl-3">
-          {(f.source_refs ?? []).map((r, i) => <div key={i} className="text-xs text-slate-500">原文出处：<code className="break-all">{refText(r)}</code></div>)}
-          {f.evidence.length === 0 && <p className="text-xs text-slate-400">无事实证据</p>}
-          {f.evidence.map((ev) => (
-            <div key={ev.node_id} className="text-sm">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="font-mono text-xs text-slate-400">#{ev.node_id}</span>
-                <Badge>{ev.kind}</Badge><Badge tone={ev.state === 'confirmed' ? 'green' : 'slate'}>{ev.state}</Badge>
-                {ev.inherited && <Badge tone="amber">继承</Badge>}
-                <span className="text-slate-700">{ev.summary}</span>
+        <div className="mt-2.5 grid gap-2.5 rounded-lg border border-blue-100 bg-blue-50/20 p-3 md:grid-cols-3">
+          {/* Column 1: Finding */}
+          <div className="rounded border border-slate-200 bg-white p-2.5 text-xs">
+            <div className="mb-1 font-semibold text-slate-700">1. 审查结论 (Finding)</div>
+            <div className="text-slate-600">{f.title}</div>
+            {f.summary && <div className="mt-1 text-slate-500">{f.summary}</div>}
+          </div>
+          {/* Column 2: Confirmed Facts */}
+          <div className="rounded border border-slate-200 bg-white p-2.5 text-xs">
+            <div className="mb-1 font-semibold text-slate-700">2. 确认事实证据 (Facts)</div>
+            {f.evidence.length === 0 ? <p className="text-slate-400">无事实证据</p> : (
+              <div className="space-y-2">
+                {f.evidence.map((ev) => (
+                  <div key={ev.node_id} className="border-b border-slate-100 pb-1.5 last:border-b-0 last:pb-0">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <button type="button" onClick={() => onInspectNode(ev.node_id)} className="font-mono text-blue-600 hover:underline">#{ev.node_id}</button>
+                      <Badge tone={ev.state === 'confirmed' ? 'green' : 'slate'}>{ev.state}</Badge>
+                      {ev.inherited && <Badge tone="amber">继承</Badge>}
+                    </div>
+                    <div className="mt-0.5 text-slate-700">{ev.summary}</div>
+                    {ev.evidence && <div className="mt-0.5 text-slate-500">依据：{ev.evidence}</div>}
+                    {refText(ev.source_ref) && <div className="text-slate-400">出处：<code className="break-all">{refText(ev.source_ref)}</code></div>}
+                  </div>
+                ))}
               </div>
-              {ev.evidence && <p className="mt-0.5 text-xs text-slate-500">依据：{ev.evidence}</p>}
-              {refText(ev.source_ref) && <p className="text-xs text-slate-400">出处：<code className="break-all">{refText(ev.source_ref)}</code></p>}
-            </div>
-          ))}
+            )}
+          </div>
+          {/* Column 3: Anchored Tender Elements & Source Refs */}
+          <div className="rounded border border-slate-200 bg-white p-2.5 text-xs">
+            <div className="mb-1 font-semibold text-slate-700">3. 招标要素与原文出处</div>
+            {(f.anchors?.length ?? 0) === 0 && (f.source_refs?.length ?? 0) === 0 ? (
+              <p className="text-slate-400">无锚定要素或原文定位</p>
+            ) : (
+              <div className="space-y-1.5">
+                {(f.anchors ?? []).map((a) => (
+                  <div key={a.asset_id} className="flex flex-wrap items-center gap-1">
+                    <AnchorChip a={a} />
+                  </div>
+                ))}
+                {(f.source_refs ?? []).map((r, i) => (
+                  <div key={i} className="text-slate-500">
+                    原文出处：<code className="break-all">{refText(r)}</code>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -60,6 +126,7 @@ export default function ReportTab({ taskID }: { taskID: number }) {
   const [view, setView] = useState<'visual' | 'markdown'>('visual')
   const md = useAsync(() => api.reportMarkdown(taskID), [taskID], view === 'markdown')
   const [busy, setBusy] = useState('')
+  const [nodeID, setNodeID] = useState<number | null>(null)
 
   const dlJSON = () => {
     if (!rep.data) return
@@ -173,7 +240,7 @@ export default function ReportTab({ taskID }: { taskID: number }) {
                 {[...groups.entries()].sort(([a], [b]) => Object.keys(findingCategoryLabel).indexOf(a) - Object.keys(findingCategoryLabel).indexOf(b)).map(([cat, fs]) => (
                   <div key={cat}>
                     <h4 className="mb-2 text-sm font-semibold text-slate-700">{findingCategoryLabel[cat] ?? cat}（{fs.length}）</h4>
-                    <div className="space-y-2">{fs.map((f) => <FindingCard key={f.id} f={f} />)}</div>
+                    <div className="space-y-2">{fs.map((f) => <FindingCard key={f.id} f={f} onInspectNode={setNodeID} />)}</div>
                   </div>
                 ))}
               </div>
@@ -190,6 +257,7 @@ export default function ReportTab({ taskID }: { taskID: number }) {
           </Card>
         </>
       )}
+      <NodeDetailModal taskID={taskID} nodeID={nodeID} onClose={() => setNodeID(null)} onOpen={setNodeID} />
     </div>
   )
 }

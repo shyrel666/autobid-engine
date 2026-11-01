@@ -38,6 +38,14 @@ const cells = (l: string) => l.trim().replace(/^\|/, '').replace(/\|$/, '').spli
 
 export function Markdown({ source }: { source: string }) {
   const lines = source.replace(/\r\n?/g, '\n').split('\n')
+  // 标题按相对层级排版：正文中最浅的一级（章节正文通常以 ## 开头）用 20px，下一级 16px，其余 14px。
+  let top = 6
+  let fenced = false
+  for (const l of lines) {
+    if (/^```/.test(l)) fenced = !fenced
+    const m = fenced ? null : /^(#{1,6})\s+/.exec(l)
+    if (m) top = Math.min(top, m[1].length)
+  }
   const blocks: ReactNode[] = []
   let i = 0
   let n = 0
@@ -56,9 +64,9 @@ export function Markdown({ source }: { source: string }) {
     }
     const h = /^(#{1,6})\s+(.*)$/.exec(line)
     if (h) {
-      const level = h[1].length
-      const cls = ['mb-4 text-xl leading-7 font-semibold', 'mt-5 mb-2.5 text-base font-semibold', 'mt-4 mb-2 text-sm font-semibold', 'mt-3 mb-2 text-sm font-semibold', 'mt-3 mb-1 text-sm font-medium', 'mt-3 mb-1 text-sm font-medium'][level - 1]
-      const Tag = (`h${Math.min(level + 1, 6)}`) as 'h2'
+      const rel = h[1].length - top
+      const cls = ['mb-4 text-xl leading-7 font-bold', 'mt-5 mb-2.5 text-base leading-5 font-bold', 'mt-4 mb-2 text-sm font-semibold', 'mt-3 mb-2 text-sm font-semibold', 'mt-3 mb-1 text-sm font-medium', 'mt-3 mb-1 text-sm font-medium'][rel]
+      const Tag = (`h${Math.min(rel + 2, 6)}`) as 'h2'
       blocks.push(<Tag key={k} className={cls}>{inline(h[2], k)}</Tag>)
       i++
       continue
@@ -90,7 +98,19 @@ export function Markdown({ source }: { source: string }) {
       const ordered = ol.test(line)
       const re = ordered ? ol : ul
       const items: string[] = []
-      while (i < lines.length && re.test(lines[i])) items.push(lines[i++].replace(re, ''))
+      while (i < lines.length) {
+        if (re.test(lines[i])) {
+          items.push(lines[i++].replace(re, '').trim())
+        } else if (
+          items.length > 0 &&
+          lines[i].trim() &&
+          !/^(#{1,6}\s|```|>|(-{3,}|\*{3,})\s*$|\s*[-*+]\s|\s*\d+[.、)]\s)/.test(lines[i])
+        ) {
+          items[items.length - 1] += ' ' + lines[i++].trim()
+        } else {
+          break
+        }
+      }
       const L = ordered ? 'ol' : 'ul'
       blocks.push(<L key={k} className={`my-2 space-y-1 pl-6 leading-[26px] ${ordered ? 'list-decimal' : 'list-disc'}`}>{items.map((t, j) => <li key={j}>{inline(t, `${k}i${j}`)}</li>)}</L>)
       continue

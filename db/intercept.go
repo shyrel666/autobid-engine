@@ -19,19 +19,19 @@ const (
 )
 
 type InterceptRule struct {
-	ID             int64
-	Name           string
-	ToolFilter     string // 空表示全部启用拦截的工具
-	MatchTarget    string // tool_name / tool_input
-	MatchType      string // string / regex
-	Pattern        string
-	Action         string // allow / deny / ask
-	Message        string
-	Priority       int
-	Enabled        bool
-	TimeoutEnabled bool
-	TimeoutSeconds int
-	TimeoutAction  string
+	ID             int64  `json:"id"`
+	Name           string `json:"name"`
+	ToolFilter     string `json:"tool_filter"`  // 空表示全部启用拦截的工具
+	MatchTarget    string `json:"match_target"` // tool_name / tool_input
+	MatchType      string `json:"match_type"`   // string / regex
+	Pattern        string `json:"pattern"`
+	Action         string `json:"action"` // allow / deny / ask
+	Message        string `json:"message"`
+	Priority       int    `json:"priority"`
+	Enabled        bool   `json:"enabled"`
+	TimeoutEnabled bool   `json:"timeout_enabled"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	TimeoutAction  string `json:"timeout_action"`
 }
 
 // CreateInterceptRule 写入规则；MatchTarget/MatchType 为空时取列默认值。
@@ -45,6 +45,9 @@ func (d *DB) CreateInterceptRule(ctx context.Context, r InterceptRule) (int64, e
 	if r.TimeoutAction == "" {
 		r.TimeoutAction = "deny"
 	}
+	if r.TimeoutSeconds <= 0 {
+		r.TimeoutSeconds = 300
+	}
 	var id int64
 	err := d.QueryRowContext(ctx, `INSERT INTO intercept_rules
 		(name, tool_filter, match_target, match_type, pattern, action, message, priority, enabled,
@@ -55,14 +58,72 @@ func (d *DB) CreateInterceptRule(ctx context.Context, r InterceptRule) (int64, e
 	return id, err
 }
 
+// UpdateInterceptRule 更新已有拦截规则。
+func (d *DB) UpdateInterceptRule(ctx context.Context, r InterceptRule) error {
+	if r.MatchTarget == "" {
+		r.MatchTarget = "tool_name"
+	}
+	if r.MatchType == "" {
+		r.MatchType = "string"
+	}
+	if r.TimeoutAction == "" {
+		r.TimeoutAction = "deny"
+	}
+	if r.TimeoutSeconds <= 0 {
+		r.TimeoutSeconds = 300
+	}
+	res, err := d.ExecContext(ctx, `UPDATE intercept_rules SET
+		name = $2, tool_filter = $3, match_target = $4, match_type = $5, pattern = $6, action = $7,
+		message = $8, priority = $9, enabled = $10, timeout_enabled = $11, timeout_seconds = $12, timeout_action = $13
+		WHERE id = $1`,
+		r.ID, r.Name, r.ToolFilter, r.MatchTarget, r.MatchType, r.Pattern, r.Action,
+		r.Message, r.Priority, r.Enabled, r.TimeoutEnabled, r.TimeoutSeconds, r.TimeoutAction)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
 func (d *DB) SetInterceptRuleEnabled(ctx context.Context, id int64, enabled bool) error {
-	_, err := d.ExecContext(ctx, `UPDATE intercept_rules SET enabled = $2 WHERE id = $1`, id, enabled)
+	res, err := d.ExecContext(ctx, `UPDATE intercept_rules SET enabled = $2 WHERE id = $1`, id, enabled)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n == 0 {
+		return ErrNotFound
+	}
 	return err
 }
 
 func (d *DB) DeleteInterceptRule(ctx context.Context, id int64) error {
 	_, err := d.ExecContext(ctx, `DELETE FROM intercept_rules WHERE id = $1`, id)
 	return err
+}
+
+// ListInterceptRules 按 priority DESC, id ASC 返回全部拦截规则（含已停用规则，供控制面管理）。
+func (d *DB) ListInterceptRules(ctx context.Context) ([]InterceptRule, error) {
+	rows, err := d.QueryContext(ctx, `SELECT id, name, tool_filter, match_target, match_type, pattern, action, message,
+		priority, enabled, timeout_enabled, timeout_seconds, timeout_action
+		FROM intercept_rules ORDER BY priority DESC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]InterceptRule, 0)
+	for rows.Next() {
+		var r InterceptRule
+		if err := rows.Scan(&r.ID, &r.Name, &r.ToolFilter, &r.MatchTarget, &r.MatchType, &r.Pattern, &r.Action, &r.Message,
+			&r.Priority, &r.Enabled, &r.TimeoutEnabled, &r.TimeoutSeconds, &r.TimeoutAction); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // EnabledInterceptRules 按 priority DESC, id ASC 返回启用规则（§6.1）；正则编译由调用方在缓存阶段完成。
@@ -348,4 +409,135 @@ func (d *DB) InterceptAuditForTask(ctx context.Context, taskID int64) ([]Interce
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// InterceptApprovalRow 扩展 InterceptPendingRow，附带命中规则名称与决策来源（rule / model）。
+type InterceptApprovalRow struct {
+	InterceptPendingRow
+	RuleName       string `json:"rule_name"`
+	DecisionSource string `json:"decision_source"`
+}
+
+// InterceptApprovalFilter 控制审批记录查询条件。
+type InterceptApprovalFilter struct {
+	TaskID int64
+	Status string
+	Limit  int
+	Offset int
+}
+
+// ListInterceptApprovals 返回包含历史已决与当前待审批的多状态审批记录及总条数（pending 优先置顶，其次按 ID 倒序）。
+func (d *DB) ListInterceptApprovals(ctx context.Context, f InterceptApprovalFilter) ([]InterceptApprovalRow, int, error) {
+	if f.Limit <= 0 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	var total int
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM intercept_pending p
+		WHERE ($1::bigint = 0 OR p.task_id = $1)
+		  AND ($2::text = '' OR p.status = $2)`, f.TaskID, f.Status).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := d.QueryContext(ctx, `SELECT p.id, p.rule_id, p.task_id, p.intent_id, p.agent_name, p.tool_name,
+		p.tool_input, p.message, p.status, p.effective_action, p.reason, p.timeout_action, p.audit,
+		p.waiter, p.waiter_until, p.exec_outcome, p.exec_detail, p.created_at, p.decided_at,
+		COALESCE(r.name, '')
+		FROM intercept_pending p
+		LEFT JOIN intercept_rules r ON r.id = p.rule_id
+		WHERE ($1::bigint = 0 OR p.task_id = $1)
+		  AND ($2::text = '' OR p.status = $2)
+		ORDER BY CASE WHEN p.status = 'pending' THEN 0 ELSE 1 END, p.id DESC
+		LIMIT $3 OFFSET $4`, f.TaskID, f.Status, f.Limit, f.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := make([]InterceptApprovalRow, 0)
+	for rows.Next() {
+		var (
+			row                    InterceptApprovalRow
+			ruleID, taskID, intent sql.NullInt64
+			waiterUntil, decidedAt sql.NullTime
+			audit                  []byte
+		)
+		if err := rows.Scan(
+			&row.ID, &ruleID, &taskID, &intent, &row.AgentName, &row.ToolName, &row.ToolInput, &row.Message,
+			&row.Status, &row.EffectiveAction, &row.Reason, &row.TimeoutAction, &audit, &row.Waiter, &waiterUntil,
+			&row.ExecOutcome, &row.ExecDetail, &row.CreatedAt, &decidedAt, &row.RuleName,
+		); err != nil {
+			return nil, 0, err
+		}
+		row.RuleID, row.TaskID, row.IntentID = ruleID.Int64, taskID.Int64, intent.Int64
+		row.Audit = audit
+		row.WaiterUntil, row.DecidedAt = nullTimePtr(waiterUntil), nullTimePtr(decidedAt)
+		if row.RuleID > 0 {
+			row.DecisionSource = "rule"
+		} else {
+			var a struct {
+				Source string `json:"source"`
+			}
+			_ = json.Unmarshal(audit, &a)
+			if a.Source == "judge" {
+				row.DecisionSource = "model"
+			} else if a.Source != "" {
+				row.DecisionSource = a.Source
+			} else {
+				row.DecisionSource = "rule"
+			}
+		}
+		out = append(out, row)
+	}
+	return out, total, rows.Err()
+}
+
+// JudgeDayUsage 是单日裁判模型 Token 消耗汇总。
+type JudgeDayUsage struct {
+	Date         string `json:"date"`
+	Calls        int    `json:"calls"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+}
+
+// JudgeUsageStats 是裁判模型（worker='judge'）累计与按日 Token 消耗。
+type JudgeUsageStats struct {
+	Calls            int             `json:"calls"`
+	InputTokens      int64           `json:"input_tokens"`
+	OutputTokens     int64           `json:"output_tokens"`
+	CacheReadTokens  int64           `json:"cache_read_tokens"`
+	CacheWriteTokens int64           `json:"cache_write_tokens"`
+	Daily            []JudgeDayUsage `json:"daily"`
+}
+
+func (d *DB) JudgeUsage(ctx context.Context, days int) (JudgeUsageStats, error) {
+	if days <= 0 || days > 90 {
+		days = 30
+	}
+	var st JudgeUsageStats
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		COALESCE(SUM(cache_read),0), COALESCE(SUM(cache_write),0)
+		FROM llm_usage WHERE worker = 'judge'`).Scan(
+		&st.Calls, &st.InputTokens, &st.OutputTokens, &st.CacheReadTokens, &st.CacheWriteTokens,
+	); err != nil {
+		return st, err
+	}
+	rows, err := d.QueryContext(ctx, `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+		COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0)
+		FROM llm_usage
+		WHERE worker = 'judge' AND created_at >= now() - make_interval(days => $1)
+		GROUP BY day ORDER BY day ASC`, days)
+	if err != nil {
+		return st, err
+	}
+	defer rows.Close()
+	st.Daily = make([]JudgeDayUsage, 0)
+	for rows.Next() {
+		var day JudgeDayUsage
+		if err := rows.Scan(&day.Date, &day.Calls, &day.InputTokens, &day.OutputTokens); err != nil {
+			return st, err
+		}
+		st.Daily = append(st.Daily, day)
+	}
+	return st, rows.Err()
 }

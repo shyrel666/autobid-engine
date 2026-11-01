@@ -1,6 +1,9 @@
 package db
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // 推演节点类别（附录 B.7）。完整合法 kind/state 组合以 schema.sql 的 ck_node_state 为准。
 const (
@@ -113,4 +116,44 @@ func IsTerminalIntentState(state string) bool {
 		return true
 	}
 	return false
+}
+
+// IntentMandate 定义 Planner 赋予单个 Intent 的硬性执行边界（Mandate）。
+// 存储在 exploration_nodes.payload.mandate 中，由 Worker PreToolUse / Stop 门禁与 Watchdog 强制执行。
+type IntentMandate struct {
+	AllowedSectionIDs     []int64  `json:"allowed_section_ids,omitempty"`
+	AllowedRequirementIDs []int64  `json:"allowed_requirement_ids,omitempty"`
+	TargetWordsMin        int      `json:"target_words_min,omitempty"`
+	TargetWordsMax        int      `json:"target_words_max,omitempty"`
+	MaxToolCalls          int      `json:"max_tool_calls,omitempty"`
+	ForbiddenTools        []string `json:"forbidden_tools,omitempty"`
+	RequireWriteback      bool     `json:"require_writeback,omitempty"`
+}
+
+// IsEmpty 判断 Mandate 是否未设置任何约束条件。
+func (m *IntentMandate) IsEmpty() bool {
+	if m == nil {
+		return true
+	}
+	return len(m.AllowedSectionIDs) == 0 &&
+		len(m.AllowedRequirementIDs) == 0 &&
+		m.TargetWordsMin <= 0 &&
+		m.TargetWordsMax <= 0 &&
+		m.MaxToolCalls <= 0 &&
+		len(m.ForbiddenTools) == 0 &&
+		!m.RequireWriteback
+}
+
+// NodeMandate 从节点 payload 中解析可选的 IntentMandate。
+func NodeMandate(n *Node) *IntentMandate {
+	if n == nil || len(n.Payload) == 0 {
+		return nil
+	}
+	var wrap struct {
+		Mandate *IntentMandate `json:"mandate"`
+	}
+	if err := json.Unmarshal(n.Payload, &wrap); err != nil || wrap.Mandate.IsEmpty() {
+		return nil
+	}
+	return wrap.Mandate
 }

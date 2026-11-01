@@ -25,6 +25,7 @@ const (
 	BlockToolResult BlockType = "tool_result"
 	// BlockRedactedThinking 的加密内容放在 Text；须原样回传。
 	BlockRedactedThinking BlockType = "redacted_thinking"
+	BlockResponseItem     BlockType = "response_item" // opaque Responses reasoning item, Input is its original JSON
 )
 
 // ContentBlock 是消息内容块；按 Type 使用对应字段。
@@ -133,6 +134,7 @@ const (
 	SEMessageStop                           // Usage / StopReason
 	SESignatureDelta                        // Text 为当前 thinking 块签名片段
 	SERedactedThinking                      // Text 为整块加密 thinking
+	SEResponseItem                          // Text is an opaque Responses reasoning item
 )
 
 type StreamEvent struct {
@@ -155,7 +157,7 @@ func CommitsOutput(ev StreamEvent) bool {
 	switch ev.Type {
 	case SETextDelta, SEThinkingDelta:
 		return ev.Text != ""
-	case SEToolUseStart, SEToolUseDelta, SEToolUseEnd, SERedactedThinking:
+	case SEToolUseStart, SEToolUseDelta, SEToolUseEnd, SERedactedThinking, SEResponseItem:
 		return true
 	}
 	return false

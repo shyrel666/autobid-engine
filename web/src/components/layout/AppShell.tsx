@@ -1,6 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { BookOpen, CircleCheck, FileText, Library, PanelLeft, Search, Settings2, SlidersHorizontal } from 'lucide-react'
+import {
+  BookOpen, Bot, Brain, Bug, ClipboardList, FileText, LayoutDashboard,
+  Library, Network, PanelLeft, Radio, Search, Settings2, ShieldAlert, Sparkles, Target, Wrench,
+} from 'lucide-react'
 import { api, getToken, setToken } from '../../api/client'
 import type { LLMHealth } from '../../api/types'
 import { Button, Field, IconButton, Input, Modal, cx, useFocusTrap } from '../ui'
@@ -8,8 +11,9 @@ import { useInterval } from '../../hooks/useAsync'
 import { linkProps, navigate } from '../../lib/router'
 import { TASK_NAV, taskUrl } from '../../lib/routes'
 import { forgetProjects, loadedProjects } from '../../lib/projectCache'
+import { ThemeToggle } from '../../lib/theme'
 
-// 应用框架：272 / 64px 侧栏、#fafafa 画布上 8px 外边距的白色主容器、48px 全局顶栏（项目页由项目标题替代）。
+// 应用框架：240 / 64px 侧栏、#fafafa 画布上 8px 外边距的白色主容器、48px 全局顶栏（项目页由项目标题替代）。
 // 尺寸与断点按 FRONTEND_REFACTOR_PLAN.md 第 3.1、3.3 节：≥1200 默认展开，768–1199 默认折叠，<768 改为 288px 抽屉。
 
 const PREF_KEY = 'autobid.sidebar'
@@ -39,19 +43,29 @@ interface ShellCtx {
 const Ctx = createContext<ShellCtx>({ toggleSidebar: () => {}, collapsed: false, narrow: false, openToken: () => {}, pendingCount: 0, refreshPending: () => {} })
 export const useShell = () => useContext(Ctx)
 
-export interface NavKey { key: 'tasks' | 'intercepts' | 'credentials' | 'knowledge' | 'llm' | '' }
+export interface NavKey {
+  key:
+    | 'dashboard' | 'tasks' | 'findings' | 'assets' | 'llm-records' | 'credentials' | 'knowledge'
+    | 'llm' | 'agents' | 'skills' | 'tools' | 'intercept-rules' | 'intercepts' | ''
+}
 
 const globalNav = [
-  { group: '工作区', items: [
-    { key: 'tasks', to: '/tasks', label: '投标项目', icon: <FileText className="size-4" strokeWidth={1.7} /> },
-    { key: 'intercepts', to: '/intercepts', label: '工具调用审批', icon: <CircleCheck className="size-4" strokeWidth={1.7} /> },
-  ] },
-  { group: '企业资料', items: [
-    { key: 'credentials', to: '/credentials', label: '企业资信库', icon: <BookOpen className="size-4" strokeWidth={1.7} /> },
-    { key: 'knowledge', to: '/knowledge', label: '企业方案知识库', icon: <Library className="size-4" strokeWidth={1.7} /> },
+  { group: '功能', items: [
+    { key: 'dashboard', to: '/dashboard', label: '仪表盘', icon: <LayoutDashboard className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'tasks', to: '/tasks', label: '投标项目', icon: <Target className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'findings', to: '/findings', label: '审查发现', icon: <Bug className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'assets', to: '/assets', label: '招标要素', icon: <Network className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'llm-records', to: '/llm-records', label: 'LLM 录制', icon: <Radio className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'credentials', to: '/credentials', label: '企业资信库', icon: <BookOpen className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'knowledge', to: '/knowledge', label: '企业方案知识库', icon: <Library className="size-4 shrink-0" strokeWidth={1.7} /> },
   ] },
   { group: '系统', items: [
-    { key: 'llm', to: '/llm', label: '模型配置', icon: <SlidersHorizontal className="size-4" strokeWidth={1.7} /> },
+    { key: 'llm', to: '/llm', label: 'LLM', icon: <Brain className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'agents', to: '/agents', label: 'Agent', icon: <Bot className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'skills', to: '/skills', label: 'Skill', icon: <Sparkles className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'tools', to: '/tools', label: '工具', icon: <Wrench className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'intercept-rules', to: '/intercepts/rules', label: '拦截规则', icon: <ShieldAlert className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'intercepts', to: '/intercepts', label: '审批记录', icon: <ClipboardList className="size-4 shrink-0" strokeWidth={1.7} /> },
   ] },
 ] as const
 
@@ -59,14 +73,14 @@ function Sidebar({ active, collapsed, pendingCount, healthy, drawer, onNavigate 
   { active: NavKey['key']; collapsed: boolean; pendingCount: number; healthy: boolean | null; drawer?: boolean; onNavigate?: () => void }) {
   return (
     <aside data-region="sidebar" aria-label="全局导航"
-      className={cx('flex h-full shrink-0 flex-col overflow-y-auto p-4', collapsed ? 'w-16 gap-4' : 'gap-5', drawer ? 'w-full' : !collapsed && 'w-[272px]')}>
-      <div className={cx('flex h-10 items-center gap-3 text-lg font-semibold', collapsed ? 'px-0' : 'px-2')}>
+      className={cx('flex h-full shrink-0 flex-col overflow-y-auto p-3.5', collapsed ? 'w-16 gap-3' : 'gap-3.5', drawer ? 'w-full' : !collapsed && 'w-[240px]')}>
+      <div className={cx('flex h-9 items-center gap-3 text-base font-semibold tracking-tight', collapsed ? 'justify-center px-0' : 'px-2')}>
         <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-link text-white" aria-hidden><FileText className="size-4" strokeWidth={1.7} /></span>
         {!collapsed && <span>AutoBid</span>}
       </div>
       {globalNav.map((g) => (
         <nav key={g.group} aria-label={g.group}>
-          {!collapsed && <div className="flex h-8 items-center px-2 text-xs text-muted">{g.group}</div>}
+          {!collapsed && <div className="flex h-6 items-center px-2 text-xs font-medium text-muted">{g.group}</div>}
           {g.items.map((it) => {
             const on = active === it.key
             const count = it.key === 'intercepts' && pendingCount > 0 ? pendingCount : 0
@@ -74,24 +88,29 @@ function Sidebar({ active, collapsed, pendingCount, healthy, drawer, onNavigate 
               <a key={it.key} {...linkProps(it.to)} onClickCapture={onNavigate} aria-current={on ? 'page' : undefined}
                 aria-label={collapsed ? `${it.label}${count ? `（${count} 项待审批）` : ''}` : undefined} title={collapsed ? it.label : undefined}
                 data-region="nav-item"
-                className={cx('relative mb-1 flex h-8 items-center gap-2 rounded-lg text-sm hover:bg-soft', collapsed ? 'justify-center px-2' : 'px-2',
+                className={cx('relative mb-0.5 flex h-8 items-center gap-2.5 rounded-lg text-sm transition-colors hover:bg-soft', collapsed ? 'justify-center px-2' : 'px-2.5',
                   on ? 'bg-soft font-semibold text-fg' : 'text-fg')}>
                 {it.icon}
                 {!collapsed && <span className="min-w-0 flex-1 truncate">{it.label}</span>}
                 {count > 0 && (collapsed
                   ? <span className="absolute top-1 right-1 size-2 rounded-full bg-warn" aria-hidden />
-                  : <span className="ml-auto rounded-[10px] bg-warn px-1.5 text-[11px] leading-[18px] text-white">{count}</span>)}
+                  : <span className="ml-auto flex h-4.5 min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1.5 text-[11px] leading-none font-semibold text-white">{count > 99 ? '99+' : count}</span>)}
               </a>
             )
           })}
         </nav>
       ))}
-      <div className="mt-auto flex items-center gap-2 p-2" title={healthy === null ? '检测中' : healthy ? '服务已连接' : '服务不可用'}>
-        <span className={cx('size-1.5 shrink-0 rounded-full', healthy === null ? 'bg-slate-400' : healthy ? 'bg-ok' : 'bg-danger')} aria-hidden />
+      <div className={cx('mt-auto flex items-center gap-2.5 rounded-lg p-2', collapsed && 'justify-center')} title={healthy === null ? '检测中' : healthy ? '服务已连接' : '服务不可用'}>
+        <span className="relative grid size-7 shrink-0 place-items-center rounded-full bg-soft text-xs font-semibold text-fg">
+          A
+          <span className={cx('absolute right-0 bottom-0 size-2 rounded-full ring-2 ring-canvas', healthy === null ? 'bg-slate-400' : healthy ? 'bg-ok' : 'bg-danger')} aria-hidden />
+        </span>
         {!collapsed ? (
-          <div>
-            <div className={healthy === false ? 'text-danger' : ''}>{healthy === null ? '检测服务中' : healthy ? '服务已连接' : '服务不可用'}</div>
-            <div className="text-xs text-muted">辅助起草与检查</div>
+          <div className="min-w-0 flex-1">
+            <div className={cx('truncate text-xs font-medium', healthy === false ? 'text-danger' : 'text-fg')}>
+              {healthy === null ? '检测服务中' : healthy ? 'AutoBid · 已连接' : '服务不可用'}
+            </div>
+            <div className="truncate text-[11px] text-muted">辅助起草与检查</div>
           </div>
         ) : <span className="sr-only">{healthy ? '服务已连接' : '服务不可用'}</span>}
       </div>
@@ -173,7 +192,7 @@ export function GlobalHeader({ status }: { status?: ReactNode }) {
   const shell = useShell()
   return (
     <header data-region="global-header" className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line px-4 md:px-6">
-      <div className="flex min-w-0 items-center">
+      <div className="flex min-w-0 items-center gap-2">
         <IconButton label={shell.narrow ? '打开导航' : shell.collapsed ? '展开侧栏' : '折叠侧栏'} onClick={shell.toggleSidebar}>
           <PanelLeft className="size-4" strokeWidth={1.7} />
         </IconButton>
@@ -182,11 +201,12 @@ export function GlobalHeader({ status }: { status?: ReactNode }) {
           className="flex min-w-0 items-center gap-2 text-muted hover:text-fg">
           <Search className="size-4 shrink-0" strokeWidth={1.7} aria-hidden />
           <span className="truncate">查找页面或项目</span>
-          <kbd className="hidden rounded border border-line bg-soft px-1.5 text-[11px] leading-[18px] sm:inline">Ctrl K</kbd>
+          <kbd className="hidden rounded border border-line bg-soft px-[5px] font-sans text-[11px] leading-[18px] sm:inline">Ctrl K</kbd>
         </button>
       </div>
       <div className="flex items-center gap-2">
         <span className="hidden text-xs text-muted md:inline">{status}</span>
+        <ThemeToggle />
         <IconButton label="令牌设置" onClick={shell.openToken}><Settings2 className="size-4" strokeWidth={1.7} /></IconButton>
       </div>
     </header>

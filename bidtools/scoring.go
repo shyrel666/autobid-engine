@@ -168,17 +168,17 @@ func simulateScoring(items []*db.Asset, facts map[int64][]*db.Node, assumptions 
 func (k *Kit) simulateScoringTool() tool.CoreTool {
 	return readTool(tool.Spec{
 		Name: ToolSimulateScoring,
-		Description: "Simulate the bid evaluation score from this task's scoring_item elements and the confirmed facts anchored to them. " +
-			"Returns per-item expected score, totals, ratio to full marks, per-category subtotals, the top losing items and items without evidence. " +
-			"A fact contributes its payload expected_score/score; assumptions override it.",
+		Description: "基于当前项目已提取的评分项要素（scoring_item）及锚定其上的已确认事实节点（fact），模拟测算技术与商务评标得分。" +
+			"返回逐项预期得分、总分、得分率、按类别小计、前五大失分项（top_losses）及尚无证据支撑的评分项（unevidenced_assets）。" +
+			"已确认事实节点提供默认 expected_score/score，也可通过 assumptions 覆盖测算。",
 		Schema: obj(map[string]any{
-			"lot_no": str("only this lot (items shared by all lots are always included); omit for all"),
-			"assumptions": map[string]any{"type": "array", "description": "expected scores you have determined",
+			"lot_no": str("仅模拟指定标段编号的评分项（所有标段共用的评分项始终包含；不填则测算全部）"),
+			"assumptions": map[string]any{"type": "array", "description": "人工或推演确定的评分项预期得分覆盖列表",
 				"items": obj(map[string]any{
-					"asset_id":       integer("scoring_item asset id"),
-					"expected_score": number("expected score for this item"),
-					"fact_ids":       map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
-					"note":           str("basis of the estimate"),
+					"asset_id":       integer("评分项要素 ID（scoring_item asset_id）"),
+					"expected_score": number("该评分项的预期得分（自动限制在 0 到满分之间）"),
+					"fact_ids":       map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "支撑该得分的已确认事实节点 ID 列表"},
+					"note":           str("得分测算依据说明"),
 				}, "asset_id", "expected_score")},
 		}),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {

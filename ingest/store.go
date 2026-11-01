@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/autobid/autobid-engine/db"
 )
@@ -16,15 +17,27 @@ import (
 var ErrInvalidInput = errors.New("ingest: invalid input")
 
 // Input 是一次招标文档入库：Text 为纯文本（JSON 上传），File 为原始文件（multipart 上传），二者取其一，File 优先。
+// DocRole 为空时按标题 / 文件名推断（更正、澄清、答疑，其余为招标文件）；PublishedAt 为公告发布时间，决定效力先后。
 type Input struct {
-	TenderNo  string
-	LotNo     string
-	Title     string
-	Text      string
-	File      *File
-	OCR       OCRProvider
-	TenantID  string
-	CreatedBy string
+	TenderNo    string
+	LotNo       string
+	Title       string
+	Text        string
+	File        *File
+	OCR         OCRProvider
+	TenantID    string
+	CreatedBy   string
+	DocRole     string
+	PublishedAt *time.Time
+	// OriginalFileID 是 task_file_objects 中留存的原件/文本快照；旧调用方可留空。
+	OriginalFileID *int64
+}
+
+func displayNameFromInput(in Input) string {
+	if in.File != nil && in.File.Name != "" {
+		return in.File.Name
+	}
+	return "uploaded document"
 }
 
 type Result struct {
@@ -72,6 +85,13 @@ func sectionJSON(s Section, format string) (tables, bbox json.RawMessage) {
 	if len(s.Boxes) > 0 {
 		meta["boxes"] = s.Boxes
 	}
+	// 表格类文档没有物理页码：显式标记，禁止下游把它当 PDF 页码核验。
+	if (format == FormatXLSX || format == FormatCSV || format == FormatTSV) && len(s.Tables) > 0 {
+		meta["page_is_physical"] = false
+		if s.Tables[0] != nil && s.Tables[0].SourceLocator != nil {
+			meta["source_locator"] = s.Tables[0].SourceLocator
+		}
+	}
 	bbox, _ = json.Marshal(meta)
 	return tables, bbox
 }
@@ -79,16 +99,44 @@ func sectionJSON(s Section, format string) (tables, bbox json.RawMessage) {
 // Ingest 解析、切分并写入一份招标文档，幂等创建根 tender（LotNo 非空时再建 lot 与 tender -contains-> lot 边）。
 // 实体经任务 AssetStore 写入，因此会归集 task_ids 并自动补任务范围。相同原文（文件为相同字节）重复上传不会重复切分。
 func Ingest(ctx context.Context, pg *db.DB, as *db.AssetStore, in Input) (*Result, error) {
+	if as == nil || as.TaskID() <= 0 {
+		return nil, errors.New("ingest: a task-bound asset store is required")
+	}
+	p, err := PrepareTender(ctx, as.TaskID(), in)
+	if err != nil {
+		return nil, err
+	}
+	var res *Result
+	err = pg.Transaction(ctx, func(tx *db.DB) error {
+		var err error
+		res, err = PersistTender(ctx, tx, p)
+		return err
+	})
+	return res, err
+}
+
+// PreparedTender is a server-produced parse candidate. It is never accepted
+// from the browser. Parsing happens before the business transaction starts.
+type PreparedTender struct {
+	Document db.TenderDocument  `json:"document"`
+	Chunks   []db.DocumentChunk `json:"chunks"`
+	Summary  Result             `json:"summary"`
+}
+
+func PrepareTender(ctx context.Context, taskID int64, in Input) (*PreparedTender, error) {
 	in.TenderNo, in.LotNo = strings.TrimSpace(in.TenderNo), strings.TrimSpace(in.LotNo)
 	if in.TenderNo == "" {
 		return nil, fmt.Errorf("%w: tender_no is required", ErrInvalidInput)
 	}
-	if as == nil || as.TaskID() <= 0 {
+	if taskID <= 0 {
 		return nil, errors.New("ingest: a task-bound asset store is required")
 	}
 	parsed, sections, err := parsedInput(ctx, in.Text, in.File, in.OCR)
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(parsed.Text) == "" || len(sections) == 0 {
+		return nil, fmt.Errorf("%w: %s 没有可提取的非空单元格/段落", ErrNoText, displayNameFromInput(in))
 	}
 	if in.Title == "" {
 		in.Title = parsed.Title
@@ -96,24 +144,7 @@ func Ingest(ctx context.Context, pg *db.DB, as *db.AssetStore, in Input) (*Resul
 	if in.Title == "" && in.File != nil {
 		in.Title = in.File.Name
 	}
-	docRef := map[string]any{"doc_title": in.Title}
-	if in.File != nil {
-		docRef["file_name"] = in.File.Name
-	}
 	res := &Result{Format: parsed.Format, PageCount: parsed.PageCount, Tables: len(parsed.Tables), Warnings: parsed.Meta.Warnings}
-	res.TenderAssetID, _, err = as.UpsertAsset(ctx, &db.Asset{Type: db.AssetTender, TenderNo: in.TenderNo, Title: in.Title, SourceRef: mustJSON(docRef)}, 0)
-	if err != nil {
-		return nil, fmt.Errorf("ingest: upsert tender: %w", err)
-	}
-	if in.LotNo != "" {
-		res.LotAssetID, _, err = as.UpsertAsset(ctx, &db.Asset{Type: db.AssetLot, TenderNo: in.TenderNo, LotNo: in.LotNo, Title: in.Title, SourceRef: mustJSON(docRef)}, 0)
-		if err != nil {
-			return nil, fmt.Errorf("ingest: upsert lot: %w", err)
-		}
-		if _, err := as.UpsertEntityEdge(ctx, res.TenderAssetID, db.EntityRelContains, res.LotAssetID, as.TaskID(), nil, 1, nil); err != nil {
-			return nil, fmt.Errorf("ingest: link lot: %w", err)
-		}
-	}
 
 	chunks := make([]db.DocumentChunk, 0, len(sections))
 	for i, s := range sections {
@@ -125,12 +156,46 @@ func Ingest(ctx context.Context, pg *db.DB, as *db.AssetStore, in Input) (*Resul
 			res.Mandatory++
 		}
 	}
-	doc := &db.TenderDocument{TenantID: in.TenantID, TaskID: as.TaskID(), TenderNo: in.TenderNo, LotNo: in.LotNo, Title: in.Title,
-		RawText: parsed.Text, CreatedBy: in.CreatedBy}
+	doc := &db.TenderDocument{TenantID: in.TenantID, TaskID: taskID, TenderNo: in.TenderNo, LotNo: in.LotNo, Title: in.Title,
+		RawText: parsed.Text, CreatedBy: in.CreatedBy, DocRole: in.DocRole, PublishedAt: in.PublishedAt, OriginalFileID: in.OriginalFileID}
+	if doc.DocRole != "" && !db.ValidDocRole(doc.DocRole) {
+		return nil, fmt.Errorf("%w: invalid doc_role %q", ErrInvalidInput, doc.DocRole)
+	}
 	if in.File != nil {
 		meta, _ := json.Marshal(parsed.Meta)
 		doc.FileName, doc.MimeType, doc.PageCount, doc.ParseMeta = in.File.Name, parsed.MIME, parsed.PageCount, meta
 		doc.ContentHash = db.ContentHash(string(in.File.Data))
+	}
+	if doc.ContentHash == "" {
+		doc.ContentHash = db.ContentHash(doc.RawText)
+	}
+	return &PreparedTender{Document: *doc, Chunks: chunks, Summary: *res}, nil
+}
+
+// PersistTender must be called with a Transaction-scoped DB when composing
+// import records, provenance, assets, document and chunks into a single commit.
+func PersistTender(ctx context.Context, pg *db.DB, p *PreparedTender) (*Result, error) {
+	doc, chunks := &p.Document, p.Chunks
+	res := p.Summary
+	as := db.NewAssetStore(pg, doc.TaskID)
+	ref := map[string]any{"doc_title": doc.Title}
+	if doc.FileName != "" {
+		ref["file_name"] = doc.FileName
+	}
+	docRef := mustJSON(ref)
+	var err error
+	res.TenderAssetID, _, err = as.UpsertAsset(ctx, &db.Asset{Type: db.AssetTender, TenderNo: doc.TenderNo, Title: doc.Title, SourceRef: docRef}, 0)
+	if err != nil {
+		return nil, err
+	}
+	if doc.LotNo != "" {
+		res.LotAssetID, _, err = as.UpsertAsset(ctx, &db.Asset{Type: db.AssetLot, TenderNo: doc.TenderNo, LotNo: doc.LotNo, Title: doc.Title, SourceRef: docRef}, 0)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = as.UpsertEntityEdge(ctx, res.TenderAssetID, db.EntityRelContains, res.LotAssetID, doc.TaskID, nil, 1, nil); err != nil {
+			return nil, err
+		}
 	}
 	docID, created, err := pg.InsertTenderDocument(ctx, doc, chunks)
 	if err != nil {
@@ -154,7 +219,7 @@ func Ingest(ctx context.Context, pg *db.DB, as *db.AssetStore, in Input) (*Resul
 			res.Tables += c.TableCount
 		}
 	}
-	return res, nil
+	return &res, nil
 }
 
 // ---------------------------------------------------------------------------

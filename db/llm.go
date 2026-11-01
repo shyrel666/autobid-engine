@@ -3,26 +3,35 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 )
 
 type LLMProfile struct {
-	ID              int64  `json:"id"`
-	Name            string `json:"name"`
-	Format          string `json:"format"`
-	BaseURL         string `json:"base_url,omitempty"`
-	APIKeyEnv       string `json:"api_key_env"`
-	Model           string `json:"model"`
-	MaxTokens       int    `json:"max_tokens,omitempty"`
-	Effort          string `json:"effort,omitempty"`
-	ThinkingDisplay string `json:"thinking_display,omitempty"`
-	Priority        int    `json:"priority"`
-	Rank            int    `json:"rank"`
-	WindowTokens    int    `json:"window_tokens,omitempty"`
-	Enabled         bool   `json:"enabled"`
-	InGlobalPool    bool   `json:"in_global_pool"`
+	LLMOptions
+	IsDefault        bool   `json:"is_default"`
+	APIKey           string `json:"-"` // resolved in memory only
+	APIKeyCiphertext string `json:"-"`
+	APIKeyHint       string `json:"api_key_hint,omitempty"`
+	KeyConfigured    bool   `json:"key_configured"`
+	CreatedBy        string `json:"-"`
+	UpdatedBy        string `json:"-"`
+	ID               int64  `json:"id"`
+	Name             string `json:"name"`
+	Format           string `json:"format"`
+	BaseURL          string `json:"base_url,omitempty"`
+	APIKeyEnv        string `json:"api_key_env"`
+	Model            string `json:"model"`
+	MaxTokens        int    `json:"max_tokens,omitempty"`
+	Effort           string `json:"effort,omitempty"`
+	ThinkingDisplay  string `json:"thinking_display,omitempty"`
+	Priority         int    `json:"priority"`
+	Rank             int    `json:"rank"`
+	WindowTokens     int    `json:"window_tokens,omitempty"`
+	Enabled          bool   `json:"enabled"`
+	InGlobalPool     bool   `json:"in_global_pool"`
 	// Proxy 为出站 HTTP(S) 代理 URL，空表示沿用环境代理设置。
 	Proxy string `json:"proxy,omitempty"`
 	// SessionHeaderKey 非空时，每个请求携带该请求头，值为 Agent 会话 ID（网关会话亲和/缓存命中）。
@@ -30,42 +39,51 @@ type LLMProfile struct {
 }
 
 const llmProfileCols = `id, name, format, base_url, api_key_env, model, max_tokens, effort, thinking_display,
-	priority, rank, window_tokens, enabled, in_global_pool, proxy, session_header_key`
+	priority, rank, window_tokens, enabled, in_global_pool, proxy, session_header_key,
+	is_default, api_key_ciphertext, api_key_hint, options, created_by, updated_by`
 
 func scanLLMProfile(r rowScanner) (*LLMProfile, error) {
 	var p LLMProfile
+	var options []byte
 	err := r.Scan(&p.ID, &p.Name, &p.Format, &p.BaseURL, &p.APIKeyEnv, &p.Model, &p.MaxTokens, &p.Effort,
-		&p.ThinkingDisplay, &p.Priority, &p.Rank, &p.WindowTokens, &p.Enabled, &p.InGlobalPool, &p.Proxy, &p.SessionHeaderKey)
+		&p.ThinkingDisplay, &p.Priority, &p.Rank, &p.WindowTokens, &p.Enabled, &p.InGlobalPool, &p.Proxy, &p.SessionHeaderKey,
+		&p.IsDefault, &p.APIKeyCiphertext, &p.APIKeyHint, &options, &p.CreatedBy, &p.UpdatedBy)
+	if err == nil {
+		err = json.Unmarshal(options, &p.LLMOptions)
+	}
 	return &p, err
 }
 
 // CreateLLMProfile 写入 Profile。Format 默认 anthropic；APIKeyEnv 按格式默认 ANTHROPIC_API_KEY / OPENAI_API_KEY；
-// Effort 为空时 anthropic 取 high、openai 不发送（兼容端未必支持 reasoning_effort）。
+// Effort 为空时不发送；旧记录的显式 high 保留。
 func (d *DB) CreateLLMProfile(ctx context.Context, p LLMProfile) (int64, error) {
 	if p.Format == "" {
 		p.Format = "anthropic"
 	}
 	if p.APIKeyEnv == "" {
 		p.APIKeyEnv = "ANTHROPIC_API_KEY"
-		if p.Format == "openai" {
+		if p.Format == "openai" || p.Format == "openai-responses" {
 			p.APIKeyEnv = "OPENAI_API_KEY"
 		}
 	}
-	if p.Effort == "" && p.Format == "anthropic" {
-		p.Effort = "high"
+	options, err := json.Marshal(p.LLMOptions)
+	if err != nil {
+		return 0, err
 	}
 	var id int64
-	err := d.QueryRowContext(ctx, `INSERT INTO llm_profiles(name, format, base_url, api_key_env, model, max_tokens,
-			effort, thinking_display, priority, rank, window_tokens, enabled, in_global_pool, proxy, session_header_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	err = d.QueryRowContext(ctx, `INSERT INTO llm_profiles(name, format, base_url, api_key_env, model, max_tokens,
+			effort, thinking_display, priority, rank, window_tokens, enabled, in_global_pool, proxy, session_header_key,
+			api_key_ciphertext, api_key_hint, options, created_by, updated_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		RETURNING id`,
 		p.Name, p.Format, p.BaseURL, p.APIKeyEnv, p.Model, p.MaxTokens, p.Effort, p.ThinkingDisplay,
-		p.Priority, p.Rank, p.WindowTokens, p.Enabled, p.InGlobalPool, p.Proxy, p.SessionHeaderKey).Scan(&id)
+		p.Priority, p.Rank, p.WindowTokens, p.Enabled, p.InGlobalPool, p.Proxy, p.SessionHeaderKey,
+		p.APIKeyCiphertext, p.APIKeyHint, options, p.CreatedBy, p.UpdatedBy).Scan(&id)
 	return id, err
 }
 
 func (d *DB) GetLLMProfile(ctx context.Context, id int64) (*LLMProfile, error) {
-	p, err := scanLLMProfile(d.QueryRowContext(ctx, `SELECT `+llmProfileCols+` FROM llm_profiles WHERE id = $1`, id))
+	p, err := scanLLMProfile(d.QueryRowContext(ctx, `SELECT `+llmProfileCols+` FROM llm_profiles WHERE id = $1 AND tenant_id='default'`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: llm profile %d", ErrNotFound, id)
 	}
@@ -75,7 +93,7 @@ func (d *DB) GetLLMProfile(ctx context.Context, id int64) (*LLMProfile, error) {
 // GlobalPoolProfiles 返回参与全局池的启用 Profile，按 rank、priority DESC、id 排序。
 func (d *DB) GlobalPoolProfiles(ctx context.Context) ([]*LLMProfile, error) {
 	rows, err := d.QueryContext(ctx, `SELECT `+llmProfileCols+` FROM llm_profiles
-		WHERE enabled AND in_global_pool ORDER BY rank, priority DESC, id`)
+		WHERE tenant_id='default' AND enabled AND (in_global_pool OR is_default) ORDER BY is_default DESC, priority DESC, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +134,11 @@ func (d *DB) AgentLLMBinding(ctx context.Context, agentKey string) (int64, error
 
 // SetTaskLLMChain 以给定顺序替换任务显式 Profile 链；active 指向首项，revision 递增。空列表表示清除显式链。
 func (d *DB) SetTaskLLMChain(ctx context.Context, taskID int64, profileIDs []int64) error {
+	return d.SetTaskLLMChainWithActive(ctx, taskID, profileIDs, 0)
+}
+
+// SetTaskLLMChainWithActive 替换任务显式 Profile 链并支持显式指定活动配置游标（若未指定或不在链中则默认首项）。
+func (d *DB) SetTaskLLMChainWithActive(ctx context.Context, taskID int64, profileIDs []int64, activeProfileID int64) error {
 	return d.InTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE`, taskID); err != nil {
 			return err
@@ -123,15 +146,18 @@ func (d *DB) SetTaskLLMChain(ctx context.Context, taskID int64, profileIDs []int
 		if _, err := tx.ExecContext(ctx, `DELETE FROM task_llm_profiles WHERE task_id = $1`, taskID); err != nil {
 			return err
 		}
+		var active any
+		if len(profileIDs) > 0 {
+			active = profileIDs[0]
+		}
 		for i, pid := range profileIDs {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO task_llm_profiles(task_id, position, profile_id)
 				VALUES ($1, $2, $3)`, taskID, i, pid); err != nil {
 				return err
 			}
-		}
-		var active any
-		if len(profileIDs) > 0 {
-			active = profileIDs[0]
+			if activeProfileID > 0 && pid == activeProfileID {
+				active = pid
+			}
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE tasks SET active_llm_profile_id = $2,
 			llm_chain_revision = llm_chain_revision + 1, llm_failover_state = '', llm_failover_reason = ''
@@ -163,6 +189,8 @@ type TaskLLMState struct {
 	HasChain        bool
 	ActiveProfileID *int64
 	Revision        int64
+	FailoverState   string
+	FailoverReason  string
 }
 
 func (d *DB) TaskLLMState(ctx context.Context, taskID int64) (TaskLLMState, error) {
@@ -171,8 +199,9 @@ func (d *DB) TaskLLMState(ctx context.Context, taskID int64) (TaskLLMState, erro
 		active sql.NullInt64
 	)
 	err := d.QueryRowContext(ctx, `SELECT t.active_llm_profile_id, t.llm_chain_revision,
+			t.llm_failover_state, t.llm_failover_reason,
 			EXISTS (SELECT 1 FROM task_llm_profiles c WHERE c.task_id = t.id)
-		FROM tasks t WHERE t.id = $1`, taskID).Scan(&active, &s.Revision, &s.HasChain)
+		FROM tasks t WHERE t.id = $1`, taskID).Scan(&active, &s.Revision, &s.FailoverState, &s.FailoverReason, &s.HasChain)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, fmt.Errorf("%w: task %d", ErrNotFound, taskID)
 	}
@@ -386,4 +415,111 @@ func (d *DB) InsertLLMRecord(ctx context.Context, r LLMRecord) error {
 		r.TaskID, r.ExplorationID, r.SessionID, r.Worker, r.ProfileID, r.ProfileName, r.Method, r.URL,
 		r.StatusCode, r.LatencyMs, r.RequestBody, r.ResponseBody, r.Truncated, truncateText(r.Error, 2000))
 	return err
+}
+
+// LLMRecordSummary 是列表展示用的原始报文录制元数据（不含大体积正文）。
+type LLMRecordSummary struct {
+	ID            int64     `json:"id"`
+	TaskID        int64     `json:"task_id"`
+	ExplorationID int64     `json:"exploration_id"`
+	SessionID     string    `json:"session_id"`
+	Worker        string    `json:"worker"`
+	ProfileID     int64     `json:"profile_id"`
+	ProfileName   string    `json:"profile_name"`
+	Method        string    `json:"method"`
+	URL           string    `json:"url"`
+	StatusCode    int       `json:"status_code"`
+	LatencyMs     int       `json:"latency_ms"`
+	Truncated     bool      `json:"truncated"`
+	Error         string    `json:"error"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// LLMRecordDetail 包含完整请求与响应正文。
+type LLMRecordDetail struct {
+	LLMRecordSummary
+	RequestBody  string `json:"request_body"`
+	ResponseBody string `json:"response_body"`
+}
+
+// LLMRecordFilter 控制原始报文录制查询条件。
+type LLMRecordFilter struct {
+	TaskID      int64
+	SessionID   string
+	ProfileName string
+	Limit       int
+	Offset      int
+}
+
+func (d *DB) ListLLMRecords(ctx context.Context, f LLMRecordFilter) ([]LLMRecordSummary, int, error) {
+	if f.Limit <= 0 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	var total int
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM llm_records
+		WHERE ($1::bigint = 0 OR task_id = $1)
+		  AND ($2::text = '' OR session_id ILIKE '%' || $2 || '%')
+		  AND ($3::text = '' OR profile_name ILIKE '%' || $3 || '%')`,
+		f.TaskID, f.SessionID, f.ProfileName).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := d.QueryContext(ctx, `SELECT id, COALESCE(task_id,0), COALESCE(exploration_id,0), session_id,
+		worker, COALESCE(profile_id,0), profile_name, method, url, status_code, latency_ms, truncated, error, created_at
+		FROM llm_records
+		WHERE ($1::bigint = 0 OR task_id = $1)
+		  AND ($2::text = '' OR session_id ILIKE '%' || $2 || '%')
+		  AND ($3::text = '' OR profile_name ILIKE '%' || $3 || '%')
+		ORDER BY id DESC LIMIT $4 OFFSET $5`,
+		f.TaskID, f.SessionID, f.ProfileName, f.Limit, f.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := make([]LLMRecordSummary, 0)
+	for rows.Next() {
+		var r LLMRecordSummary
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.ExplorationID, &r.SessionID, &r.Worker, &r.ProfileID,
+			&r.ProfileName, &r.Method, &r.URL, &r.StatusCode, &r.LatencyMs, &r.Truncated, &r.Error, &r.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, r)
+	}
+	return out, total, rows.Err()
+}
+
+func (d *DB) GetLLMRecord(ctx context.Context, id int64) (*LLMRecordDetail, error) {
+	var r LLMRecordDetail
+	err := d.QueryRowContext(ctx, `SELECT id, COALESCE(task_id,0), COALESCE(exploration_id,0), session_id,
+		worker, COALESCE(profile_id,0), profile_name, method, url, status_code, latency_ms, truncated, error, created_at,
+		request_body, response_body
+		FROM llm_records WHERE id = $1`, id).Scan(
+		&r.ID, &r.TaskID, &r.ExplorationID, &r.SessionID, &r.Worker, &r.ProfileID,
+		&r.ProfileName, &r.Method, &r.URL, &r.StatusCode, &r.LatencyMs, &r.Truncated, &r.Error, &r.CreatedAt,
+		&r.RequestBody, &r.ResponseBody)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (d *DB) DeleteLLMRecordsByTask(ctx context.Context, taskID int64) (int64, error) {
+	var (
+		res sql.Result
+		err error
+	)
+	if taskID > 0 {
+		res, err = d.ExecContext(ctx, `DELETE FROM llm_records WHERE task_id = $1`, taskID)
+	} else {
+		res, err = d.ExecContext(ctx, `DELETE FROM llm_records`)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

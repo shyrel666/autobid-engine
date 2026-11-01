@@ -33,18 +33,20 @@ function CredentialDialog({ editing, onClose, onSaved }: { editing: CompanyCrede
   const [attrs, setAttrs] = useState<AttrRow[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [initial, setInitial] = useState('')
 
   useEffect(() => {
     if (!editing) return
     setError('')
-    if (editing === 'new') {
-      setForm({ category: 'qualification', code: '', title: '', valid_until: '' })
-      setAttrs([{ key: '', value: '' }])
-    } else {
-      setForm({ category: editing.category, code: editing.code ?? '', title: editing.title, valid_until: editing.valid_until ?? '' })
-      setAttrs(toRows(editing.attributes))
-    }
+    const f = editing === 'new'
+      ? { category: 'qualification', code: '', title: '', valid_until: '' }
+      : { category: editing.category, code: editing.code ?? '', title: editing.title, valid_until: editing.valid_until ?? '' }
+    const a = editing === 'new' ? [{ key: '', value: '' }] : toRows(editing.attributes)
+    setForm(f)
+    setAttrs(a)
+    setInitial(JSON.stringify([f, a]))
   }, [editing])
+  const dirty = editing !== null && JSON.stringify([form, attrs]) !== initial
 
   const submit = async () => {
     setError('')
@@ -76,7 +78,7 @@ function CredentialDialog({ editing, onClose, onSaved }: { editing: CompanyCrede
   }
 
   return (
-    <Modal open={editing !== null} wide title={editing === 'new' ? '新增企业资信' : `编辑资信 #${editing?.id ?? ''}`} onClose={onClose}
+    <Modal open={editing !== null} wide title={editing === 'new' ? '新增企业资信' : `编辑资信 #${editing?.id ?? ''}`} onClose={onClose} dirty={dirty}
       footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={submit}>保存</Button></>}>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="类别 *" hint="约定词表：qualification / performance / personnel / financial / certificate，也可自定义">

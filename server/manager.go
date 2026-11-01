@@ -114,7 +114,8 @@ type Manager struct {
 	mu    sync.RWMutex
 	tasks map[int64]*Task
 
-	hooksFor func(t *Task) harness.HookRunner
+	hooksFor        func(t *Task) harness.HookRunner
+	passthroughHint func(t *Task, hintID int64, text string, anchors []int64) []int64
 }
 
 func NewManager(pg *db.DB) *Manager {
@@ -247,11 +248,19 @@ func (t *Task) NotifyDocument(summary, detail string) {
 	t.appendTrigger(agent.TriggerEvent{Kind: agent.TriggerDocumentAdded, Summary: summary, Detail: detail})
 }
 
-// AddHint 追加人工补充上下文并唤醒 Planner。
+// AddHint 追加人工补充上下文。若携带 anchors 且命中锚定相同要素的在途 running Worker，
+// 则通过事件直通（Passthrough）直接排入该 Worker 的 steerBox 并标记已消费，绕过全局 Planner 重算；
+// 否则触发 TriggerHintAdded 唤醒 Planner。
 func (m *Manager) AddHint(ctx context.Context, t *Task, text string, anchors []int64) (int64, error) {
 	id, err := t.Store.AddNode(ctx, db.KindHint, db.StateHintActive, map[string]any{"summary": text}, 0, "", anchors)
 	if err != nil {
 		return 0, err
+	}
+	if len(anchors) > 0 && m.passthroughHint != nil {
+		if routed := m.passthroughHint(t, id, text, anchors); len(routed) > 0 {
+			_, _ = t.Store.ConsumeHint(ctx, id)
+			return id, nil
+		}
 	}
 	t.appendTrigger(agent.TriggerEvent{Kind: agent.TriggerHintAdded, Hints: []string{text}})
 	return id, nil

@@ -58,32 +58,36 @@ func Skills() []tool.Skill {
 		},
 		{
 			Name:        SkillKnowledgeReuse,
-			Description: "企业方案知识库复用：检索历史标书、标准技术方案、产品规格书与白皮书中可复用的段落与参数表，并强制附带来源引用。",
-			Tools:       []string{ToolKBSearchProposals, ToolKBSearchProducts, ToolKBReadChunk},
-			Body: `# 企业方案知识库复用
+			Description: "企业方案知识库复用与证据核验：检索历史标书、标准技术方案、产品规格书与白皮书中可复用的段落与参数表，对数值/范围/枚举断言执行确定性证据核验（kb_verify_evidence），并支持预算受控的多步检索（kb_research）。",
+			Tools:       []string{ToolKBSearchProposals, ToolKBSearchProducts, ToolKBReadChunk, ToolKBReadEvidence, ToolKBVerifyEvidence, ToolKBResearch},
+			Body: `# 企业方案知识库复用与证据核验
 
 1. 先用 search_document / read_chunk 读清招标技术要求（含 ★/▲ 参数），把每条要求拆成检索关键词与行业标签。
 2. 方案类内容（总体架构、实施方案、运维保障、类似项目经验）：先 SearchExtraTools("select:kb_search_proposals") 取 Schema，
    再调用 kb_search_proposals（query 为技术需求关键词，tags 为行业标签如 ["智慧园区"]），在历史标书与标准方案中找可复用段落。
 3. 产品与技术指标：SearchExtraTools("select:kb_search_products") 后调用 kb_search_products（product 为产品/型号名，必须出现在命中文档中；
-   specs 为指标关键词如 ["分辨率","400万像素"]），优先命中含参数表的分块。
-4. 复用或比对前必须 SearchExtraTools("select:kb_read_chunk") 并调用 kb_read_chunk(doc_id, seq) 读取完整正文与 tables 表格 JSON，
-   逐项核对指标值是否满足招标要求（数值门槛按 ≥ / ≤ 比较），不得凭检索摘要下结论。
-5. 记录结论时 record_fact 的 summary 写明“知识库出处：<cite>”，source_ref 原样写入工具返回的 citation
+   specs 为指标关键词如 ["分辨率","400万像素"]），优先命中含参数表的分块。注意保留返回结果中的 evidence_id。
+4. 跨多类资料或复杂技术指标组合检索时，可先 SearchExtraTools("select:kb_research") 再调用 kb_research(request_key, question, product, multi_agent) 执行受预算控制的多步研究。
+5. 复用或比对前必须读取完整正文与表格：按文档位置先 SearchExtraTools("select:kb_read_chunk") 调用 kb_read_chunk(doc_id, seq)，
+   或按检索运行 ID 先 SearchExtraTools("select:kb_read_evidence") 调用 kb_read_evidence(run_id) 读取证据快照，不得凭检索摘要下结论。
+6. 凡是将知识库参数或资质作为标书实质性响应依据（usable_evidence）前，必须先 SearchExtraTools("select:kb_verify_evidence")，
+   再调用 kb_verify_evidence(run_id, evidence_id, claim={text, parameter, operator, value, unit, product}) 对数值指标做确定性核验，使其状态更新为 verified + supports。
+7. 记录结论时 record_fact 的 summary 写明“知识库出处：<cite>”，source_ref 原样写入工具返回的 citation
    {doc_id, doc_title, category, section_code, section_path, page_start, page_end, seq}；没有出处的知识库内容不得写入事实或结论。
-6. 知识库中找不到满足 ★ 参数的产品或方案时，report_finding（category=risk）说明缺口，提示人工补充资料。`,
+8. 知识库中找不到满足 ★ 参数的产品或方案时，report_finding（category=risk）说明缺口，提示人工补充资料。`,
 		},
 		{
 			Name:        SkillProposalWriting,
-			Description: "技术标章节写作：在已批准大纲下读取章节写作上下文（要求原文、前置章节摘要、证据有效性），撰写或重写章节草稿并经数据库门禁写回，按需生成章节图表。",
-			Tools:       []string{ToolSectionReadContext, ToolSectionWriteDraft, ToolChartGenerate},
+			Description: "技术标章节写作：在已批准大纲下读取章节写作上下文（要求原文、前置章节摘要、证据有效性），绑定已核验支撑证据或缺口说明，撰写或重写章节草稿并经数据库门禁写回，按需生成章节图表。",
+			Tools:       []string{ToolSectionReadContext, ToolRequirementBindEvidence, ToolSectionWriteDraft, ToolChartGenerate},
 			Body: `# 技术标章节写作
 
 1. 先 SearchExtraTools("select:section_read_context") 取 Schema，调用 section_read_context（section_id 或已批准大纲中的 section_code）。
    writable=false 时停止写作并 record_fact 说明 blocked_reason（大纲未批准 / 已被取代 / 前置章节尚无有效稿），不得绕过。
 2. 逐条对照 requirements：★/▲ 条款逐条明确响应；评分项按评分点组织内容；source_excerpt 是招标原文，引用时保持一致。
 3. 事实性内容只能来自 usable_evidence（verified + supports），并把引用的证据 id 写入 evidence_ids；unusable_evidence 与没有证据的指标、
-   资质、业绩只能写成待确认事项并列入 gaps，严禁改写成已证实承诺。需要补证据时先用 knowledge-reuse 技能检索与核验。
+   资质、业绩只能写成待确认事项并列入 gaps，严禁改写成已证实承诺。需要补证据时先用 knowledge-reuse 技能检索与 kb_verify_evidence 核验，
+   再通过 SearchExtraTools("select:requirement_bind_evidence") 调用 requirement_bind_evidence 将 verified + supports 的 evidence_ids 或 evidence_gap 绑定到对应 requirement_item。
 4. 与 dependencies 中前置章节的 summary_note 保持术语与承诺一致；在 summary_note 中写 3~6 句衔接摘要供后续章节读取。
 5. SearchExtraTools("select:section_write_draft") 后调用 section_write_draft，base_rev_no 与 based_on_outline_version 必须原样使用
    section_read_context 的返回值（派发时给了 lease_token 也一并传入）。

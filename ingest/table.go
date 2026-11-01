@@ -21,6 +21,16 @@ type Table struct {
 	Cells      []Cell     `json:"cells"`
 	Grid       [][]string `json:"grid"`
 	Markdown   string     `json:"markdown"`
+	// 表格来源（F1）：工作表名/可见性、A1 区域、合并区域、隐藏行列与来源定位。
+	Sheet          string         `json:"sheet,omitempty"`
+	SheetIndex     int            `json:"sheet_index,omitempty"`
+	SheetHidden    bool           `json:"sheet_hidden,omitempty"`
+	Range          string         `json:"range,omitempty"`
+	Merges         []string       `json:"merges,omitempty"`
+	HiddenRows     []int          `json:"hidden_rows,omitempty"`
+	HiddenCols     []string       `json:"hidden_cols,omitempty"`
+	PageIsPhysical *bool          `json:"page_is_physical,omitempty"`
+	SourceLocator  *SourceLocator `json:"source_locator,omitempty"`
 }
 
 // Cell 是一个原始单元格；Row/Col 为 0 基网格坐标，Page 为该单元格所在行的起始页。
@@ -32,6 +42,12 @@ type Cell struct {
 	Text    string `json:"text"`
 	Header  bool   `json:"header,omitempty"`
 	Page    int    `json:"page"`
+	// 表格原始值 / 显示值 / 公式（F1）。PDF/DOCX 单元格只保留 Text。
+	Raw           string `json:"raw,omitempty"`
+	Display       string `json:"display,omitempty"`
+	Formula       string `json:"formula,omitempty"`
+	FormulaCached bool   `json:"formula_cached,omitempty"`
+	Hidden        bool   `json:"hidden,omitempty"`
 }
 
 // tableBuilder 按行追加单元格并维护网格占用，用于还原横向（ColSpan）与纵向（RowSpan）合并。

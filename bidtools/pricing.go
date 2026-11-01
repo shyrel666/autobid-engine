@@ -263,25 +263,25 @@ func verifyCommercial(items []*db.Asset, ceiling *big.Rat, ceilingSource string,
 func (k *Kit) verifyCommercialTool() tool.CoreTool {
 	return readTool(tool.Spec{
 		Name: ToolVerifyCommercial,
-		Description: "Verify a proposed commercial bid against this task's commercial_item elements: per-line unit_price × quantity vs line_total, " +
-			"item ceilings (asset amount), missing or duplicate items, declared total vs sum of lines, the maximum bid price (ceiling), " +
-			"abnormally low price and profit margin. Exact decimal arithmetic. Returns issues with severity and a verdict (pass | warn | fail).",
+		Description: "对照当前项目的商务报价清单要素（commercial_item）使用精确有理数运算全面验算拟投标报价：逐行核对“单价 × 数量 = 合价”、" +
+			"单项最高限价、漏项与重复报价、分项合计与投标总价一致性、项目/标段最高限价（超限直接否决）、异常低价风险线及预期成本利润率。" +
+			"返回分级问题列表与总体判定结论 verdict（pass 通过 | warn 预警 | fail 不通过）。",
 		Schema: obj(map[string]any{
-			"lot_no":        str("only commercial items of this lot (items shared by all lots are included); its lot asset amount is the default ceiling"),
-			"ceiling_price": number("maximum bid price (最高限价); default: lot asset amount, else tender asset amount"),
-			"quotes": map[string]any{"type": "array", "description": "proposed price per commercial item",
+			"lot_no":        str("仅核验指定标段编号的商务清单项（共用项自动包含；默认以该标段限价作为最高限价）"),
+			"ceiling_price": number("最高投标限价（不填时优先取标段要素限价，其次取招标项目总限价）"),
+			"quotes": map[string]any{"type": "array", "description": "拟填报的分项报价明细列表",
 				"items": obj(map[string]any{
-					"asset_id":   integer("commercial_item asset id (or give code)"),
-					"code":       str("commercial_item code"),
-					"unit_price": number("unit price"),
-					"quantity":   number("quantity; default: the asset quantity"),
-					"line_total": number("line total as filled in the bid form"),
+					"asset_id":   integer("商务清单要素 ID（与 code 二选一）"),
+					"code":       str("商务清单项编码（与 asset_id 二选一）"),
+					"unit_price": number("填报含税单价"),
+					"quantity":   number("报价数量（不填则默认取招标清单要素数量）"),
+					"line_total": number("报价表填报的单项合价"),
 				})},
-			"declared_total":     number("total bid price as filled in the bid form"),
-			"cost_estimate":      number("estimated total cost, for the profit-margin check"),
-			"min_profit_margin":  number("required margin (0-1), default 0.03"),
-			"abnormal_low_ratio": number("warn when total / ceiling is below this ratio, default 0.7"),
-			"tolerance":          number("absolute tolerance for reconciliation, default 0.01"),
+			"declared_total":     number("开标一览表/报价总表填报的投标总价"),
+			"cost_estimate":      number("内部测算总成本（用于核验是否低于成本报价及测算利润率）"),
+			"min_profit_margin":  number("最低要求利润率（0~1 之间小数，默认 0.03 即 3%）"),
+			"abnormal_low_ratio": number("异常低价预警占最高限价比例阈值（默认 0.70 即 70%）"),
+			"tolerance":          number("金额勾稽允许的最大绝对尾差（默认 0.01 元）"),
 		}, "quotes"),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		dec := json.NewDecoder(strings.NewReader(string(in)))

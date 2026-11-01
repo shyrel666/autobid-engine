@@ -7,7 +7,9 @@ const b = (kind: string, extra: Record<string, number> = {}) => ({ kind, message
 test('每种阻断都有确定的修复位置', () => {
   assert.equal(blockerLink(1, b('no_approved_outline'))?.href, '/tasks/1/outline')
   assert.equal(blockerLink(1, b('requirements_not_confirmed'))?.href, '/tasks/1/requirements')
+  assert.equal(blockerLink(1, b('no_bid_decision'))?.href, '/tasks/1/requirements')
   assert.equal(blockerLink(1, b('requirement_unmapped', { requirement_item_id: 8 }))?.href, '/tasks/1/outline?requirement=8')
+  assert.equal(blockerLink(1, b('requirement_superseded', { requirement_item_id: 8 }))?.href, '/tasks/1/outline?requirement=8')
   assert.equal(blockerLink(1, b('veto_pending', { requirement_item_id: 8 }))?.href, '/tasks/1/requirements?filter=veto&requirement=8')
   assert.equal(blockerLink(1, b('veto_failed'))?.href, '/tasks/1/requirements?filter=veto')
   assert.equal(blockerLink(1, b('section_not_approved', { section_id: 4 }))?.href, '/tasks/1/writing/4')

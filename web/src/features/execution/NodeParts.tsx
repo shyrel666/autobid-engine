@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { CheckCircle2, FileSearch, Layers, MessageSquare, RefreshCw, Snowflake, Target } from 'lucide-react'
 import { api } from '../../api/client'
-import type { NodeBrief, Overview } from '../../api/types'
+import type { IntentMandate, NodeBrief, Overview } from '../../api/types'
 import { Badge, Button, Card, ErrorBanner, Modal, Pre, Spinner, Stat, statusTone } from '../../components/ui'
 import { useAsync } from '../../hooks/useAsync'
 import type { AsyncState } from '../../hooks/useAsync'
@@ -11,6 +11,20 @@ import { fmtPct, fmtTime, pretty } from '../../lib/format'
 export function NodeDetailModal({ taskID, nodeID, onClose, onOpen }: { taskID: number; nodeID: number | null; onClose: () => void; onOpen: (id: number) => void }) {
   const d = useAsync(() => api.node(taskID, nodeID!), [taskID, nodeID], nodeID !== null)
   const n = d.data?.node
+  const p = (n?.payload ?? {}) as Record<string, unknown>
+  const goalCode = typeof p.goal_code === 'string' ? p.goal_code : ''
+  const targetCount = typeof p.target_count === 'number' ? p.target_count : undefined
+  const stoppedReason = typeof p.stopped_reason === 'string' ? p.stopped_reason : ''
+  const mandate = (p.mandate && typeof p.mandate === 'object' ? p.mandate : null) as IntentMandate | null
+  const hasMandate = !!mandate && (
+    (mandate.allowed_section_ids?.length ?? 0) > 0 ||
+    (mandate.allowed_requirement_ids?.length ?? 0) > 0 ||
+    (mandate.target_words_min ?? 0) > 0 ||
+    (mandate.target_words_max ?? 0) > 0 ||
+    (mandate.max_tool_calls ?? 0) > 0 ||
+    (mandate.forbidden_tools?.length ?? 0) > 0 ||
+    !!mandate.require_writeback
+  )
   return (
     <Modal open={nodeID !== null} wide title={`推演节点 #${nodeID}`} onClose={onClose}>
       <ErrorBanner error={d.error} onRetry={d.reload} />
@@ -19,12 +33,16 @@ export function NodeDetailModal({ taskID, nodeID, onClose, onOpen }: { taskID: n
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="purple">{n.kind}</Badge>
             <Badge tone={statusTone(n.state)}>{n.state}</Badge>
+            {goalCode && <Badge tone="blue">目标分解 {goalCode}</Badge>}
+            {targetCount !== undefined && <Badge tone="slate">关联条目 {targetCount}</Badge>}
+            {hasMandate && <Badge tone="amber">Mandate 约束</Badge>}
             {n.priority ? <Badge>优先级 {n.priority}</Badge> : null}
             {n.owner && <Badge tone="blue">{n.owner}</Badge>}
             {n.inherited && <Badge tone="amber">继承自任务 #{n.source_task_id}</Badge>}
             {n.finding_id ? <Badge tone="green">Finding #{n.finding_id}</Badge> : null}
           </div>
           {n.blocked_reason && <p className="text-amber-700">阻塞原因：{n.blocked_reason}</p>}
+          {stoppedReason && <p className="rounded-md bg-amber-50 px-3 py-1.5 text-xs text-amber-800">停止 / Watchdog 熔断原因：{stoppedReason}</p>}
           {n.delete_reason && <p className="text-red-700">撤销原因：{n.delete_reason}</p>}
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 md:grid-cols-4">
             <span>创建 {fmtTime(n.created_at)}</span><span>更新 {fmtTime(n.updated_at)}</span>
@@ -33,6 +51,27 @@ export function NodeDetailModal({ taskID, nodeID, onClose, onOpen }: { taskID: n
             {n.cold_since_round != null && <span>冷节点（自第 {n.cold_since_round} 轮）</span>}
             {n.anchors && n.anchors.length > 0 && <span className="col-span-2">锚定招标要素：{n.anchors.map((a) => `#${a}`).join(', ')}</span>}
           </div>
+          {hasMandate && mandate && (
+            <div className="rounded-md border border-amber-200 bg-amber-50/50 p-2.5 text-xs text-slate-700">
+              <div className="mb-1 font-medium text-amber-900">Mandate 执行边界硬约束（Watchdog 实时门禁）</div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {mandate.allowed_section_ids && mandate.allowed_section_ids.length > 0 && (
+                  <span>允许章节：{mandate.allowed_section_ids.map((id) => `#${id}`).join(', ')}</span>
+                )}
+                {mandate.allowed_requirement_ids && mandate.allowed_requirement_ids.length > 0 && (
+                  <span>允许要求：{mandate.allowed_requirement_ids.map((id) => `#${id}`).join(', ')}</span>
+                )}
+                {((mandate.target_words_min ?? 0) > 0 || (mandate.target_words_max ?? 0) > 0) && (
+                  <span>字数区间：{mandate.target_words_min ?? 0} ~ {mandate.target_words_max || '不限'} 字</span>
+                )}
+                {(mandate.max_tool_calls ?? 0) > 0 && <span>只读检索上限：{mandate.max_tool_calls} 次</span>}
+                {mandate.forbidden_tools && mandate.forbidden_tools.length > 0 && (
+                  <span>禁用工具：{mandate.forbidden_tools.join(', ')}</span>
+                )}
+                {mandate.require_writeback && <span>完结门禁：必须产生实质写回</span>}
+              </div>
+            </div>
+          )}
           <div>
             <div className="mb-1 text-xs font-medium text-slate-500">Payload</div>
             <Pre>{pretty(n.payload)}</Pre>

@@ -35,34 +35,36 @@ const (
 
 // 章节状态（proposal_sections.status）。
 const (
-	SectionPending       = "pending"
-	SectionReady         = "ready"
-	SectionWriting       = "writing"
-	SectionDraft         = "draft"
-	SectionReviewing     = "reviewing"
-	SectionApproved      = "approved"
-	SectionRejected      = "rejected"
-	SectionStaleOutline  = "stale_outline"
-	SectionStaleEvidence = "stale_evidence"
+	SectionPending         = "pending"
+	SectionReady           = "ready"
+	SectionWriting         = "writing"
+	SectionDraft           = "draft"
+	SectionReviewing       = "reviewing"
+	SectionApproved        = "approved"
+	SectionRejected        = "rejected"
+	SectionStaleOutline    = "stale_outline"
+	SectionStaleEvidence   = "stale_evidence"
+	SectionStaleCommitment = "stale_commitment"
 )
 
 // 修订来源与状态（section_revisions）。
 const (
-	RevAIInitial    = "ai_initial"
-	RevAIRewrite    = "ai_rewrite"
-	RevHumanEdit    = "human_edit"
-	RevRollback     = "rollback"
-	RevDraft        = "draft"
-	RevReviewing    = "reviewing"
-	RevApproved     = "approved"
-	RevRejected     = "rejected"
-	RevStaleOut     = "stale_outline"
-	RevStaleEvid    = "stale_evidence"
-	RevConflict     = "conflict_candidate"
-	SaveApplied     = "applied"
-	SaveStale       = "stale_outline"
-	SaveConflict    = "conflict_candidate"
-	SectionLeaseTTL = 45 * time.Second
+	RevAIInitial       = "ai_initial"
+	RevAIRewrite       = "ai_rewrite"
+	RevHumanEdit       = "human_edit"
+	RevRollback        = "rollback"
+	RevDraft           = "draft"
+	RevReviewing       = "reviewing"
+	RevApproved        = "approved"
+	RevRejected        = "rejected"
+	RevStaleOut        = "stale_outline"
+	RevStaleEvid       = "stale_evidence"
+	RevStaleCommitment = "stale_commitment"
+	RevConflict        = "conflict_candidate"
+	SaveApplied        = "applied"
+	SaveStale          = "stale_outline"
+	SaveConflict       = "conflict_candidate"
+	SectionLeaseTTL    = 45 * time.Second
 )
 
 var (
@@ -175,6 +177,7 @@ type SectionRevision struct {
 	SummaryNote           string        `json:"summary_note"`
 	DiffSummary           string        `json:"diff_summary"`
 	EvidenceIDs           []int64       `json:"evidence_ids"`
+	CommitmentIDs         []int64       `json:"commitment_ids"`
 	Gaps                  []RevisionGap `json:"gaps"`
 	Status                string        `json:"status"`
 	CreatedBy             string        `json:"created_by"`
@@ -254,15 +257,15 @@ func scanSection(r rowScanner) (*ProposalSection, error) {
 }
 
 const revisionCols = `id, section_id, rev_no, base_rev_no, based_on_outline_version, source, rollback_of_rev_no, content_md, summary_note,
-	diff_summary, to_jsonb(evidence_ids), gaps, status, created_by, approved_by, approved_at, created_at`
+	diff_summary, to_jsonb(evidence_ids), to_jsonb(commitment_ids), gaps, status, created_by, approved_by, approved_at, created_at`
 
 func scanRevision(r rowScanner) (*SectionRevision, error) {
 	var x SectionRevision
 	var rb sql.NullInt32
-	var ev, gaps []byte
+	var ev, commits, gaps []byte
 	var at sql.NullTime
 	err := r.Scan(&x.ID, &x.SectionID, &x.RevNo, &x.BaseRevNo, &x.BasedOnOutlineVersion, &x.Source, &rb, &x.ContentMD, &x.SummaryNote,
-		&x.DiffSummary, &ev, &gaps, &x.Status, &x.CreatedBy, &x.ApprovedBy, &at, &x.CreatedAt)
+		&x.DiffSummary, &ev, &commits, &gaps, &x.Status, &x.CreatedBy, &x.ApprovedBy, &at, &x.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -274,6 +277,7 @@ func scanRevision(r rowScanner) (*SectionRevision, error) {
 		x.RollbackOfRevNo = &v
 	}
 	x.EvidenceIDs = int64sJSON(ev)
+	x.CommitmentIDs = int64sJSON(commits)
 	x.Gaps = []RevisionGap{}
 	_ = json.Unmarshal(gaps, &x.Gaps)
 	x.ApprovedAt = nullTimePtr(at)
@@ -408,7 +412,18 @@ func lockActiveOutlineTx(ctx context.Context, tx *sql.Tx, tenant string, taskID 
 // 已存在在编草案时不派生（直接编辑该草案即可）。
 func afterRequirementChangeTx(ctx context.Context, tx *sql.Tx, tenant string, taskID int64, actor string, before *ProposalOutline) error {
 	if before == nil {
-		return nil
+		// F1：原文变更可能在提取开始前就把批准大纲置为 superseded（source_epoch 推进），
+		// 此时 lockActiveOutlineTx 返回 nil；仍应按最近被取代的版本派生新的在编草案。
+		latest, err := scanOutline(tx.QueryRowContext(ctx, `SELECT `+outlineCols+` FROM proposal_outlines
+			WHERE tenant_id = $1 AND task_id = $2 AND status = 'superseded'
+			ORDER BY version DESC LIMIT 1 FOR UPDATE`, tenant, taskID))
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		before = latest
 	}
 	var status string
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM proposal_outlines WHERE id = $1`, before.ID).Scan(&status); err != nil {
@@ -620,7 +635,8 @@ func (d *DB) ListOutlines(ctx context.Context, tenant string, taskID int64) (*Ou
 
 func outlineCoverageTx(ctx context.Context, q queryer, tenant string, taskID, outlineID int64) (OutlineCoverage, error) {
 	cov := OutlineCoverage{Unmapped: []RequirementRef{}}
-	rows, err := q.QueryContext(ctx, `SELECT r.id, r.code, r.title, r.category, r.is_mandatory, r.score_group,
+	rows, err := q.QueryContext(ctx, `SELECT r.id, r.code, r.title, r.category, r.is_mandatory, r.score_group, r.out_of_bid,
+		(r.superseded_by_id IS NOT NULL OR r.review_status = 'stale' OR r.parent_id IS NOT NULL),
 		EXISTS (SELECT 1 FROM proposal_section_requirements m JOIN proposal_sections s ON s.tenant_id = m.tenant_id AND s.id = m.section_id
 		        WHERE m.tenant_id = r.tenant_id AND m.requirement_id = r.id AND s.outline_id = $3)
 		FROM requirement_items r WHERE r.tenant_id = $1 AND r.task_id = $2 ORDER BY r.code`, tenant, taskID, outlineID)
@@ -631,9 +647,18 @@ func outlineCoverageTx(ctx context.Context, q queryer, tenant string, taskID, ou
 	for rows.Next() {
 		var ref RequirementRef
 		var group string
-		var mapped bool
-		if err := rows.Scan(&ref.ID, &ref.Code, &ref.Title, &ref.Category, &ref.IsMandatory, &group, &mapped); err != nil {
+		var outBid, inactive, mapped bool
+		if err := rows.Scan(&ref.ID, &ref.Code, &ref.Title, &ref.Category, &ref.IsMandatory, &group, &outBid, &inactive, &mapped); err != nil {
 			return cov, err
+		}
+		if inactive {
+			if !mapped {
+				cov.OutOfScope++
+			}
+			continue
+		}
+		if (ref.Category == ReqVetoItem || outBid) && !mapped {
+			continue // 否决项由投标方逐项核对，不投的分包不作答：不计入大纲覆盖
 		}
 		if !inTechnicalScope(ref.Category, group) && !mapped {
 			cov.OutOfScope++
@@ -819,6 +844,24 @@ func deriveOutlineTx(ctx context.Context, tx *sql.Tx, tenant string, taskID int6
 			derived[s.Code] = s.ID
 		}
 		if len(sections) == 0 {
+			supMap := map[int64]int64{}
+			srows, err := tx.QueryContext(ctx, `SELECT id, superseded_by_id FROM requirement_items
+				WHERE tenant_id = $1 AND task_id = $2 AND superseded_by_id IS NOT NULL`, tenant, taskID)
+			if err != nil {
+				return nil, err
+			}
+			for srows.Next() {
+				var oldID, newID int64
+				if err := srows.Scan(&oldID, &newID); err != nil {
+					srows.Close()
+					return nil, err
+				}
+				supMap[oldID] = newID
+			}
+			srows.Close()
+			if err := srows.Err(); err != nil {
+				return nil, err
+			}
 			for _, s := range old {
 				deps := []string{}
 				for _, id := range s.DependsOn {
@@ -826,8 +869,19 @@ func deriveOutlineTx(ctx context.Context, tx *sql.Tx, tenant string, taskID int6
 						deps = append(deps, dep.Code)
 					}
 				}
+				rids := make([]int64, 0, len(s.RequirementIDs))
+				for _, rid := range s.RequirementIDs {
+					for guard := 0; guard < 8; guard++ {
+						next, ok := supMap[rid]
+						if !ok {
+							break
+						}
+						rid = next
+					}
+					rids = append(rids, rid)
+				}
 				sections = append(sections, SectionInput{Code: s.Code, Title: s.Title, Level: s.Level, WritingGuide: s.WritingGuide,
-					TargetWords: s.TargetWords, RequirementIDs: s.RequirementIDs, DependsOn: deps})
+					TargetWords: s.TargetWords, RequirementIDs: uniqueIDs(rids), DependsOn: deps})
 			}
 		}
 	}
@@ -961,8 +1015,14 @@ func insertSectionsTx(ctx context.Context, tx *sql.Tx, tenant string, taskID int
 // 其余要求均被映射。
 func DefaultOutlineSections(reqs []*RequirementItem) []SectionInput {
 	by := map[string][]*RequirementItem{}
+	byID := map[int64]*RequirementItem{}
 	var commercial []*RequirementItem
+	var passedVetoes []*RequirementItem
 	for _, r := range reqs {
+		byID[r.ID] = r
+		if !r.OutOfBid && !r.IsSuperseded() && r.Category == ReqVetoItem && r.VetoStatus == VetoPassed && strings.TrimSpace(r.VetoNote) != "" {
+			passedVetoes = append(passedVetoes, r)
+		}
 		switch {
 		case !r.InTechnicalScope():
 		case r.Category == ReqScoringItem && r.ScoreGroup == ScoreGroupCommercial:
@@ -991,22 +1051,53 @@ func DefaultOutlineSections(reqs []*RequirementItem) []SectionInput {
 			WritingGuide: "本章为技术评分项索引，按招标评分表顺序概述各评分点的响应策略。"})
 		byOrder(items)
 		for i, r := range items {
+			guide := fmt.Sprintf("按评分标准逐点响应评分项 %s（分值 %.4g）；评分标准列出的每个要点都要有对应内容，"+
+				"只陈述有核验证据支撑的能力，缺证据处写明缺口。", r.Code, r.ScoreWeight)
+			if len(r.ScoringTiers) > 0 {
+				tiers := make([]string, 0, len(r.ScoringTiers))
+				for _, t := range r.ScoringTiers {
+					tiers = append(tiers, fmt.Sprintf("%s(%.4g分): %s", t.Label, t.ScoreMax, firstLine(t.Criteria, 36)))
+				}
+				guide += " 评分档次：" + strings.Join(tiers, "；") + "。"
+			}
+			if r.ProofRules.RawSummary != "" {
+				guide += " 证明要求：" + r.ProofRules.RawSummary + "。"
+			}
+			if len(r.LinkedRequirementIDs) > 0 {
+				var lcodes []string
+				for _, lid := range r.LinkedRequirementIDs {
+					if lr := byID[lid]; lr != nil && !lr.IsSuperseded() {
+						lcodes = append(lcodes, lr.Code)
+					}
+				}
+				if len(lcodes) > 0 {
+					guide += " 联动响应采购需求条款：" + strings.Join(lcodes, "、") + "。"
+				}
+			}
 			out = append(out, SectionInput{Code: fmt.Sprintf("%s.%d", chap, i+1), Title: r.Title, Level: 2, TargetWords: 1500,
-				RequirementIDs: []int64{r.ID}, DependsOn: []string{"1"},
-				WritingGuide: fmt.Sprintf("按评分标准逐点响应评分项 %s（分值 %.4g）；评分标准列出的每个要点都要有对应内容，"+
-					"只陈述有核验证据支撑的能力，缺证据处写明缺口。", r.Code, r.ScoreWeight)})
+				RequirementIDs: []int64{r.ID}, DependsOn: []string{"1"}, WritingGuide: guide})
 		}
 	}
 	if len(commercial) > 0 {
 		n++
 		byOrder(commercial)
 		ids := make([]int64, 0, len(commercial))
+		var proofs []string
 		for _, r := range commercial {
 			ids = append(ids, r.ID)
+			if r.ProofRules.RawSummary != "" {
+				proofs = append(proofs, fmt.Sprintf("%s(%s)", r.Code, r.ProofRules.RawSummary))
+			}
+		}
+		guide := "逐条列明满足商务评分项的资质、业绩、人员与认证证明材料及其在投标文件中的位置，材料从企业资信库选取，不得编造。"
+		if len(proofs) > 0 {
+			guide += " 证明细则：" + strings.Join(proofs, "；") + "。"
+		}
+		if len(passedVetoes) > 0 {
+			guide += fmt.Sprintf(" 同时与 %d 项已核对通过的资格/符合性审查项证明位置保持一致。", len(passedVetoes))
 		}
 		out = append(out, SectionInput{Code: fmt.Sprint(n), Title: "商务评分项响应（资信与证明材料）", Level: 1, RequirementIDs: ids,
-			DependsOn: []string{"1"}, TargetWords: 800,
-			WritingGuide: "逐条列明满足商务评分项的资质、业绩、人员与认证证明材料及其在投标文件中的位置，材料从企业资信库选取，不得编造。"})
+			DependsOn: []string{"1"}, TargetWords: 800, WritingGuide: guide})
 	}
 	for _, g := range []struct{ cat, title, guide string }{
 		{ReqMandatoryClause, "★ 实质性条款逐条响应", "逐条对应 ★/▲/废标条款给出明确响应与证明材料索引，不得遗漏或模糊表述。"},
@@ -1039,6 +1130,30 @@ func checkOutlineReadyTx(ctx context.Context, tx *sql.Tx, tenant string, o *Prop
 	}
 	if n == 0 {
 		return fmt.Errorf("%w: outline has no sections", ErrInvalidOutline)
+	}
+	srows, err := tx.QueryContext(ctx, `SELECT DISTINCT r.code FROM proposal_section_requirements m
+		JOIN proposal_sections s ON s.tenant_id = m.tenant_id AND s.id = m.section_id
+		JOIN requirement_items r ON r.tenant_id = m.tenant_id AND r.id = m.requirement_id
+		WHERE m.tenant_id = $1 AND s.outline_id = $2 AND (r.superseded_by_id IS NOT NULL OR r.review_status = 'stale')
+		ORDER BY r.code`, tenant, o.ID)
+	if err != nil {
+		return err
+	}
+	var staleCodes []string
+	for srows.Next() {
+		var code string
+		if err := srows.Scan(&code); err != nil {
+			srows.Close()
+			return err
+		}
+		staleCodes = append(staleCodes, code)
+	}
+	srows.Close()
+	if err := srows.Err(); err != nil {
+		return err
+	}
+	if len(staleCodes) > 0 {
+		return fmt.Errorf("%w: outline still maps superseded requirement(s) (%s)", ErrOutlineIncomplete, strings.Join(staleCodes, ", "))
 	}
 	cov, err := outlineCoverageTx(ctx, tx, tenant, o.TaskID, o.ID)
 	if err != nil {
@@ -1244,6 +1359,8 @@ type SaveRevisionInput struct {
 	SummaryNote           string        `json:"summary_note"`
 	DiffSummary           string        `json:"diff_summary"`
 	EvidenceIDs           []int64       `json:"evidence_ids"`
+	CommitmentIDs         []int64       `json:"commitment_ids"`
+	AdmissibilityItemIDs  []int64       `json:"admissibility_item_ids"`
 	Gaps                  []RevisionGap `json:"gaps"`
 	LeaseToken            int64         `json:"lease_token"`
 }
@@ -1258,12 +1375,20 @@ type SaveRevisionResult struct {
 
 func insertRevisionTx(ctx context.Context, tx *sql.Tx, tenant string, s *ProposalSection, in SaveRevisionInput, rollbackOf *int, gaps []RevisionGap, status, actor string) (*SectionRevision, error) {
 	raw, _ := json.Marshal(gaps)
-	return scanRevision(tx.QueryRowContext(ctx, `INSERT INTO section_revisions(tenant_id, task_id, section_id, rev_no, base_rev_no,
-		based_on_outline_version, source, rollback_of_rev_no, content_md, summary_note, diff_summary, evidence_ids, gaps, status, created_by, updated_by)
+	rev, err := scanRevision(tx.QueryRowContext(ctx, `INSERT INTO section_revisions(tenant_id, task_id, section_id, rev_no, base_rev_no,
+		based_on_outline_version, source, rollback_of_rev_no, content_md, summary_note, diff_summary, evidence_ids, commitment_ids, gaps,
+		status, created_by, updated_by)
 		VALUES ($1, $2, $3, (SELECT COALESCE(MAX(rev_no), 0) + 1 FROM section_revisions WHERE tenant_id = $1 AND section_id = $3),
-		        $4, $5, $6, $7, $8, $9, $10, $11::bigint[], $12::jsonb, $13, $14, $14)
+		        $4, $5, $6, $7, $8, $9, $10, $11::bigint[], $12::bigint[], $13::jsonb, $14, $15, $15)
 		RETURNING `+revisionCols, tenant, s.TaskID, s.ID, in.BaseRevNo, in.BasedOnOutlineVersion, in.Source, rollbackOf, in.ContentMD,
-		in.SummaryNote, in.DiffSummary, pgInt64Array(in.EvidenceIDs), string(raw), status, actor))
+		in.SummaryNote, in.DiffSummary, pgInt64Array(in.EvidenceIDs), pgInt64Array(in.CommitmentIDs), string(raw), status, actor))
+	if err != nil {
+		return nil, err
+	}
+	if err := insertSectionRevisionEvidenceTx(ctx, tx, tenant, s.TaskID, rev.ID, in.AdmissibilityItemIDs, actor); err != nil {
+		return nil, err
+	}
+	return rev, nil
 }
 
 func sectionByIDTx(ctx context.Context, q queryer, tenant string, id int64) (*ProposalSection, error) {
@@ -1285,6 +1410,8 @@ func (d *DB) SaveSectionRevision(ctx context.Context, tenant, actor string, in S
 		return nil, fmt.Errorf("%w: content_md is empty", ErrInvalidRevision)
 	}
 	in.EvidenceIDs = uniqueIDs(in.EvidenceIDs)
+	in.CommitmentIDs = uniqueIDs(in.CommitmentIDs)
+	in.AdmissibilityItemIDs = uniqueIDs(in.AdmissibilityItemIDs)
 	var out *SaveRevisionResult
 	err := d.InTx(ctx, func(tx *sql.Tx) error {
 		s, outlineStatus, approved, err := sectionGateTx(ctx, tx, tenant, in.TaskID, in.SectionID)
@@ -1293,6 +1420,12 @@ func (d *DB) SaveSectionRevision(ctx context.Context, tenant, actor string, in S
 		}
 		if outlineStatus == OutlineDraft || outlineStatus == OutlinePending {
 			return fmt.Errorf("%w: outline v%d is %s", ErrOutlineNotApproved, s.OutlineVersion, outlineStatus)
+		}
+		if _, err := validateCommitmentRefsTx(ctx, tx, tenant, in.TaskID, in.CommitmentIDs, in.ContentMD); err != nil {
+			return err
+		}
+		if _, err := validateAdmissibilityRefsTx(ctx, tx, tenant, in.TaskID, in.AdmissibilityItemIDs); err != nil {
+			return err
 		}
 		states, err := evidenceStatesTx(ctx, tx, tenant, in.TaskID, in.EvidenceIDs)
 		if err != nil {
@@ -1398,6 +1531,16 @@ func (d *DB) ApproveSectionRevision(ctx context.Context, tenant string, taskID, 
 		if rev.Status != RevDraft && rev.Status != RevReviewing && rev.Status != RevApproved {
 			return fmt.Errorf("%w: revision status is %s", ErrEvidenceInvalid, rev.Status)
 		}
+		if _, err := validateCommitmentRefsTx(ctx, tx, tenant, taskID, rev.CommitmentIDs, rev.ContentMD); err != nil {
+			return err
+		}
+		linkedItems, err := linkedAdmissibilityItemIDsTx(ctx, tx, tenant, rev.ID)
+		if err != nil {
+			return err
+		}
+		if _, err := validateAdmissibilityRefsTx(ctx, tx, tenant, taskID, linkedItems); err != nil {
+			return err
+		}
 		states, err := evidenceStatesTx(ctx, tx, tenant, taskID, rev.EvidenceIDs)
 		if err != nil {
 			return err
@@ -1470,9 +1613,24 @@ func (d *DB) RollbackSectionRevision(ctx context.Context, tenant string, taskID,
 			}
 		}
 		gaps := mergeGaps(userGaps, append(auto, dropped...))
+		commitIDs, droppedCommits, err := currentCommitmentIDsTx(ctx, tx, tenant, taskID, target.CommitmentIDs)
+		if err != nil {
+			return err
+		}
+		for _, id := range droppedCommits {
+			gaps = append(gaps, RevisionGap{Kind: "commitment_stale", Note: fmt.Sprintf("commitment %d is not confirmed; removed on rollback", id)})
+		}
+		itemIDs, droppedItems, err := currentAdmissibilityItemIDsTx(ctx, tx, tenant, taskID, target.ID)
+		if err != nil {
+			return err
+		}
+		for _, id := range droppedItems {
+			gaps = append(gaps, RevisionGap{Kind: "admissibility_stale", Note: fmt.Sprintf("admissibility item %d is not current admissible; removed on rollback", id)})
+		}
 		in := SaveRevisionInput{TaskID: taskID, SectionID: s.ID, BaseRevNo: s.CurrentRevNo, BasedOnOutlineVersion: approved.Version,
 			Source: RevRollback, ContentMD: target.ContentMD, SummaryNote: target.SummaryNote,
-			DiffSummary: fmt.Sprintf("回滚至 rev %d", targetRevNo), EvidenceIDs: uniqueIDs(keep)}
+			DiffSummary: fmt.Sprintf("回滚至 rev %d", targetRevNo), EvidenceIDs: uniqueIDs(keep),
+			CommitmentIDs: commitIDs, AdmissibilityItemIDs: itemIDs}
 		rb := targetRevNo
 		rev, err := insertRevisionTx(ctx, tx, tenant, s, in, &rb, gaps, RevDraft, actor)
 		if err != nil {

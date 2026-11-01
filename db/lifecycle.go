@@ -38,14 +38,19 @@ func (d *DB) SetTaskStatusGuarded(ctx context.Context, id int64, status string) 
 
 // SetTaskPaused 写暂停标记，并在 running/paused 之间同步状态（终态不受影响）。
 func (d *DB) SetTaskPaused(ctx context.Context, id int64, paused bool) error {
-	_, err := d.ExecContext(ctx, `UPDATE tasks
+	return d.Transaction(ctx, func(tx *DB) error {
+		_, err := tx.ExecContext(ctx, `UPDATE tasks
 		SET paused = $1,
 		    status = CASE
 		        WHEN $1 AND status IN ('created','running') THEN 'paused'
 		        WHEN NOT $1 AND status = 'paused' THEN 'running'
 		        ELSE status END
 		WHERE id = $2`, paused, id)
-	return err
+		if err == nil && paused {
+			_, err = tx.ExecContext(ctx, `UPDATE fixed_file_jobs SET status='cancelled',error='项目已暂停',lease_token=lease_token+1,lease_until=NULL,updated_by='task-pause',updated_at=now() WHERE task_id=$1 AND status IN ('queued','running')`, id)
+		}
+		return err
+	})
 }
 
 // ApplyTaskAdmission 将任务从 expected 迁到 running 并清暂停标记（创建、恢复、终态复活）。

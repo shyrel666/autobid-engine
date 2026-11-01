@@ -60,14 +60,14 @@ func drain(seq iter.Seq2[llm.StreamEvent, error]) (n int, err error) {
 	return n, nil
 }
 
-func TestStreamFailsOverOnlyBeforeAnyEvent(t *testing.T) {
+func TestStreamFailsOverOnlyBeforeCommittedOutput(t *testing.T) {
 	bad, good := &fake{err: e503}, &fake{events: []llm.StreamEvent{meta}}
 	pool := New([]*Member{member(1, 0, bad), member(2, 1, good)}, nil)
 	if n, err := drain(pool.Stream(context.Background(), llm.CompletionRequest{})); err != nil || n != 1 || good.calls.Load() != 1 {
 		t.Fatalf("failover before emit: n=%d err=%v", n, err)
 	}
 
-	emitted := &fake{events: []llm.StreamEvent{meta}, err: e503}
+	emitted := &fake{events: []llm.StreamEvent{meta, {Type: llm.SETextDelta, Text: "committed"}}, err: e503}
 	other := &fake{events: []llm.StreamEvent{meta}}
 	pool = New([]*Member{member(3, 0, emitted), member(4, 1, other)}, nil)
 	if _, err := drain(pool.Stream(context.Background(), llm.CompletionRequest{})); err == nil || other.calls.Load() != 0 {

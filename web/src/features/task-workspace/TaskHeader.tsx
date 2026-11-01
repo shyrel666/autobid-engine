@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ChevronDown, PanelLeft } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Brain, ChevronDown, PanelLeft } from 'lucide-react'
 import { api, errorText } from '../../api/client'
-import type { Task, TaskView } from '../../api/types'
+import type { LLMChain, LLMProfile, Task, TaskView } from '../../api/types'
 import { Badge, Button, Field, IconButton, Input, Menu, Modal, cx, statusTone, useToast } from '../../components/ui'
 import { useShell } from '../../components/layout/AppShell'
+import { TaskLLMProfileChain } from '../models/TaskLLMProfileChain'
 import { fmtBeijing, manifestStatusLabel, taskStatusLabel } from '../../lib/format'
 import { linkProps } from '../../lib/router'
 import { TASK_NAV, navGroupOf, taskUrl } from '../../lib/routes'
@@ -18,6 +19,150 @@ export function RunStatusBadge({ task }: { task: Pick<Task, 'status' | 'paused' 
       {paused && <Badge dot tone="amber">已暂停</Badge>}
       {task.queued && <Badge>排队</Badge>}
     </span>
+  )
+}
+
+/** 顶栏任务级 LLM 配置链快速查看与切换气泡窗（对标 TaskLLMControl）。 */
+function TaskLLMControl({ task }: { task: TaskView }) {
+  const toast = useToast()
+  const { taskId, invalidate } = useTaskWorkspace()
+  const [open, setOpen] = useState(false)
+  const [chainData, setChainData] = useState<LLMChain | null>(null)
+  const [profiles, setProfiles] = useState<LLMProfile[]>([])
+  const [profileIDs, setProfileIDs] = useState<number[]>([])
+  const [activeProfileID, setActiveProfileID] = useState<number>(0)
+  const [saving, setSaving] = useState(false)
+  const popRef = useRef<HTMLDivElement>(null)
+
+  const loadState = async () => {
+    try {
+      const [c, ps] = await Promise.all([api.llmChain(taskId), api.listProfiles()])
+      setChainData(c)
+      setProfiles(ps ?? [])
+      const ids = (c?.chain ?? []).map((x) => x.profile_id)
+      setProfileIDs(ids)
+      setActiveProfileID(c?.active_profile_id ?? ids[0] ?? 0)
+    } catch {
+      /* 静默容错，打开弹窗时可重试 */
+    }
+  }
+
+  useEffect(() => {
+    void loadState()
+  }, [taskId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey) }
+  }, [open])
+
+  const chainIDs = (chainData?.chain ?? []).map((x) => x.profile_id)
+  const exhausted = chainData?.failover_state === 'exhausted' || (chainIDs.length > 0 && (chainData?.chain ?? []).every((x) => x.status === 'quota_exhausted'))
+  const terminal = ['done', 'failed', 'timeout'].includes(task.status)
+  const activeID = exhausted ? 0 : (chainData?.active_profile_id ?? chainIDs[0] ?? 0)
+  const activeProfile = profiles.find((p) => p.id === activeID)
+  const currentLabel = exhausted
+    ? '配额链已耗尽'
+    : activeProfile?.name ?? (activeID ? `配置 #${activeID}` : '默认模型池')
+  const activeIdx = chainIDs.indexOf(activeID)
+  const backupCount = activeIdx >= 0 ? Math.max(0, chainIDs.length - activeIdx - 1) : 0
+  const currentTitle = [currentLabel, activeProfile?.model, backupCount > 0 ? `${backupCount} 个备用` : ''].filter(Boolean).join(' · ')
+
+  const toggleOpen = () => {
+    const next = !open
+    setOpen(next)
+    if (next) void loadState()
+  }
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const res = await api.setLLMChain(taskId, profileIDs, activeProfileID || undefined)
+      setChainData(res)
+      toast(
+        'ok',
+        res.reopened_intents && res.reopened_intents > 0
+          ? `LLM 配置链已更新，并恢复 ${res.reopened_intents} 条配额阻塞意图`
+          : 'LLM 配置链已更新',
+      )
+      setOpen(false)
+      invalidate(['task', 'overview'])
+    } catch (e) {
+      toast('error', errorText(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div ref={popRef} className="relative">
+      <button
+        type="button"
+        aria-label="查看或切换任务 LLM 配置"
+        title={currentTitle}
+        onClick={toggleOpen}
+        className={cx(
+          'inline-flex h-7 items-center gap-1.5 rounded-lg border px-2 text-[13px] font-medium transition-colors',
+          exhausted
+            ? 'border-danger/50 bg-[#fef2f2] text-danger hover:bg-[#fee2e2]'
+            : 'border-line bg-panel text-fg hover:bg-soft',
+        )}
+      >
+        <Brain className="size-3.5 shrink-0" aria-hidden />
+        <span className="hidden max-w-32 truncate lg:inline">{currentLabel}</span>
+        {backupCount > 0 && <span className="hidden text-xs text-muted xl:inline">+{backupCount}</span>}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-50 mt-1.5 w-[min(26rem,calc(100vw-2rem))] rounded-[12px] border border-line bg-panel p-4 shadow-xl">
+          <div className="mb-3">
+            <div className="text-sm font-semibold">任务 LLM 配置链</div>
+            <p className="mt-0.5 text-xs text-muted">
+              {terminal
+                ? '项目已结束，改动将作用于后续主 Agent 对话与复核。'
+                : '调整顺序或当前配置游标后，将从下一次模型调用开始生效。'}
+            </p>
+          </div>
+
+          {exhausted && (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-danger/30 bg-[#fef2f2] p-2.5 text-xs text-danger">
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
+              <div>
+                <div className="font-semibold">配置链配额已耗尽</div>
+                <div className="mt-0.5">{chainData?.failover_reason || '所有已选模型配置均被判定为额度不足。保存配置链可重置故障状态并恢复阻塞意图。'}</div>
+              </div>
+            </div>
+          )}
+
+          <TaskLLMProfileChain
+            profiles={profiles}
+            value={profileIDs}
+            onValueChange={(next) => {
+              setProfileIDs(next)
+              setActiveProfileID((cur) => (next.includes(cur) ? cur : (next[0] ?? 0)))
+            }}
+            activeProfileId={activeProfileID}
+            onActiveProfileChange={setActiveProfileID}
+            chainEntries={chainData?.chain}
+            disabled={saving}
+            inputId="header-task-llm-profiles"
+          />
+
+          <div className="mt-3 flex justify-end gap-2 border-t border-line pt-3">
+            <Button size="sm" onClick={() => setOpen(false)}>关闭</Button>
+            <Button size="sm" variant="primary" loading={saving} onClick={save}>
+              {exhausted ? '保存并重置' : '保存'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -128,6 +273,7 @@ export default function TaskHeader({ page }: { page: TaskPage }) {
         {t && <RunStatusBadge task={t} />}
         {t?.settling && <Badge tone="purple">收尾中</Badge>}
         <span className="flex-1" />
+        {t && <TaskLLMControl task={t} />}
         {t && <ExecutionMenu task={t} />}
       </div>
       <p className="text-xs leading-4 text-muted">
@@ -142,7 +288,7 @@ export default function TaskHeader({ page }: { page: TaskPage }) {
             const to = on ? taskUrl(taskId, g.pages[0].page) : lastInGroup.get(g.key) ?? taskUrl(taskId, g.pages[0].page)
             return (
               <a key={g.key} {...linkProps(on && g.pages.length === 1 ? taskUrl(taskId, page) : to)} aria-current={on ? 'page' : undefined}
-                className={cx('rounded-lg px-2 text-sm leading-6 font-medium', on ? 'bg-panel text-fg shadow-[0_1px_2px_#00000015]' : 'text-muted hover:text-fg')}>
+                className={cx('inline-flex items-center rounded-lg px-2 text-sm leading-6 font-medium max-md:px-1.5', on ? 'bg-panel text-fg shadow-[0_1px_2px_#00000015]' : 'text-muted hover:text-fg')}>
                 {g.label}
               </a>
             )
@@ -151,7 +297,7 @@ export default function TaskHeader({ page }: { page: TaskPage }) {
       </div>
       {group.pages.length > 1 ? (
         <div ref={secondaryRef} className="scrollbar-none overflow-x-auto">
-          <nav aria-label={`${group.label}页面`} className="flex h-8 gap-4 whitespace-nowrap">
+          <nav aria-label={`${group.label}页面`} className="flex h-8 gap-4 whitespace-nowrap max-md:gap-3.5">
             {group.pages.map((p) => (
               <a key={p.page} {...linkProps(taskUrl(taskId, p.page))} aria-current={p.page === page ? 'page' : undefined}
                 className={cx('flex items-center border-b-2 text-xs font-medium', p.page === page ? 'border-fg text-fg' : 'border-transparent text-muted hover:text-fg')}>

@@ -12,11 +12,18 @@ export function blockerLink(taskId: number, b: ExportBlocker): BlockerLink | nul
   const req = pos(b.requirement_item_id)
   const sec = pos(b.section_id)
   switch (b.kind) {
+    case 'required_material_incomplete':
+      return { href: taskUrl(taskId, 'documents'), label: '去补齐必需材料' }
     case 'no_approved_outline':
       return { href: taskUrl(taskId, 'outline'), label: '去审批大纲' }
     case 'requirements_not_confirmed':
       return { href: taskUrl(taskId, 'requirements'), label: '去确认要求清单' }
+    case 'requirements_source_changed':
+      return { href: taskUrl(taskId, 'requirements'), label: '去重新提取要求' }
+    case 'no_bid_decision':
+      return { href: taskUrl(taskId, 'requirements'), label: '去修改投标决策' }
     case 'requirement_unmapped':
+    case 'requirement_superseded':
       return { href: taskUrl(taskId, 'outline', { query: { requirement: req } }), label: '去调整大纲映射' }
     case 'veto_pending':
     case 'veto_failed':

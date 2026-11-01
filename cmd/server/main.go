@@ -9,10 +9,12 @@
 //	AUTOBID_RECORD_BODIES  为 1/true 时录制 LLM 原始请求/响应正文（不含请求头）
 //	AUTOBID_WEB_DIR        前端工作台构建产物目录，默认 web/dist；目录内无 index.html 时不托管
 //	AUTOBID_EXPORT_DIR     图表渲染产物、上传模板与导出成稿目录，默认 data/exports（按租户 / 任务隔离，已加入 .gitignore）
+//	AUTOBID_FILE_PROCESSING_ENABLED 为 1/true 时启用招标原件留存（F1 固定处理）；默认关闭
+//	AUTOBID_FILEWORK_DIR   原件内容寻址存储目录，默认 data/filework（已加入 .gitignore）
 //	AUTOBID_SOFFICE_PATH   LibreOffice soffice 路径；未设置时依次查 PATH 与 F:\LibreOffice\program\soffice.exe
 //	AUTOBID_SOFFICE_CONCURRENCY / AUTOBID_SOFFICE_TIMEOUT_SECONDS  LibreOffice 并发上限（默认 2）与单次超时（默认 180）
 //	AUTOBID_MMDC_PATH      mermaid-cli（mmdc）路径；未设置时查 PATH，均不可用时图表为 unrendered
-//	模型密钥按各 Profile 的 api_key_env 从环境变量读取。
+//	模型密钥优先使用 Profile 加密保存的 Key，否则按 api_key_env 读取环境变量。
 package main
 
 import (
@@ -33,6 +35,7 @@ import (
 
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/export"
+	"github.com/autobid/autobid-engine/filework"
 	"github.com/autobid/autobid-engine/guard"
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
@@ -176,8 +179,55 @@ func run(logger *slog.Logger) error {
 			hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "export", Kind: "state", At: time.Now(), Summary: summary})
 		}}
 	runner.Start(engineCtx)
+	var fileStore *filework.Store
+	if envBool("AUTOBID_FILE_PROCESSING_ENABLED") {
+		dir := os.Getenv("AUTOBID_FILEWORK_DIR")
+		if dir == "" {
+			dir = filework.DefaultDir
+		}
+		fs, err := filework.NewStore(pg, dir)
+		if err != nil {
+			logger.Warn("file processing disabled: filework store unavailable", "err", err)
+		} else {
+			fileStore = fs
+			logger.Info("file processing enabled", "dir", fs.Root())
+			// 延迟 GC：只清理 24 小时前、且没有任何 task_file_objects 行引用的孤立对象。
+			go func() {
+				prune := func() {
+					n, err := fs.Cleanup(engineCtx, db.DefaultTenant, time.Now().Add(-24*time.Hour))
+					if err != nil {
+						logger.Warn("filework cleanup failed", "err", err)
+					} else if n > 0 {
+						logger.Info("filework orphan objects removed", "count", n)
+					}
+				}
+				prune()
+				ticker := time.NewTicker(6 * time.Hour)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-engineCtx.Done():
+						return
+					case <-ticker.C:
+						prune()
+					}
+				}
+			}()
+		}
+	}
+	var fileRunner *filework.Runner
+	fileRunnerDone := make(chan struct{})
+	if fileStore != nil {
+		fileRunner = &filework.Runner{Processor: &filework.Processor{DB: pg, Store: fileStore, OCR: ocr}, Owner: fmt.Sprintf("%s/%d/files", hostname, os.Getpid()), Workers: envInt("AUTOBID_FILE_WORKERS", 2),
+			OnChange: func(j *db.FixedFileJob) {
+				hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "file-processing", Kind: "state", At: time.Now(), Summary: fmt.Sprintf("材料处理 #%d：%s", j.ID, j.Status)})
+			}}
+		go func() { defer close(fileRunnerDone); fileRunner.Run(engineCtx) }()
+	} else {
+		close(fileRunnerDone)
+	}
 	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
-		Retrieval: retriever, Export: exporter, ExportRunner: runner})
+		Retrieval: retriever, Export: exporter, ExportRunner: runner, FileStore: fileStore, FileRunner: fileRunner})
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),
@@ -212,6 +262,12 @@ func run(logger *slog.Logger) error {
 		logger.Warn("http shutdown", "err", err)
 	}
 	e.StopAll()
+	cancelEngine()
+	select {
+	case <-fileRunnerDone:
+	case <-shutdownCtx.Done():
+		logger.Warn("fixed file workers still stopping; leases will recover on restart")
+	}
 	logger.Info("stopped")
 	return nil
 }

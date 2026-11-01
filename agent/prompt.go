@@ -16,7 +16,8 @@ const plannerBase = `你是企业投标推演引擎的 Planner。你面对的是
 
 工作方式：
 - 推演图由 Goal（任务目标）、Intent（可执行的核验方向）、Fact（核验过程事实）、Finding（经确认的合规/投策结论）组成，静态要素（条款、资质要求、评分项、商务标的）在共享实体图中，用 asset id 锚定。
-- 你不亲自阅读文件或核验，只负责投放方向：每个 add_intent 必须是一个 Worker 能在一次会话内完成的有界任务，并写清验证对象与产出期望；尽量用 parents 指向它所依赖的已有事实。
+- 你不亲自阅读文件或核验，只负责投放方向：每个 add_intent 必须是一个 Worker 能在一次会话内完成的有界任务，并写清验证对象与产出期望；尽量用 parents 指向它所依赖的已有事实，并通过 mandate（allowed_section_ids / allowed_requirement_ids / target_words_min / target_words_max / max_tool_calls / require_writeback）设定硬件执行边界。
+- 收到新上传或修订的招标文件时，可先调用 decompose_rfp_goals 一键拆解评分标准、否决项、★技术偏离要求并初始化四大图谱 Goal 根节点与目录大纲草案。
 - 先看触发事件与态势，再决定：投放新方向、用 kill_work 止损跑偏的工作、用 steer_work 纠偏，或在证据充分时 prove_goal。
 - 不要重复投放与 open/running 意图等价的方向。尚不能投放的后续步骤用 TodoWrite 记下，下一轮会带回给你。
 - 人工补充（hints）处理完后用 consume_hint 标记；招标文件揭示出需要单独核验的新目标时用 add_goal。
@@ -32,7 +33,7 @@ const workerBase = `你是企业投标推演引擎的 Worker（%s）。你只负
 工作方式：
 - 先用 graph_overview / list_assets / node_detail 了解已有事实与招标要素，避免重复劳动。
 - 招标原文用 document_outline / search_document / read_chunk 精读；引用原文时把 read_chunk 返回的 source_ref 原样写入 insert_assets、record_fact 的 source_ref 或 report_finding 的 source_refs。
-- 需要专业核验（资格比对、评分模拟、报价验算）时先调用 Skill 加载对应技能，再按技能说明使用其解锁的工具。
+- 需要专业核验或标书编审（资格比对 qualification-audit、评分模拟 scoring-simulation、报价验算 commercial-pricing、知识库复用与证据核验 knowledge-reuse、技术标章节写作 proposal-writing、技术标正文审查 proposal-review）时，先调用 Skill 加载对应技能，再用 SearchExtraTools("select:<tool>") 获取解锁工具的 Schema 并直接调用该工具。
 - 识别出的新招标要素用 insert_assets 写入（会自动锚定到当前意图），要素关系用 link_assets 写入。
 - 每个核实的事实（包括“不满足”“未找到”这类否定结论）都用 record_fact 记录，并锚定相关要素。
 - 能形成可交付结论（废标风险、合规缺口、得分策略、报价建议）时，用 report_finding 报告，并把支撑它的事实作为 evidence。
@@ -77,6 +78,27 @@ func workerSystem(name string, intent *db.Node, deferredBlock string) string {
 	if len(intent.Anchors) > 0 {
 		fmt.Fprintf(&b, "- 相关要素 asset_id: %v\n", intent.Anchors)
 	}
+	if m := db.NodeMandate(intent); m != nil {
+		b.WriteString("\n## 执行边界（Mandate 硬约束）\n")
+		if len(m.AllowedSectionIDs) > 0 {
+			fmt.Fprintf(&b, "- 允许修改章节 section_id 白名单: %v（越界写回将被硬件门禁拦截）\n", m.AllowedSectionIDs)
+		}
+		if len(m.AllowedRequirementIDs) > 0 {
+			fmt.Fprintf(&b, "- 允许绑定要求 requirement_id 白名单: %v\n", m.AllowedRequirementIDs)
+		}
+		if m.TargetWordsMin > 0 || m.TargetWordsMax > 0 {
+			fmt.Fprintf(&b, "- 章节正文字数/字符区间要求: [%d, %d]\n", m.TargetWordsMin, m.TargetWordsMax)
+		}
+		if m.MaxToolCalls > 0 {
+			fmt.Fprintf(&b, "- 最大工具调用次数上限: %d\n", m.MaxToolCalls)
+		}
+		if len(m.ForbiddenTools) > 0 {
+			fmt.Fprintf(&b, "- 禁用工具列表: %v\n", m.ForbiddenTools)
+		}
+		if m.RequireWriteback {
+			b.WriteString("- 完结约束: 结束前必须至少成功调用一次推演图或标书域写回工具\n")
+		}
+	}
 	return b.String()
 }
 
@@ -99,6 +121,8 @@ const (
 	TriggerHintAdded   = "hint_added"
 	TriggerLeaseReaped = "lease_reaped"
 	TriggerWorkStopped = "work_stopped"
+	// TriggerWatchdogAlert：在途 Worker 因死循环、连续报错或长回合零产出被独立 Watchdog 熔断。
+	TriggerWatchdogAlert = "watchdog_alert"
 	// TriggerDocumentAdded：上传了新的招标文档；Summary 为文档说明，Detail 为切分统计。
 	TriggerDocumentAdded = "document_added"
 )
@@ -129,6 +153,8 @@ func renderPlannerInput(goal string, triggers []TriggerEvent, outcomes map[int64
 				fmt.Fprintf(&b, "- 新增目标：%s\n", strings.Join(t.Goals, "；"))
 			case TriggerHintAdded:
 				fmt.Fprintf(&b, "- 人工补充信息：%s\n", strings.Join(t.Hints, "；"))
+			case TriggerWatchdogAlert:
+				fmt.Fprintf(&b, "- 【Watchdog 熔断告警】意图 #%d 因执行偏离或死循环被强制中止：%s。请审查原因，必要时缩小 mandate 范围或拆分后重新投放。\n", t.IntentID, t.Detail)
 			case TriggerDocumentAdded:
 				fmt.Fprintf(&b, "- 新上传招标文档：%s（%s）。Worker 可用 document_outline / search_document / read_chunk 精读，请据此投放要素提取与核验方向。\n", t.Summary, t.Detail)
 			default:

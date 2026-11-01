@@ -64,9 +64,17 @@ const routes: [RegExp, (m: RegExpMatchArray) => unknown][] = [
   }],
   [/^\/api\/tasks\/\d+\/charts/, () => ({ charts: [], renderer: { renderer: false, office: true } })],
   [/^\/api\/intercepts/, () => [{ id: 1, task_id: 101, intent_id: 202, agent_name: 'worker-2', tool_name: 'read_chunk', tool_input: {}, message: '', status: 'pending', created_at: created, waiter_until: created }]],
+  [/^\/api\/intercept\/rules$/, () => []],
+  [/^\/api\/intercept\/config$/, () => ({ enabled_tools: ['Bash', 'verify_commercial_bid'], default_tools: ['Bash', 'verify_commercial_bid'], judge: { enabled: false, profile_id: 0, prompt: '', timeout_seconds: 15, fail_action: 'allow', ask_timeout_seconds: 300, ask_timeout_action: 'deny' }, default_prompt: '', judge_usage: { calls: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, daily: [] } })],
+  [/^\/api\/intercept\/approvals/, () => ({ items: [], total: 0 })],
   [/^\/api\/llm\/health$/, () => []],
   [/^\/api\/llm\/profiles$/, () => profiles],
+  [/^\/api\/tasks\/\d+\/llm-chain$/, () => ({ chain: [], active_profile_id: null, revision: 0 })],
+  [/^\/api\/tasks\/\d+\/llm-usage$/, () => []],
+  [/^\/api\/tasks\/\d+\/graph$/, () => ({ nodes: [], edges: [] })],
   [/^\/api\/tasks\/\d+\/retrieval-runs$/, () => []],
+  [/^\/api\/llm\/records$/, () => []],
+  [/^\/api\/system\/catalog$/, () => ({ skills: [], tools: [], agents: [] })],
 ]
 
 const realFetch = window.fetch.bind(window)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,20 +16,21 @@ import (
 )
 
 type Config struct {
-	Workers             int           // 每任务 Worker 槽数，默认 3
-	Debounce            time.Duration // Planner 固定合并窗口，默认 800ms
-	WorkerIdlePoll      time.Duration // 无可领工作时的轮询间隔，默认 800ms
-	FrontierBatch       int           // 每次领取尝试的候选数，默认 20
-	LeaseTTL            time.Duration // Intent 租约，默认 db.DefaultIntentLeaseTTL
-	ModelErrorRetries   int           // 会话级 model_error 续跑次数，默认 2；负数关闭
-	ModelErrorBackoff   time.Duration // 默认 3s
-	EmptyTurnNudgeLimit int           // 空转轻推上限，0 取默认 2，负数关闭
-	SettleDrainGrace    time.Duration // 任务超时后等待在途工作自行收尾的上限，默认 90s
-	SettleCancelWait    time.Duration // drain 超时强制取消后的落库缓冲，默认 3s
-	DeadlinePoll        time.Duration // 截止协调器轮询，默认 2s
-	DeadlineMaxSleep    time.Duration // 截止协调器单次最长睡眠，默认 30s
-	WorkControlWait     time.Duration // ControlWork 等待终态落库的上限，默认 30s
-	MinPlanHeartbeat    time.Duration // Planner 心跳下限/默认，默认 600s
+	Workers             int            // 每任务 Worker 槽数，默认 3
+	Debounce            time.Duration  // Planner 固定合并窗口，默认 800ms
+	WorkerIdlePoll      time.Duration  // 无可领工作时的轮询间隔，默认 800ms
+	FrontierBatch       int            // 每次领取尝试的候选数，默认 20
+	LeaseTTL            time.Duration  // Intent 租约，默认 db.DefaultIntentLeaseTTL
+	ModelErrorRetries   int            // 会话级 model_error 续跑次数，默认 2；负数关闭
+	ModelErrorBackoff   time.Duration  // 默认 3s
+	EmptyTurnNudgeLimit int            // 空转轻推上限，0 取默认 2，负数关闭
+	SettleDrainGrace    time.Duration  // 任务超时后等待在途工作自行收尾的上限，默认 90s
+	SettleCancelWait    time.Duration  // drain 超时强制取消后的落库缓冲，默认 3s
+	DeadlinePoll        time.Duration  // 截止协调器轮询，默认 2s
+	DeadlineMaxSleep    time.Duration  // 截止协调器单次最长睡眠，默认 30s
+	WorkControlWait     time.Duration  // ControlWork 等待终态落库的上限，默认 30s
+	MinPlanHeartbeat    time.Duration  // Planner 心跳下限/默认，默认 600s
+	Watchdog            WatchdogConfig // 独立 Watchdog 跑偏检测与自动纠偏/熔断配置
 	OnActivity          func(db.Activity)
 }
 
@@ -57,6 +59,7 @@ func (c *Config) defaults() {
 	set(&c.DeadlineMaxSleep, 30*time.Second)
 	set(&c.WorkControlWait, 30*time.Second)
 	set(&c.MinPlanHeartbeat, db.MinPlanHeartbeatSeconds*time.Second)
+	c.Watchdog.defaults()
 }
 
 // Resolver 返回任务当前可用的 Planner / Worker；LLM 未就绪时返回 nil，循环会等待。
@@ -97,16 +100,18 @@ type taskRuntime struct {
 }
 
 type workExecution struct {
-	cancel context.CancelCauseFunc
-	done   chan error // 容量 1；完成方发送一次结果，不 close
-	action string
+	cancel  context.CancelCauseFunc
+	done    chan error // 容量 1；完成方发送一次结果，不 close
+	action  string
+	taskID  int64
+	anchors []int64
 }
 
 var errWorkControlConflict = errors.New("server: work is not running or already under control")
 
 func NewEngine(m *Manager, resolve Resolver, cfg Config) *Engine {
 	cfg.defaults()
-	return &Engine{
+	e := &Engine{
 		m:          m,
 		cfg:        cfg,
 		resolve:    resolve,
@@ -116,6 +121,10 @@ func NewEngine(m *Manager, resolve Resolver, cfg Config) *Engine {
 		work:       map[int64]*workExecution{},
 		steerBox:   map[int64][]string{},
 	}
+	if m != nil {
+		m.passthroughHint = e.RouteHintToRunningWork
+	}
+	return e
 }
 
 func (e *Engine) emit(t *Task, a db.Activity) {
@@ -544,9 +553,14 @@ func (e *Engine) claimNext(ctx context.Context, t *Task, name string) (*db.Node,
 // runIntent（骨架 1-B + Patch ④ fencing）
 // ---------------------------------------------------------------------------
 
-func (e *Engine) registerWork(intentID int64, cancel context.CancelCauseFunc) {
+func (e *Engine) registerWork(intentID int64, cancel context.CancelCauseFunc, taskID int64, anchors []int64) {
 	e.workMu.Lock()
-	e.work[intentID] = &workExecution{cancel: cancel, done: make(chan error, 1)}
+	e.work[intentID] = &workExecution{
+		cancel:  cancel,
+		done:    make(chan error, 1),
+		taskID:  taskID,
+		anchors: slices.Clone(anchors),
+	}
 	e.workMu.Unlock()
 }
 
@@ -650,6 +664,52 @@ func (e *Engine) drainSteer(intentID int64) (string, bool) {
 	return q[0], true
 }
 
+// RouteHintToRunningWork 将带 anchors 的人工补充信息（Hint）直通投递给锚定相同要素的在途 Worker（事件直通 Passthrough）。
+// 返回成功命中并排入 steerBox 的在途 intentID 列表；为空表示无匹配的在途 Worker。
+func (e *Engine) RouteHintToRunningWork(t *Task, hintID int64, text string, anchors []int64) []int64 {
+	if t == nil || len(anchors) == 0 {
+		return nil
+	}
+	anchorSet := make(map[int64]bool, len(anchors))
+	for _, a := range anchors {
+		anchorSet[a] = true
+	}
+	var matched []int64
+	e.workMu.Lock()
+	for iid, run := range e.work {
+		if run == nil || run.taskID != t.ID || run.action != "" {
+			continue
+		}
+		for _, a := range run.anchors {
+			if anchorSet[a] {
+				matched = append(matched, iid)
+				break
+			}
+		}
+	}
+	e.workMu.Unlock()
+	if len(matched) == 0 {
+		return nil
+	}
+	slices.Sort(matched)
+	msg := fmt.Sprintf("【人工实时补充 Hint #%d（事件直通）】%s", hintID, text)
+	var routed []int64
+	for _, iid := range matched {
+		if err := e.SteerWork(iid, msg); err == nil {
+			routed = append(routed, iid)
+			idCopy := iid
+			e.emit(t, db.Activity{
+				Worker:  "system",
+				Kind:    "passthrough",
+				NodeID:  &idCopy,
+				Summary: fmt.Sprintf("Hint #%d 已直通投递至在途意图 #%d", hintID, iid),
+				Detail:  text,
+			})
+		}
+	}
+	return routed
+}
+
 // 第 4 步 LLM 运行时的错误通过以下可选接口声明语义，引擎不依赖其具体类型。
 type taskLLMRuntimeError interface{ TaskLLMRuntimeError() bool }
 type chainExhaustedError interface{ ChainExhausted() bool }
@@ -713,7 +773,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	}
 
 	workCtx, workCancel := context.WithCancelCause(e.interceptCtx(ectx, t, intent.ID, name))
-	e.registerWork(intent.ID, workCancel)
+	e.registerWork(intent.ID, workCancel, t.ID, intent.Anchors)
 	// Patch ④：执行期间周期续租；租约丢失立即以 AbortLeaseLost 取消本次执行。
 	go t.Store.KeepIntentLease(workCtx, intent.ID, name, epoch, e.cfg.LeaseTTL, func(error) {
 		workCancel(agent.AbortLeaseLost)
@@ -721,14 +781,24 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 
 	iid := intent.ID
 	label := fmt.Sprintf("%s · #%d", name, iid)
+	emit := func(a db.Activity) { e.emit(t, a) }
+	watchdog := newWatchdogHooks(
+		t.Hooks,
+		iid,
+		name,
+		db.NodeMandate(intent),
+		e.cfg.Watchdog,
+		func(steerMsg string) { _ = e.SteerWork(iid, steerMsg) },
+		func(cause error) { workCancel(cause) },
+		emit,
+	)
 	hooks := &steerHooks{
-		inner:  t.Hooks,
+		inner:  watchdog,
 		drain:  func() (string, bool) { return e.drainSteer(iid) },
 		nudges: &atomic.Int64{}, // 建在重试循环外，跨 model_error 重试共享
 		limit:  e.emptyTurnNudgeLimit(),
 		label:  label,
 	}
-	emit := func(a db.Activity) { e.emit(t, a) }
 	runOnce := func() (harness.TerminalReason, agent.WriteCounts, error) {
 		if message != "" {
 			return worker.ExecuteWithMessage(workCtx, name, t.ID, t.Assets, t.Store, intent, hooks, emit, t.NotifyFinding, requestID, message)
@@ -737,10 +807,17 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	}
 
 	reason, _, err := runOnce()
-	for attempt := 1; attempt <= e.modelErrorRetries() &&
+	retries, backoff := e.modelErrorRetries(), e.cfg.ModelErrorBackoff
+	if policy, policyErr := e.m.DB().LLMSettings(workCtx); policyErr == nil {
+		retries = retryCount(policy.Retry.Intent, retries)
+		if policy.Retry.Intent.IntervalMS > 0 {
+			backoff = time.Duration(policy.Retry.Intent.IntervalMS) * time.Millisecond
+		}
+	}
+	for attempt := 1; attempt <= retries &&
 		retryableWorkerModelError(reason, err) &&
 		workCtx.Err() == nil && ectx.Err() == nil && !e.IsPaused(t.ID) && !e.isSettling(t.ID); attempt++ {
-		if sleepCtx(workCtx, e.cfg.ModelErrorBackoff) {
+		if sleepCtx(workCtx, backoff) {
 			break
 		}
 		message = "" // 续跑沿用同一 transcript
@@ -780,10 +857,14 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// [6] 任务已终态（如全部目标达成）-> stopped。
 	case ectx.Err() != nil && db.IsTerminalTaskStatus(t.lifecycleSnapshot().Status):
 		_ = e.transitionIntent(ctx, t, iid, epoch, from, db.StateIntentStopped)
-	// [7] 被 Planner kill（任务仍存活）-> stopped，并唤醒重规划。
+	// [7] 被 Planner kill 或被 Watchdog 熔断（任务仍存活）-> stopped，并唤醒重规划。
 	case killed:
 		_ = e.transitionIntent(ctx, t, iid, epoch, from, db.StateIntentStopped)
-		t.appendTrigger(agent.TriggerEvent{Kind: agent.TriggerWorkStopped, IntentID: iid, Detail: "killed"})
+		if errors.Is(workCause, agent.AbortKilledByWatchdog) {
+			t.appendTrigger(agent.TriggerEvent{Kind: agent.TriggerWatchdogAlert, IntentID: iid, Detail: workCause.Error()})
+		} else {
+			t.appendTrigger(agent.TriggerEvent{Kind: agent.TriggerWorkStopped, IntentID: iid, Detail: "killed"})
+		}
 	// [8] 执行失败 -> blocked；配额链耗尽另记原因，供配额恢复后批量重开。
 	case err != nil:
 		if isTaskLLMChainExhausted(err) {

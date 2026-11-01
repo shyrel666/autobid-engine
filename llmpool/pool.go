@@ -75,7 +75,7 @@ func (p *Pool) candidates(req llm.CompletionRequest) []*Member {
 	var ordered []*Member
 	for i := 0; i < len(p.members); {
 		j := i
-		for j < len(p.members) && p.members[j].Rank == p.members[i].Rank {
+		for j < len(p.members) && p.members[j].Rank == p.members[i].Rank && p.members[j].Priority == p.members[i].Priority {
 			j++
 		}
 		group := p.members[i:j]
@@ -133,29 +133,47 @@ func (p *Pool) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Mes
 	return llm.Message{}, "", llm.Usage{}, lastErr
 }
 
-// Stream 只要已向下游交付任何事件（包括仅 MessageStart）就不再跨成员切换。
+// Stream buffers metadata until observable output, then never replays that output.
 func (p *Pool) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
 		lastErr := ErrEmptyPool
 		for _, m := range p.candidates(req) {
 			emitted := false
+			var pending []llm.StreamEvent
 			var streamErr error
 			for ev, err := range m.Prov.Stream(ctx, req) {
 				if err != nil {
 					streamErr = err
 					break
 				}
-				emitted = true
+				if !emitted && !llm.CommitsOutput(ev) {
+					pending = append(pending, ev)
+					continue
+				}
+				if !emitted {
+					for _, meta := range pending {
+						if !yield(meta, nil) {
+							return
+						}
+					}
+					pending = nil
+					emitted = true
+				}
 				if !yield(ev, nil) {
 					return
 				}
 			}
 			p.record(m, streamErr)
 			if streamErr == nil {
+				for _, meta := range pending {
+					if !yield(meta, nil) {
+						return
+					}
+				}
 				return
 			}
 			lastErr = streamErr
-			if emitted || !llm.ShouldFailover(streamErr) || ctx.Err() != nil {
+			if emitted || llm.SingleAttempt(ctx) || !llm.ShouldFailover(streamErr) || ctx.Err() != nil {
 				break
 			}
 		}

@@ -24,18 +24,17 @@ func (k *Kit) WithCharts(s *export.Service) *Kit { k.charts = s; return k }
 
 func (k *Kit) chartGenerateTool() tool.CoreTool {
 	spec := tool.Spec{Name: ToolChartGenerate,
-		Description: "Generate a proposal chart for a section and bind it to the section's current revision. chart_type and spec: " +
-			`architecture {"direction":"TB|LR","layers":[{"name":"感知层","nodes":["摄像机"]}],"edges":[{"from":"摄像机","to":"视频平台","label":"RTSP"}]}; ` +
-			`gantt {"start":"2026-11-01","tasks":[{"id":"t1","name":"需求调研","phase":"准备阶段","days":10},{"name":"部署","after":"t1","days":20}]}; ` +
-			`org {"nodes":[{"id":"pm","name":"项目经理","person":"张三"},{"id":"tech","name":"技术组","parent":"pm"}]}; ` +
-			`equipment_table {"columns":["序号","设备名称","品牌型号","数量"],"rows":[["1","核心交换机","S7706","2"]]}. ` +
-			"Mermaid source is generated and validated by the server. When mermaid-cli is unavailable the chart stays unrendered and is exported as a source placeholder. " +
-			"A new revision of the section makes older charts stale (they are left out of exports until regenerated).",
+		Description: "按结构化规格生成技术标章节图表并绑定到该章节当前主版本。支持四类图表（chart_type）：" +
+			`architecture（技术架构图，spec 示例：{"direction":"TB|LR","layers":[{"name":"感知层","nodes":["摄像机"]}],"edges":[{"from":"摄像机","to":"视频平台","label":"RTSP"}]}）；` +
+			`gantt（实施甘特图，spec 示例：{"start":"2026-11-01","tasks":[{"id":"t1","name":"需求调研","phase":"准备阶段","days":10},{"name":"部署","after":"t1","days":20}]}）；` +
+			`org（项目组织架构图，spec 示例：{"nodes":[{"id":"pm","name":"项目经理","person":"张三"},{"id":"tech","name":"技术组","parent":"pm"}]}）；` +
+			`equipment_table（设备选型表，spec 示例：{"columns":["序号","设备名称","品牌型号","数量"],"rows":[["1","核心交换机","S7706","2"]]}）。` +
+			"服务端确定性生成并校验 Mermaid 源码；若未安装 mmdc 渲染器则保存为源码占位框并在导出门禁中提示。章节产生新修订版本后旧图表自动标记为过期。",
 		Schema: obj(map[string]any{
-			"section_id": integer("proposal section id"), "section_code": str("section code in the approved outline (alternative to section_id)"),
-			"chart_type": map[string]any{"type": "string", "enum": export.ChartTypes(), "description": "chart type"},
-			"title":      str("chart caption, e.g. 系统总体架构图"),
-			"spec":       map[string]any{"type": "object", "description": "structured chart spec (see description)"},
+			"section_id": integer("所属技术标章节 ID（与 section_code 二选一）"), "section_code": str("批准大纲中的章节编号（如 \"2.1\"，与 section_id 二选一）"),
+			"chart_type": map[string]any{"type": "string", "enum": export.ChartTypes(), "description": "图表类型：architecture（技术架构图）| gantt（实施甘特图）| org（组织架构图）| equipment_table（设备选型表）"},
+			"title":      str("图表标题/图注（如 \"系统总体技术架构图\"）"),
+			"spec":       map[string]any{"type": "object", "description": "结构化图表规格对象（具体字段见工具说明）"},
 		}, "chart_type", "title", "spec")}
 	return tool.New(spec, func(ctx context.Context, in json.RawMessage, _ *tool.ToolContext) (tool.Result, error) {
 		if k.charts == nil {

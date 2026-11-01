@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-10-31",
+  "level": "E",
+  "note": "合成工程样本的人工期望；只证明解析/边界行为，不代表真实招标材料的提取质量。",
+  "samples": {
+    "clean.xlsx": {
+      "format": "xlsx",
+      "page_count": null,
+      "sheets": [
+        {
+          "name": "报价清单",
+          "hidden": false,
+          "rows": 6,
+          "cols": 8,
+          "merged": ["A1:F1"],
+          "hidden_rows": [5],
+          "hidden_cols": ["E"],
+          "cells": {
+            "A1": "智慧园区设备报价清单（虚构样本）",
+            "A2": "序号",
+            "H2": "资产编号",
+            "D5": "00100",
+            "H3": "000012345678901234",
+            "G3": {"raw": "46371", "display": "2026-12-15"},
+            "E3": {"raw": "1250.5", "display": "1,250.50"}
+          },
+          "formulas": [
+            {"cell": "F3", "formula": "D3*E3", "cached": false},
+            {"cell": "F4", "formula": "D4*E4", "cached": false},
+            {"cell": "F5", "formula": "D5*E5", "cached": false},
+            {"cell": "F6", "formula": "D6*E6", "cached": false}
+          ]
+        },
+        {
+          "name": "评分表",
+          "hidden": false,
+          "rows": 4,
+          "cols": 4,
+          "merged": ["A1:D1"],
+          "cells": {
+            "A2": "序号",
+            "B2": "评分因素",
+            "C2": "分值",
+            "D2": "评分标准",
+            "B3": "技术方案",
+            "C3": "50",
+            "B4": "类似项目业绩",
+            "C4": "30",
+            "B5": "投标报价",
+            "C5": "20"
+          }
+        },
+        {
+          "name": "隐藏页",
+          "hidden": true,
+          "rows": 1,
+          "cols": 1,
+          "cells": {"A1": "★ 隐藏工作表仍须提取：交付物须包含全部设备清单。"}
+        },
+        {
+          "name": "空表",
+          "hidden": false,
+          "rows": 0,
+          "cols": 0,
+          "empty": true
+        }
+      ],
+      "warnings": ["hidden_sheet:隐藏页", "formula_cache_missing:报价清单!F3", "formula_cache_missing:报价清单!F4", "formula_cache_missing:报价清单!F5", "formula_cache_missing:报价清单!F6", "empty_sheet:空表"],
+      "chunking": {
+        "strategy": "sheet_row_window",
+        "header_rows_repeated": 1,
+        "max_window_tokens": 600,
+        "max_window_data_rows": 40
+      }
+    },
+    "gb18030.csv": {
+      "format": "csv",
+      "encoding": "gb18030",
+      "delimiter": ";",
+      "rows": 3,
+      "cols": 6,
+      "cells": {
+        "A1": "序号",
+        "B2": "交换机",
+        "C2": "SW-000045",
+        "D2": "0008",
+        "E2": "12800.50",
+        "D3": "2",
+        "E3": "86000.00",
+        "F3": "含“报价;含税”\n第二行说明"
+      },
+      "page_count": null
+    },
+    "quote.tsv": {
+      "format": "tsv",
+      "encoding": "utf-8",
+      "delimiter": "\t",
+      "rows": 3,
+      "cols": 5,
+      "cells": {
+        "A1": "序号",
+        "B2": "000000000000000001",
+        "C2": "2026-12-15",
+        "D2": "1250.50",
+        "B3": "000000000000000002",
+        "C3": "2026-12-16",
+        "D3": "8800.00"
+      },
+      "page_count": null
+    },
+    "safe.zip": {
+      "format": "zip",
+      "entries": [
+        {"path": "招标文件.docx", "format": "docx"},
+        {"path": "附件/报价清单.xlsx", "format": "xlsx"},
+        {"path": "附件/数据.csv", "format": "csv"},
+        {"path": "说明.txt", "format": "text"}
+      ],
+      "auto_adopt": false,
+      "note": "ZIP 只列清单并登记子文件；不自动把子文件变成正式招标文档。"
+    },
+    "store-docx.zip": {
+      "format": "zip",
+      "top_level_must_not_be": "docx",
+      "entries": [{"path": "标包.docx", "format": "docx"}]
+    },
+    "not_docx.docx": {
+      "format": "invalid_docx",
+      "error_code": "docx_missing_document_xml"
+    },
+    "zip-traversal.zip": {"format": "zip", "error_code": "archive_path_traversal"},
+    "zip-absolute.zip": {"format": "zip", "error_code": "archive_absolute_path"},
+    "zip-drive.zip": {"format": "zip", "error_code": "archive_drive_path"},
+    "zip-backslash.zip": {"format": "zip", "error_code": "archive_backslash"},
+    "zip-symlink.zip": {"format": "zip", "error_code": "archive_symlink"},
+    "zip-duplicate.zip": {"format": "zip", "error_code": "archive_duplicate_path"},
+    "zip-nested.zip": {"format": "zip", "error_code": "archive_nested"},
+    "zip-ratio.zip": {"format": "zip", "error_code": "archive_ratio_limit"},
+    "zip-many.zip": {"format": "zip", "error_code": "archive_entry_limit"},
+    "zip-oversize.zip": {
+      "format": "zip",
+      "error_code": "archive_entry_size_limit",
+      "limit_overrides": {"max_entry_bytes": 65536}
+    }
+  }
+}

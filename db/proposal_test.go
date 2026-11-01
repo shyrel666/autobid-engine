@@ -110,7 +110,8 @@ func TestRequirementExtractionAndManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Created != 4 || res.Scanned != 6 {
+	// 4 条原文要求 + 6 条法定否决项（87 号令第六十三条五项与第三十七条）。
+	if res.Created != 10 || res.VetoItems != 6 || res.Scanned != 6 {
 		t.Fatalf("extract = %+v", res)
 	}
 	v, err := p.d.ListRequirements(ctx, DefaultTenant, p.task.ID)
@@ -120,20 +121,27 @@ func TestRequirementExtractionAndManifest(t *testing.T) {
 	cats := map[string]*RequirementItem{}
 	for _, it := range v.Items {
 		cats[it.Category] = it
+		if it.VetoKind == VetoStatutory {
+			if it.VetoStatus != VetoPending || !it.IsMandatory || it.InTechnicalScope() {
+				t.Fatalf("statutory veto item: %+v", it)
+			}
+			continue
+		}
 		if it.SourceChunkID == nil || it.SourceHash == "" || !strings.Contains(string(it.SourceLoc), `"page_start"`) {
 			t.Fatalf("requirement without versioned source: %+v", it)
 		}
 	}
-	if len(cats) != 4 || !cats[ReqMandatoryClause].IsMandatory || cats[ReqScoringItem].ScoreWeight != 10 {
+	if len(cats) != 5 || !cats[ReqMandatoryClause].IsMandatory || cats[ReqScoringItem].ScoreWeight != 10 {
 		t.Fatalf("categories = %+v", v.Items)
 	}
-	if v.Stats.Total != 4 || v.Stats.NoEvidence != 4 || len(v.Stats.Unmapped) != 4 || v.Manifest.Status != ManifestDraft {
+	if v.Stats.Total != 10 || v.Stats.NoEvidence != 4 || len(v.Stats.Unmapped) != 4 || v.Manifest.Status != ManifestDraft ||
+		v.Stats.Veto != (VetoStats{Total: 6, Pending: 6}) || v.Stats.OutOfScope != 0 {
 		t.Fatalf("stats = %+v manifest = %+v", v.Stats, v.Manifest)
 	}
 	// 幂等：原文未变不重复写入、不递增 epoch。
 	epoch := v.Manifest.Epoch
 	again, err := p.d.ExtractRequirements(ctx, DefaultTenant, p.task.ID, "reviewer")
-	if err != nil || again.Created != 0 || again.Unchanged != 4 {
+	if err != nil || again.Created != 0 || again.Unchanged != 10 {
 		t.Fatalf("re-extract = %+v err=%v", again, err)
 	}
 	if m, _ := p.d.RequirementManifest(ctx, DefaultTenant, p.task.ID); m.Epoch != epoch {
@@ -201,7 +209,9 @@ func TestOutlineValidationAndCoverage(t *testing.T) {
 	v := p.extractAndConfirm(t)
 	ids := []int64{}
 	for _, it := range v.Items {
-		ids = append(ids, it.ID)
+		if it.InTechnicalScope() { // 否决项由投标方逐项核对，不进入大纲
+			ids = append(ids, it.ID)
+		}
 	}
 	// 依赖环、未知依赖、跨任务要求均被拒绝。
 	cycle := []SectionInput{{Code: "1", Title: "A", DependsOn: []string{"2"}}, {Code: "2", Title: "B", DependsOn: []string{"1"}}}

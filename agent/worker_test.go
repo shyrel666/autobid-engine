@@ -33,7 +33,7 @@ func TestAssembleDeferredInjectsSearchAndSkill(t *testing.T) {
 	}
 	tools, block, unlock, def := assembleDeferred([]tool.CoreTool{stub("record_fact")}, def)
 	got := toolNames(tools)
-	if !slices.Contains(got, tool.SearchExtraToolsName) || !slices.Contains(got, tool.SkillToolName) {
+	if !slices.Contains(got, tool.SearchExtraToolsName) || !slices.Contains(got, tool.ExecuteExtraToolName) || !slices.Contains(got, tool.SkillToolName) {
 		t.Fatalf("tools = %v", got)
 	}
 	if slices.Contains(got, "cert_query") || slices.Contains(got, "tender_search") {

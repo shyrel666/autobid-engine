@@ -1,0 +1,272 @@
+[
+  {
+    "Key": "qual_valid",
+    "Title": "安全技术防范系统设计施工资质证书（虚构·有效）",
+    "Kind": "certificate",
+    "PageLabel": "证书首页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "证书编号：DEMO-AF-0001",
+      "持证单位：演示智联科技有限公司（虚构）",
+      "资质等级：二级",
+      "有效期至：2027-06-30",
+      "认证范围：安全技术防范系统设计施工"
+    ]
+  },
+  {
+    "Key": "qual_valid_validity",
+    "Title": "安全技术防范系统设计施工资质证书有效期页（虚构·有效）",
+    "Kind": "certificate",
+    "PageLabel": "有效期页",
+    "PageStart": 2,
+    "PageEnd": 2,
+    "Body": [
+      "证书编号：DEMO-AF-0001",
+      "有效期至：2027-06-30",
+      "发证机构：虚构发证机构"
+    ]
+  },
+  {
+    "Key": "qual_critical",
+    "Title": "安全技术防范系统设计施工资质证书（虚构·临界）",
+    "Kind": "certificate",
+    "PageLabel": "证书首页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "证书编号：DEMO-AF-0002",
+      "持证单位：演示智联科技有限公司（虚构）",
+      "资质等级：二级",
+      "有效期至：2026-11-25",
+      "认证范围：安全技术防范系统设计施工"
+    ]
+  },
+  {
+    "Key": "qual_expired",
+    "Title": "安全技术防范系统设计施工资质证书（虚构·过期）",
+    "Kind": "certificate",
+    "PageLabel": "证书首页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "证书编号：DEMO-AF-0003",
+      "持证单位：演示智联科技有限公司（虚构）",
+      "资质等级：二级",
+      "有效期至：2026-10-01"
+    ]
+  },
+  {
+    "Key": "perf1_contract",
+    "Title": "虚构智慧园区安防系统建设项目合同（关键页）",
+    "Kind": "contract",
+    "PageLabel": "标的页",
+    "PageStart": 3,
+    "PageEnd": 3,
+    "Body": [
+      "项目名称：虚构智慧园区安防系统建设项目",
+      "采购人：虚构产业园区管理委员会",
+      "合同金额：8600000.00 元",
+      "标的：视频监控、门禁与停车诱导系统集成"
+    ]
+  },
+  {
+    "Key": "perf1_amount",
+    "Title": "虚构智慧园区安防系统建设项目合同（金额页）",
+    "Kind": "contract",
+    "PageLabel": "金额页",
+    "PageStart": 4,
+    "PageEnd": 4,
+    "Body": [
+      "合同金额：8600000.00 元",
+      "签订日期：2024-03-01"
+    ]
+  },
+  {
+    "Key": "perf1_seal",
+    "Title": "虚构智慧园区安防系统建设项目合同（签章页）",
+    "Kind": "contract",
+    "PageLabel": "签章页",
+    "PageStart": 8,
+    "PageEnd": 8,
+    "Body": [
+      "双方签章：虚构产业园区管理委员会 / 演示智联科技有限公司（虚构）"
+    ]
+  },
+  {
+    "Key": "perf1_accept",
+    "Title": "虚构智慧园区安防系统建设项目验收报告",
+    "Kind": "acceptance_report",
+    "PageLabel": "验收结论",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "项目名称：虚构智慧园区安防系统建设项目",
+      "验收结论：合格",
+      "验收日期：2024-09-01"
+    ]
+  },
+  {
+    "Key": "perf2_contract",
+    "Title": "虚构政务服务中心安防改造项目合同（关键页）",
+    "Kind": "contract",
+    "PageLabel": "标的页",
+    "PageStart": 2,
+    "PageEnd": 2,
+    "Body": [
+      "项目名称：虚构政务服务中心安防改造项目",
+      "合同金额：4200000.00 元",
+      "标的：安防平台升级与运维服务"
+    ]
+  },
+  {
+    "Key": "perf2_amount",
+    "Title": "虚构政务服务中心安防改造项目合同（金额页）",
+    "Kind": "contract",
+    "PageLabel": "金额页",
+    "PageStart": 3,
+    "PageEnd": 3,
+    "Body": [
+      "合同金额：4200000.00 元",
+      "签订日期：2025-02-10"
+    ]
+  },
+  {
+    "Key": "perf2_seal",
+    "Title": "虚构政务服务中心安防改造项目合同（签章页）",
+    "Kind": "contract",
+    "PageLabel": "签章页",
+    "PageStart": 6,
+    "PageEnd": 6,
+    "Body": [
+      "双方签章：虚构市政务服务中心 / 演示智联科技有限公司（虚构）"
+    ]
+  },
+  {
+    "Key": "perf2_accept",
+    "Title": "虚构政务服务中心安防改造项目验收报告",
+    "Kind": "acceptance_report",
+    "PageLabel": "验收结论",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "项目名称：虚构政务服务中心安防改造项目",
+      "验收结论：合格",
+      "验收日期：2025-08-15"
+    ]
+  },
+  {
+    "Key": "perf_sub_contract",
+    "Title": "子公司虚构安防项目合同（虚构）",
+    "Kind": "contract",
+    "PageLabel": "标的页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "项目名称：子公司虚构安防项目",
+      "主体：演示智联子公司（虚构）",
+      "标的：视频监控系统"
+    ]
+  },
+  {
+    "Key": "perf_sub_accept",
+    "Title": "子公司虚构安防项目验收报告（虚构）",
+    "Kind": "acceptance_report",
+    "PageLabel": "验收结论",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "项目名称：子公司虚构安防项目",
+      "验收日期：2025-05-01"
+    ]
+  },
+  {
+    "Key": "perf_old_contract",
+    "Title": "窗口外虚构安防项目合同（虚构）",
+    "Kind": "contract",
+    "PageLabel": "标的页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "项目名称：窗口外虚构安防项目",
+      "签订日期：2019-01-01",
+      "标的：安防系统"
+    ]
+  },
+  {
+    "Key": "perf_old_accept",
+    "Title": "窗口外虚构安防项目验收报告（虚构）",
+    "Kind": "acceptance_report",
+    "PageLabel": "验收结论",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "项目名称：窗口外虚构安防项目",
+      "验收日期：2020-01-01"
+    ]
+  },
+  {
+    "Key": "perf_noacc_contract",
+    "Title": "缺验收虚构安防项目合同（虚构）",
+    "Kind": "contract",
+    "PageLabel": "标的页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "项目名称：缺验收虚构安防项目",
+      "签订日期：2025-03-01"
+    ]
+  },
+  {
+    "Key": "person_cert",
+    "Title": "项目经理信息系统项目管理师证书（虚构）",
+    "Kind": "certificate",
+    "PageLabel": "证书首页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "姓名：演示项目经理（虚构）",
+      "证书：信息系统项目管理师",
+      "有效期至：2027-12-31"
+    ]
+  },
+  {
+    "Key": "person_ss",
+    "Title": "项目经理社保缴纳记录（虚构）",
+    "Kind": "social_security",
+    "PageLabel": "社保记录",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "姓名：演示项目经理（虚构）",
+      "缴纳月数：12 个月",
+      "参保单位：演示智联科技有限公司（虚构）"
+    ]
+  },
+  {
+    "Key": "product_ok",
+    "Title": "核心摄像机产品彩页（虚构·正确型号）",
+    "Kind": "product_catalog",
+    "PageLabel": "产品参数页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "型号：SP-D2-4000",
+      "分辨率：400 万像素",
+      "制造商：演示智联科技有限公司（虚构）"
+    ]
+  },
+  {
+    "Key": "product_bad",
+    "Title": "核心摄像机产品彩页（虚构·错误型号）",
+    "Kind": "product_catalog",
+    "PageLabel": "产品参数页",
+    "PageStart": 1,
+    "PageEnd": 1,
+    "Body": [
+      "型号：SP-D2-2000",
+      "分辨率：200 万像素",
+      "制造商：演示智联科技有限公司（虚构）"
+    ]
+  }
+]

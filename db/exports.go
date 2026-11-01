@@ -339,6 +339,10 @@ func (d *DB) CreateExportJobs(ctx context.Context, tenant string, taskID int64, 
 	var pre *ExportPreflight
 	err := d.inRepeatableRead(ctx, func(tx *sql.Tx) error {
 		jobs = nil
+		var gateVersion int64
+		if err := tx.QueryRowContext(ctx, `SELECT file_gate_version FROM tasks WHERE id=$1 FOR NO KEY UPDATE`, taskID).Scan(&gateVersion); err != nil {
+			return err
+		}
 		templateKey, templateHash := DefaultTemplateKey, in.DefaultTemplateHash
 		var templateID any
 		if in.TemplateID > 0 {

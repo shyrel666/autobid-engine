@@ -13,6 +13,7 @@ import (
 
 	"github.com/autobid/autobid-engine/intercept"
 	"github.com/autobid/autobid-engine/internal/llm"
+	"github.com/autobid/autobid-engine/internal/tool"
 )
 
 // maxAudit 是内存审计列表上限（§6.2：最多保留 2000 条）。
@@ -62,6 +63,8 @@ func (g *Guard) PreToolUse(ctx context.Context, name string, input []byte) (bool
 	if g.interceptor == nil {
 		return false, "", nil
 	}
+	targetName, targetInput := tool.UnwrapDeferred(name, input)
+	name, input = targetName, []byte(targetInput)
 	sum := sha256.Sum256(input)
 	e := AuditEntry{At: time.Now(), Tool: name, Digest: hex.EncodeToString(sum[:8])}
 	v := g.interceptor.Check(ctx, name, input)
@@ -94,6 +97,8 @@ func (g *Guard) PreToolUse(ctx context.Context, name string, input []byte) (bool
 }
 
 func (g *Guard) PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool) {
+	targetName, targetInput := tool.UnwrapDeferred(name, input)
+	name, input = targetName, []byte(targetInput)
 	k := callKey(name, input)
 	g.mu.Lock()
 	status := "ok"

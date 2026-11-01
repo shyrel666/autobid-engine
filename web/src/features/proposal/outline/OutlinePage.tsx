@@ -21,7 +21,8 @@ export function outlineTone(s: string): Tone {
 export function sectionTone(s: string): Tone {
   switch (s) {
     case 'approved': return 'green'
-    case 'ready': case 'draft': return 'blue'
+    case 'ready': return 'blue'
+    case 'draft': return 'slate'
     case 'writing': case 'reviewing': return 'purple'
     case 'pending': return 'amber'
     case 'stale_outline': case 'stale_evidence': case 'rejected': return 'red'
@@ -48,8 +49,10 @@ function OutlineEditor({ taskId, detail, requirements, onClose, onSaved }:
   const [error, setError] = useState('')
   const derives = detail.outline.status === 'approved' || detail.outline.status === 'superseded'
   const mapped = new Set(rows.flatMap((r) => parseCodes(r.reqs)))
-  // 技术标范围内的要求（排除否决项、价格分、不投分包）才需要映射。
-  const inScope = (requirements?.items ?? []).filter((r) => r.category !== 'veto_item' && !r.out_of_bid && !(r.category === 'scoring_item' && r.score_group === 'price'))
+  // 技术标范围内的要求（排除否决项、价格分、不投分包、已被后发文件覆盖项与评分细项子节点）才需要映射。
+  const inScope = (requirements?.items ?? []).filter(
+    (r) => r.category !== 'veto_item' && !r.out_of_bid && !r.superseded_by_id && r.review_status !== 'stale' && !r.parent_id && !(r.category === 'scoring_item' && r.score_group === 'price'),
+  )
   const unmapped = inScope.filter((r) => !mapped.has(r.code))
   const upd = (i: number, k: keyof Row, v: string) => setRows(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)))
   const move = (i: number, d: number) => {

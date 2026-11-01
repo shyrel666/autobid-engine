@@ -29,6 +29,9 @@ const (
 	ToolKBSearchProposals = "kb_search_proposals"
 	ToolKBSearchProducts  = "kb_search_products"
 	ToolKBReadChunk       = "kb_read_chunk"
+	ToolKBReadEvidence    = "kb_read_evidence"
+	ToolKBVerifyEvidence  = "kb_verify_evidence"
+	ToolKBResearch        = "kb_research"
 )
 
 // Kit 绑定一个任务：文档检索只读该任务的 document_chunks，要素与事实读取走任务的 AssetStore / ExplorationStore；
@@ -70,6 +73,13 @@ func (k *Kit) DeferredTools() []tool.CoreTool {
 	return append([]tool.CoreTool{k.queryCredentialsTool(), k.simulateScoringTool(), k.verifyCommercialTool(),
 		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool(), k.chartGenerateTool()},
 		append(append(k.proposalTools(), k.reviewTools()...), k.retrievalTools()...)...)
+}
+
+// SectionWriterTools 返回单次技术标章节撰写（HTTP 派发）可用的辅助工具集（不含 section_write_draft，写回由派发门禁统一执行）。
+func (k *Kit) SectionWriterTools() []tool.CoreTool {
+	return append(append([]tool.CoreTool{}, k.ResidentTools()...),
+		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool(),
+		k.kbReadEvidenceTool(), k.kbVerifyEvidenceTool(), k.requirementBindEvidenceTool())
 }
 
 // ---------------------------------------------------------------------------

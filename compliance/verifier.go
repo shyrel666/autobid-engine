@@ -368,17 +368,28 @@ func (v RuleVerifier) Verify(_ context.Context, in Input) (Verdict, error) {
 		e.clauseHit = clause != "" && strings.Contains(body, clause)
 		gots := Quantities(body)
 		for _, w := range wants {
-			for _, g := range gots { // 取同量纲的第一个应答值
-				if g.Dim != w.Dim {
+			// 同量纲优先匹配数值相同的应答，避免日期等复合数值被第一个分量误配。
+			var chosen *Quantity
+			for i := range gots {
+				if gots[i].Dim != w.Dim {
 					continue
 				}
-				if ok, better := Satisfies(w, g); ok {
-					e.numOK++
-					e.numBetter = e.numBetter || better
-				} else {
-					e.numBad = append(e.numBad, fmt.Sprintf("要求 %s，应答 %s", w.Raw, g.Raw))
+				if chosen == nil {
+					chosen = &gots[i]
 				}
-				break
+				if Close(gots[i].Value, w.Value) {
+					chosen = &gots[i]
+					break
+				}
+			}
+			if chosen == nil {
+				continue
+			}
+			if ok, better := Satisfies(w, *chosen); ok {
+				e.numOK++
+				e.numBetter = e.numBetter || better
+			} else {
+				e.numBad = append(e.numBad, fmt.Sprintf("要求 %s，应答 %s", w.Raw, chosen.Raw))
 			}
 		}
 		e.score = e.cov

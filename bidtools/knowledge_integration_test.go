@@ -10,6 +10,7 @@ import (
 
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/internal/tool"
+	"github.com/autobid/autobid-engine/retrieval"
 )
 
 func callKBTool(t *testing.T, tools []tool.CoreTool, name string, input string) (map[string]any, tool.Result) {
@@ -121,5 +122,97 @@ func TestKnowledgeToolsReturnCitations(t *testing.T) {
 	other := New(pg, 1, nil, nil).WithKnowledge(tenant+"-other", emb).DeferredTools()
 	if _, res := callKBTool(t, other, ToolKBReadChunk, fmt.Sprintf(`{"doc_id":%d,"seq":0}`, specID)); !res.IsError {
 		t.Fatal("cross-tenant read must fail")
+	}
+}
+
+func TestEvidenceVerifyAndBindToSectionContext(t *testing.T) {
+	pg := testDB(t)
+	ctx := context.Background()
+	tenant := db.DefaultTenant
+	emb := db.DefaultEmbedder()
+	retSvc := retrieval.New(pg, emb, nil)
+
+	task, err := pg.CreateTask(ctx, db.CreateTaskInput{Name: fmt.Sprintf("kb-bind-%d", time.Now().UnixNano()), Goal: "证据核验与绑定"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	product := fmt.Sprintf("CAM%d", time.Now().UnixNano()%1_000_000)
+	if _, _, err := pg.InsertKnowledgeDocument(ctx, &db.KnowledgeDocument{
+		TenantID: tenant, Category: db.KnowledgeProductSpec, Title: product + " 高清摄像机规格书", Tags: []string{"安防"},
+		RawText: product + " 400万像素", Extra: json.RawMessage(fmt.Sprintf(`{"product":%q}`, product)),
+	}, []db.KnowledgeChunk{
+		{
+			Seq: 0, Level: 2, SectionCode: "1.1", SectionTitle: "传感器参数", SectionPath: "1.1 传感器参数", PageStart: 1, PageEnd: 1,
+			Content: "分辨率：400万像素\n| 参数 | 指标值 |\n| --- | --- |\n| 分辨率 | 400万像素 |",
+			Tables:  json.RawMessage(`[{"rows":2,"cols":2,"grid":[["参数","指标值"],["分辨率","400万像素"]],"markdown":"| 参数 | 指标值 |"}]`),
+		},
+	}, emb); err != nil {
+		t.Fatal(err)
+	}
+
+	s := func(v string) *string { return &v }
+	yes := true
+	reqItem, err := pg.CreateRequirement(ctx, tenant, task.ID, "reviewer", db.RequirementInput{
+		Code: s("REQ-CAM-1"), Category: s(db.ReqMandatoryClause), Title: s("摄像机分辨率要求"),
+		Description: s("网络摄像机分辨率须不低于400万像素。"), IsMandatory: &yes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.ConfirmRequirements(ctx, tenant, task.ID, "reviewer", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.CreateOutline(ctx, tenant, task.ID, "editor", db.OutlineInput{
+		Sections: []db.SectionInput{{Code: "2.1", Title: "前端感知设备", Level: 1, RequirementIDs: []int64{reqItem.ID}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.SubmitOutline(ctx, tenant, task.ID, 1, "editor"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.ApproveOutline(ctx, tenant, task.ID, 1, "approver"); err != nil {
+		t.Fatal(err)
+	}
+
+	kit := New(pg, task.ID, db.NewAssetStore(pg, task.ID), db.NewExplorationStore(pg, task.ExplorationID)).WithRetrieval(retSvc)
+	tools := kit.DeferredTools()
+
+	// 1. kb_search_products 在每个 hit 上直接透出 evidence_id
+	searchOut, _ := callKBTool(t, tools, ToolKBSearchProducts, fmt.Sprintf(`{"product":%q,"specs":["分辨率","400万像素"]}`, product))
+	hits := searchOut["hits"].([]any)
+	if len(hits) != 1 {
+		t.Fatalf("expected 1 product hit, got %+v", searchOut)
+	}
+	evID := int64(hits[0].(map[string]any)["evidence_id"].(float64))
+	if evID <= 0 {
+		t.Fatalf("expected positive evidence_id on hit: %+v", hits[0])
+	}
+
+	// 2. 未经核验（unverified）的证据不能通过 requirement_bind_evidence 绑定为支撑证据
+	if _, res := callKBTool(t, tools, ToolRequirementBindEvidence, fmt.Sprintf(`{"requirement_code":"REQ-CAM-1","evidence_ids":[%d]}`, evID)); !res.IsError {
+		t.Fatalf("unverified evidence must be rejected by requirement_bind_evidence")
+	}
+
+	// 3. 调用 kb_verify_evidence 完成确定性核验（verified + supports）
+	verOut, res := callKBTool(t, tools, ToolKBVerifyEvidence, fmt.Sprintf(`{"evidence_id":%d,"claim":{"text":"分辨率>=400万像素","parameter":"分辨率","operator":">=","value":400,"unit":"万像素","product":%q}}`, evID, product))
+	if res.IsError || verOut["status"] != "verified" || verOut["relation"] != "supports" {
+		t.Fatalf("expected verified+supports, got err=%v content=%s out=%+v", res.IsError, res.Content, verOut)
+	}
+
+	// 4. 调用 requirement_bind_evidence 绑定已核验证据，且不推翻已批准大纲
+	bindOut, _ := callKBTool(t, tools, ToolRequirementBindEvidence, fmt.Sprintf(`{"requirement_code":"REQ-CAM-1","evidence_ids":[%d]}`, evID))
+	boundIDs := bindOut["evidence_ids"].([]any)
+	if len(boundIDs) != 1 || int64(boundIDs[0].(float64)) != evID {
+		t.Fatalf("unexpected bind output: %+v", bindOut)
+	}
+
+	// 5. section_read_context 返回 writable=true 且 usable_evidence 包含该证据
+	ctxOut, _ := callKBTool(t, tools, ToolSectionReadContext, `{"section_code":"2.1"}`)
+	if ctxOut["writable"] != true {
+		t.Fatalf("outline must remain approved and writable after evidence binding: %+v", ctxOut)
+	}
+	usable := ctxOut["usable_evidence"].([]any)
+	if len(usable) != 1 || int64(usable[0].(map[string]any)["id"].(float64)) != evID {
+		t.Fatalf("expected usable_evidence to contain %d, got %+v", evID, usable)
 	}
 }

@@ -215,7 +215,7 @@ func (o *Office) Refresh(ctx context.Context, inDocx, outDocx, outPDF string) (*
 		return nil, fmt.Errorf("LibreOffice refresh failed: %v: %s %s", runErr, tail(stderr, 400), tail(soErr.String(), 200))
 	}
 	if !res.OK {
-		return nil, fmt.Errorf("LibreOffice refresh failed: %s", res.Error)
+		return nil, fmt.Errorf("LibreOffice refresh failed: %s: %s", res.Error, tail(stderr, 2000))
 	}
 	for _, p := range []string{outDocx, outPDF} {
 		if p == "" {

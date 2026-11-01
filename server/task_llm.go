@@ -17,8 +17,8 @@ import (
 	"github.com/autobid/autobid-engine/export"
 	"github.com/autobid/autobid-engine/internal/llm"
 	"github.com/autobid/autobid-engine/internal/llm/anthropic"
-	"github.com/autobid/autobid-engine/internal/llm/llmhttp"
 	"github.com/autobid/autobid-engine/internal/llm/openai"
+	"github.com/autobid/autobid-engine/internal/secrets"
 	"github.com/autobid/autobid-engine/internal/tool"
 	"github.com/autobid/autobid-engine/llmpool"
 	"github.com/autobid/autobid-engine/llmrec"
@@ -29,35 +29,42 @@ import (
 type ProviderFactory func(p *db.LLMProfile, httpClient *http.Client) (llm.Provider, error)
 
 // DefaultProviderFactory 按 format 构造 Claude Messages API 或 OpenAI 兼容 Provider；
-// 密钥从 Profile 指定的环境变量读取（anthropic 变量为空时交由 SDK 默认凭据解析）。
+// 密钥由服务解密后注入，未保存 Key 时兼容 Profile 指定的环境变量。
 func DefaultProviderFactory(p *db.LLMProfile, httpClient *http.Client) (llm.Provider, error) {
+	key := p.APIKey
+	if key == "" {
+		key = os.Getenv(p.APIKeyEnv)
+	}
 	switch p.Format {
 	case "anthropic", "":
 		return anthropic.New(anthropic.Config{
-			APIKey:          os.Getenv(p.APIKeyEnv),
+			APIKey:          key,
 			BaseURL:         p.BaseURL,
 			Model:           p.Model,
 			MaxTokens:       int64(p.MaxTokens),
 			Effort:          p.Effort,
 			ThinkingDisplay: p.ThinkingDisplay,
+			ThinkingType:    p.ThinkingType,
 			HTTPClient:      httpClient,
 		}), nil
-	case "openai":
+	case "openai", "openai-responses":
 		if p.Model == "" {
 			return nil, fmt.Errorf("llm profile %q: model is required for openai format", p.Name)
 		}
-		effort := p.Effort
-		if effort != "low" && effort != "medium" && effort != "high" {
-			effort = "" // reasoning_effort 只接受 low/medium/high
-		}
-		return openai.New(openai.Config{
-			APIKey:          os.Getenv(p.APIKeyEnv),
+		cfg := openai.Config{
+			APIKey:          key,
 			BaseURL:         p.BaseURL,
 			Model:           p.Model,
 			MaxTokens:       p.MaxTokens,
-			ReasoningEffort: effort,
+			ReasoningEffort: p.Effort,
+			ThinkingType:    p.ThinkingType,
+			MaxTokensField:  p.MaxTokensField,
 			HTTPClient:      httpClient,
-		}), nil
+		}
+		if p.Format == "openai-responses" {
+			return openai.NewResponses(cfg), nil
+		}
+		return openai.New(cfg), nil
 	}
 	return nil, fmt.Errorf("unsupported llm profile format %q", p.Format)
 }
@@ -86,6 +93,7 @@ func (c RetryConfig) policy() (int, func(attempt int) time.Duration) {
 }
 
 type LLMServiceConfig struct {
+	Vault          *secrets.Vault
 	MultiRetrieval bool
 	Retrieval      *retrieval.Service
 	// Charts 为 chart_generate 工具提供图表生成 / 渲染（为 nil 时工具返回未配置）。
@@ -113,6 +121,7 @@ type LLMService struct {
 	provCacheGen uint64
 	pool         *llmpool.Pool
 	poolGen      uint64
+	boundPools   map[int64]*llmpool.Pool
 
 	taskAgentMu sync.Mutex
 	taskAgents  map[int64]*taskAgentBundle
@@ -130,26 +139,29 @@ type taskAgentBundle struct {
 }
 
 func NewLLMService(pg *db.DB, cfg LLMServiceConfig) *LLMService {
+	if cfg.Vault == nil {
+		cfg.Vault = secrets.FromEnv()
+	}
 	if cfg.Factory == nil {
 		cfg.Factory = DefaultProviderFactory
 	}
 	s := &LLMService{pg: pg, cfg: cfg, provCache: map[int64]llm.Provider{}, taskAgents: map[int64]*taskAgentBundle{}}
-	// 熔断持久化在解锁后异步写库，不阻塞调用路径。
+	// 熔断状态按 Registry 转移顺序持久化，避免 reset 被旧异步写入覆盖。
 	s.health = llmpool.NewRegistry(
 		func(id int64, st llmpool.State) {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = pg.SaveLLMHealth(ctx, db.LLMHealth{ProfileID: id, Fails: st.Fails, Trips: st.Trips,
-					OpenUntil: st.OpenUntil, LastError: st.LastError, LastAt: st.LastAt})
-			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := pg.SaveLLMHealth(ctx, db.LLMHealth{ProfileID: id, Fails: st.Fails, Trips: st.Trips,
+				OpenUntil: st.OpenUntil, LastError: st.LastError, LastAt: st.LastAt}); err != nil && cfg.OnLedgerErr != nil {
+				cfg.OnLedgerErr(err)
+			}
 		},
 		func(id int64) {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = pg.DeleteLLMHealth(ctx, id)
-			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := pg.DeleteLLMHealth(ctx, id); err != nil && cfg.OnLedgerErr != nil {
+				cfg.OnLedgerErr(err)
+			}
 		},
 	)
 	return s
@@ -177,6 +189,7 @@ func (s *LLMService) InvalidateProviders() {
 	s.provCache = map[int64]llm.Provider{}
 	s.provCacheGen++
 	s.pool = nil
+	s.boundPools = nil
 	s.provCacheMu.Unlock()
 	s.readyMu.Lock()
 	s.readyAt = time.Time{}
@@ -208,23 +221,10 @@ func (s *LLMService) profileProvider(ctx context.Context, id int64) (llm.Provide
 	if !prof.Enabled {
 		return nil, fmt.Errorf("llm profile %q is disabled", prof.Name)
 	}
-	recProfile := llmrec.Profile{ID: prof.ID, Name: prof.Name, Model: prof.Model, Effort: prof.Effort}
-	httpClient, err := llmhttp.NewClient(llmhttp.Options{
-		Proxy:            prof.Proxy,
-		SessionHeaderKey: prof.SessionHeaderKey,
-		Wrap: func(next http.RoundTripper) http.RoundTripper {
-			return llmrec.NewTransport(next, s.pg.InsertLLMRecord, recProfile, s.cfg.RecordBodies, s.cfg.OnLedgerErr)
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("llm profile %q: %w", prof.Name, err)
-	}
-	base, err := s.cfg.Factory(prof, httpClient)
+	wrapped, err := s.buildProfile(ctx, prof)
 	if err != nil {
 		return nil, err
 	}
-	var sink llmrec.Sink = func(ctx context.Context, u db.LLMUsage) error { return s.pg.InsertLLMUsage(ctx, u) }
-	wrapped := llmrec.New(base, sink, recProfile, s.cfg.OnLedgerErr)
 
 	s.provCacheMu.Lock()
 	defer s.provCacheMu.Unlock()
@@ -251,21 +251,40 @@ func (s *LLMService) globalPool(ctx context.Context) (*llmpool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
+	settings, err := s.pg.LLMSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(profiles) == 0 || !profiles[0].IsDefault {
+		return nil, errors.New("请先激活一个默认模型配置")
+	}
+	if !settings.PoolEnabled {
+		profiles = profiles[:1]
+	}
 	members := make([]*llmpool.Member, 0, len(profiles))
 	for _, p := range profiles {
 		prov, err := s.profileProvider(ctx, p.ID)
 		if err != nil {
+			if p.IsDefault {
+				return nil, err
+			}
 			continue
 		}
+		rank := 1
+		if p.IsDefault {
+			rank = 0
+		}
 		members = append(members, &llmpool.Member{ID: p.ID, Name: p.Name, Model: p.Model, Format: p.Format,
-			Priority: p.Priority, Active: p.Enabled, Rank: p.Rank, WindowTokens: p.WindowTokens, Prov: prov})
+			Priority: p.Priority, Active: p.Enabled, Rank: rank, WindowTokens: p.WindowTokens, Prov: prov})
 	}
 	if len(members) == 0 {
 		return nil, errors.New("no enabled llm profile in the global pool")
 	}
 	pool := llmpool.New(members, s.health)
 	s.provCacheMu.Lock()
-	if gen == s.provCacheGen {
+	if s.pool != nil && s.poolGen == s.provCacheGen {
+		pool = s.pool
+	} else if gen == s.provCacheGen {
 		s.pool, s.poolGen = pool, gen
 	}
 	s.provCacheMu.Unlock()
@@ -323,13 +342,6 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 	wc.ExtraTools = append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...)
 	wc.Deferred = append(append([]tool.CoreTool(nil), wc.Deferred...), kit.DeferredTools()...)
 	wc.Skills = append(append([]tool.Skill(nil), wc.Skills...), bidtools.Skills()...)
-	if s.cfg.Retrieval != nil {
-		for i := range wc.Skills {
-			if wc.Skills[i].Name == bidtools.SkillKnowledgeReuse {
-				wc.Skills[i].Tools = append(append([]string(nil), wc.Skills[i].Tools...), "kb_read_evidence", "kb_verify_evidence", "kb_research")
-			}
-		}
-	}
 	b.pl, b.wk = agent.NewPlanner(pc), agent.NewWorker(wc)
 	s.taskAgents[t.ID] = b
 	return b.pl, b.wk
@@ -408,11 +420,12 @@ func derefID(p *int64) any {
 
 func (r *taskLLMRuntime) current(ctx context.Context) (taskLLMSelection, error) {
 	s, t := r.s, r.task
-	sel := taskLLMSelection{retry: s.cfg.Retry}
+	// Each cached profile owns retries. The task layer only advances quota chains.
+	sel := taskLLMSelection{retry: RetryConfig{Attempts: -1}}
 	if pid, err := s.pg.AgentLLMBinding(ctx, r.agentKey); err != nil {
 		return sel, err
 	} else if pid > 0 {
-		sel.provider, err = s.profileProvider(ctx, pid)
+		sel.provider, err = s.boundProvider(ctx, pid)
 		return sel, err
 	}
 	st, err := s.pg.TaskLLMState(ctx, t.ID)
@@ -516,7 +529,7 @@ func streamTaskLLM(ctx context.Context, taskID int64, req llm.CompletionRequest,
 				return
 			}
 			// 非任务链路径或非配额耗尽：不触碰链状态，原样透传。
-			if selection.profileID == 0 || !llm.IsQuotaExhausted(streamErr) {
+			if llm.SingleAttempt(ctx) || selection.profileID == 0 || !llm.IsQuotaExhausted(streamErr) {
 				for _, buffered := range pending {
 					if !yield(buffered, nil) {
 						return

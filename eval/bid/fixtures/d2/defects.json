@@ -1,0 +1,19 @@
+{
+  "fixture_version": 1,
+  "defects": [
+    {"defect": "过期证书（含更正顺延导致的临界失效）", "gate": "D2-G01", "expected": "inadmissible", "description": "证书在原截止日有效、顺延后过期；要求级与逐证据结论由 admissible 变为 inadmissible。"},
+    {"defect": "子公司业绩冒充投标人业绩", "gate": "D2-G02", "expected": "inadmissible", "description": "bidder_only 失败，子公司业绩不得计入。"},
+    {"defect": "缺原件或合同页码", "gate": "D2-G03", "expected": "inadmissible", "description": "原登记/页码缺失，引用时返回 ErrEvidenceInadmissible。"},
+    {"defect": "业绩缺验收日期或验收页", "gate": "D2-G04", "expected": "inadmissible", "description": "need_acceptance 失败。"},
+    {"defect": "业绩在日期窗口之外", "gate": "D2-G05", "expected": "inadmissible", "description": "date_window 失败。"},
+    {"defect": "产品型号 / 参数不符", "gate": "D2-G06", "expected": "inadmissible", "description": "model_param 失败。"},
+    {"defect": "承诺低于招标阈值", "gate": "D2-G07", "expected": "ErrCommitmentBelowThreshold", "description": "确认时返回 sentinel，不留下可引用主版本。"},
+    {"defect": "承诺超能力且未会签", "gate": "D2-G08", "expected": "ErrCommitmentSignoffRequired", "description": "会签人必须与创建人不同。"},
+    {"defect": "章节引用 draft 台账或正文值与台账冲突", "gate": "D2-G09", "expected": "ErrCommitmentUnconfirmed / ErrCommitmentMismatch", "description": "两种写入拒绝分别验证。"},
+    {"defect": "报价行金额不一致 / 超限价", "gate": "D2-G10", "expected": "ErrQuoteInconsistent", "description": "逐项 checks 指出原因。"},
+    {"defect": "已引用证据源或原件变更", "gate": "D2-G11", "expected": "admissibility_stale + Ready=false", "description": "重评、重写批准、矩阵、一致性后完整恢复 Ready=true。"},
+    {"defect": "客观分必备可采证据不足", "gate": "D2-G12", "expected": "objective_evidence_missing + Ready=false", "description": "补足 MinCount 后完整恢复 ready。"},
+    {"defect": "导出被持久化 D2 门禁拒绝", "gate": "D2-G13", "expected": "ExportBlockedError，无 queued 任务", "description": "恢复 ready 后创建 1 个 queued 任务。"},
+    {"defect": "可采性只能人工判断", "gate": "D2-G14", "expected": "manual / ErrAdmissibilityManual", "description": "人工复核生成新运行版本，记录理由与操作人。"}
+  ]
+}

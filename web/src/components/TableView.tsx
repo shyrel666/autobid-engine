@@ -21,8 +21,13 @@ export function TableView({ table, index }: { table: ParsedTable; index?: number
         <span className="font-medium text-slate-700">表格{index !== undefined ? ` ${index + 1}` : ''}</span>
         <span>{table.rows} 行 × {table.cols} 列</span>
         {table.header_rows > 0 && <span>表头 {table.header_rows} 行</span>}
-        <Badge tone={table.page_end > table.page_start ? 'purple' : 'slate'}>{pageRange(table.page_start, table.page_end)}{table.page_end > table.page_start ? ' 跨页' : ''}</Badge>
+        {table.page_is_physical === false
+          ? <Badge tone="blue">{table.sheet ?? table.source_locator?.sheet ?? '工作表'} · {table.range ?? table.source_locator?.range ?? '—'}</Badge>
+          : <Badge tone={table.page_end > table.page_start ? 'purple' : 'slate'}>{pageRange(table.page_start, table.page_end)}{table.page_end > table.page_start ? ' 跨页' : ''}</Badge>}
         {table.mandatory && <Badge tone="red"><Star className="size-3 fill-red-500" />含强制参数</Badge>}
+        {table.sheet_hidden && <Badge tone="amber">隐藏工作表</Badge>}
+        {table.hidden_rows && table.hidden_rows.length > 0 && <Badge tone="amber">隐藏行 {table.hidden_rows.length}</Badge>}
+        {table.hidden_cols && table.hidden_cols.length > 0 && <Badge tone="amber">隐藏列 {table.hidden_cols.length}</Badge>}
         <span className="text-slate-400">来源 {table.source}</span>
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant={mode === 'table' ? 'secondary' : 'ghost'} onClick={() => setMode('table')}>表格</Button>
@@ -40,7 +45,9 @@ export function TableView({ table, index }: { table: ParsedTable; index?: number
                     <td key={`${c.row}-${c.col}`} rowSpan={c.row_span} colSpan={c.col_span}
                       className={cx('border border-slate-200 px-2 py-1 align-top whitespace-pre-wrap',
                         /^\s*[★▲]/.test(c.text) && 'bg-red-50 text-red-800')}
-                      title={pages.size > 1 ? `第 ${c.page} 页` : undefined}>
+                      title={table.page_is_physical === false
+                        ? `${table.sheet ?? '工作表'} · 窗口第 ${c.row + 1} 行第 ${c.col + 1} 列${c.raw && c.raw !== c.text ? ` · 原值 ${c.raw}` : ''}${c.formula ? ` · 公式 ${c.formula}${c.formula_cached ? '' : '（无缓存值）'}` : ''}`
+                        : pages.size > 1 ? `第 ${c.page} 页` : undefined}>
                       {c.text}
                     </td>
                   ))}

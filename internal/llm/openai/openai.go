@@ -33,6 +33,8 @@ type Config struct {
 	MaxTokens int
 	// ReasoningEffort 为 reasoning_effort（low|medium|high）；为空时不发送（并非所有兼容端支持）。
 	ReasoningEffort string
+	ThinkingType    string
+	MaxTokensField  string
 	HTTPClient      *http.Client
 	ExtraHeaders    map[string]string
 }
@@ -59,13 +61,15 @@ func New(cfg Config) *Provider {
 // ---------------------------------------------------------------------------
 
 type chatRequest struct {
-	Model           string         `json:"model"`
-	Messages        []chatMessage  `json:"messages"`
-	Tools           []chatTool     `json:"tools,omitempty"`
-	Stream          bool           `json:"stream,omitempty"`
-	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
-	MaxTokens       int            `json:"max_tokens,omitempty"`
-	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
+	Model               string            `json:"model"`
+	Messages            []chatMessage     `json:"messages"`
+	Tools               []chatTool        `json:"tools,omitempty"`
+	Stream              bool              `json:"stream"`
+	StreamOptions       *streamOptions    `json:"stream_options,omitempty"`
+	MaxTokens           int               `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int               `json:"max_completion_tokens,omitempty"`
+	Thinking            map[string]string `json:"thinking,omitempty"`
+	ReasoningEffort     string            `json:"reasoning_effort,omitempty"`
 }
 
 type streamOptions struct {
@@ -180,6 +184,13 @@ func (p *Provider) buildRequest(ctx context.Context, req llm.CompletionRequest, 
 		Tools:           encodeTools(req.Tools),
 		MaxTokens:       maxTokens,
 		ReasoningEffort: p.cfg.ReasoningEffort,
+	}
+	if p.cfg.MaxTokensField == "max_completion_tokens" {
+		body.MaxTokens = 0
+		body.MaxCompletionTokens = maxTokens
+	}
+	if p.cfg.ThinkingType != "" {
+		body.Thinking = map[string]string{"type": p.cfg.ThinkingType}
 	}
 	if stream {
 		body.Stream = true
@@ -486,6 +497,10 @@ func (p *Provider) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 		}
 		if err := sc.Err(); err != nil {
 			yield(llm.StreamEvent{}, transportErr(ctx, err))
+			return
+		}
+		if finish == "" {
+			yield(llm.StreamEvent{}, &llm.APIError{Provider: providerName, StatusCode: http.StatusBadGateway, Message: "stream ended before finish_reason"})
 			return
 		}
 		if !closeTool() {

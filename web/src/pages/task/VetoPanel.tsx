@@ -1,15 +1,23 @@
 import { useState } from 'react'
-import { CalendarClock, CheckCircle2, CircleDashed, Layers, XCircle } from 'lucide-react'
+import { CalendarClock, CheckCircle2, CircleDashed, Gavel, Layers, XCircle } from 'lucide-react'
 import { api, errorText } from '../../api/client'
-import type { RequirementItem, RequirementsView, VetoStatus } from '../../api/types'
+import type { BidDecision, RequirementItem, RequirementsView, VetoStatus } from '../../api/types'
 import { Badge, Button, Card, Empty, Field, Input, Modal, TextArea, cx, useToast } from '../../components/ui'
 import type { Tone } from '../../components/ui'
-import { docRoleLabel, fmtTime, vetoKindLabel, vetoStatusLabel } from '../../lib/format'
+import { bidDecisionLabel, bidRecommendationLabel, docRoleLabel, fmtTime, vetoKindLabel, vetoStatusLabel } from '../../lib/format'
 
-// D1：投标范围（截止时间、投标分包）与否决项核对（server/proposal.go 的 bid-scope / veto 路由）。
+// D1：投标范围（截止时间、投标分包）、Bid/No-Bid 评估决策与否决项核对（server/proposal.go 的 bid-scope / veto 路由）。
 
 function vetoTone(s: VetoStatus): Tone {
   return s === 'passed' ? 'green' : s === 'failed' ? 'red' : 'amber'
+}
+
+function decisionTone(d: BidDecision): Tone {
+  return d === 'bid' ? 'green' : d === 'no_bid' ? 'red' : 'amber'
+}
+
+function recommendationTone(r: string): Tone {
+  return r === 'bid' || r === 'can_bid' ? 'green' : r === 'no_bid' ? 'red' : 'amber'
 }
 
 // toLocalInput 把 RFC 3339 时间转成「2006-01-02 15:04」（北京时间），供人工修改。
@@ -23,12 +31,24 @@ export function BidScopeCard({ taskID, view, onChanged }: { taskID: number; view
   const toast = useToast()
   const m = view.manifest
   const lots = view.stats.lots
+  const ev = view.bid_evaluation
   const [deadline, setDeadline] = useState<string>()
+  const [decisionDraft, setDecisionDraft] = useState<{ decision: BidDecision; note: string }>()
   const [busy, setBusy] = useState(false)
   const src = m.bid_deadline_source ?? {}
   const save = async (req: Parameters<typeof api.setBidScope>[1], ok: string) => {
     setBusy(true)
-    try { await api.setBidScope(taskID, req); toast('ok', ok); setDeadline(undefined); onChanged() } catch (e) { toast('error', errorText(e)) } finally { setBusy(false) }
+    try {
+      await api.setBidScope(taskID, req)
+      toast('ok', ok)
+      setDeadline(undefined)
+      setDecisionDraft(undefined)
+      onChanged()
+    } catch (e) {
+      toast('error', errorText(e))
+    } finally {
+      setBusy(false)
+    }
   }
   const toggleLot = (lot: string) => {
     const current = m.bid_lots.length ? m.bid_lots : lots
@@ -36,8 +56,9 @@ export function BidScopeCard({ taskID, view, onChanged }: { taskID: number; view
     if (next.length === 0) { toast('error', '至少保留一个投标分包；全部都投时请点击「全部分包」'); return }
     void save({ bid_lots: next.length === lots.length ? [] : next }, '投标分包已更新，清单与大纲需重新确认')
   }
+  const curDecision: BidDecision = m.bid_decision || 'pending'
   return (
-    <Card title={<span className="flex items-center gap-1.5"><CalendarClock className="size-4" />投标范围</span>}>
+    <Card title={<span className="flex items-center gap-1.5"><CalendarClock className="size-4" />投标范围与 Bid / No-Bid 决策</span>}>
       <div className="grid gap-4 md:grid-cols-2">
         <div className="text-sm">
           <div className="text-xs text-slate-500">投标截止时间（北京时间）</div>
@@ -79,13 +100,64 @@ export function BidScopeCard({ taskID, view, onChanged }: { taskID: number; view
           <p className="mt-1 text-xs text-slate-400">改变投标分包会使清单 epoch 递增、已批准大纲失效。</p>
         </div>
       </div>
+
+      {ev && (
+        <div className="mt-4 border-t border-slate-100 pt-3 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex items-center gap-1 text-xs text-slate-500"><Gavel className="size-3.5" />Bid / No-Bid 评估与决策</span>
+              <Badge dot tone={decisionTone(curDecision)}>{bidDecisionLabel[curDecision] ?? curDecision}</Badge>
+              <Badge tone={recommendationTone(ev.recommendation)}>系统评估：{bidRecommendationLabel[ev.recommendation] ?? ev.recommendation}</Badge>
+              <span className="text-xs text-slate-500">
+                客观分 {ev.objective_score} · 主观分 {ev.subjective_score} · 价格分 {ev.price_score} · 证据支撑分 {ev.evidence_backed_score}/{ev.total_score} · ★ 条款证据 {ev.mandatory_with_evidence}/{ev.mandatory_count}
+              </span>
+            </div>
+            {!decisionDraft && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button size="sm" variant={curDecision === 'bid' ? 'primary' : 'ghost'} disabled={busy || view.stats.veto.failed > 0}
+                  title={view.stats.veto.failed > 0 ? '存在不通过的否决项，不能决策为投标' : ''}
+                  onClick={() => setDecisionDraft({ decision: 'bid', note: m.bid_decision_note || '' })}>决定投标</Button>
+                <Button size="sm" variant={curDecision === 'no_bid' ? 'danger' : 'ghost'} disabled={busy}
+                  onClick={() => setDecisionDraft({ decision: 'no_bid', note: m.bid_decision_note || '' })}>放弃投标</Button>
+                {curDecision !== 'pending' && (
+                  <Button size="sm" variant="ghost" loading={busy}
+                    onClick={() => void save({ bid_decision: 'pending', bid_decision_note: '' }, '已重置为待决策')}>重置</Button>
+                )}
+              </div>
+            )}
+          </div>
+          {m.bid_decision_note && !decisionDraft && (
+            <p className="mt-1 text-xs text-slate-600">
+              决策依据：{m.bid_decision_note}
+              {m.bid_decided_by && <span className="text-slate-400"> · {m.bid_decided_by} {m.bid_decided_at ? fmtTime(m.bid_decided_at) : ''}</span>}
+            </p>
+          )}
+          {ev.gaps && ev.gaps.length > 0 && (
+            <ul className="mt-1.5 list-disc pl-5 text-xs text-amber-700">
+              {ev.gaps.map((g) => <li key={g}>{g}</li>)}
+            </ul>
+          )}
+          {decisionDraft && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2.5">
+              <Badge tone={decisionTone(decisionDraft.decision)}>{bidDecisionLabel[decisionDraft.decision]}</Badge>
+              <Input className="min-w-[260px] flex-1" value={decisionDraft.note}
+                placeholder={decisionDraft.decision === 'no_bid' ? '必填：放弃投标原因（如关键资格不满足、核心案例缺失）' : '可选：投标决策备注或风险应对说明'}
+                onChange={(e) => setDecisionDraft({ ...decisionDraft, note: e.target.value })} />
+              <Button size="sm" variant={decisionDraft.decision === 'no_bid' ? 'danger' : 'primary'} loading={busy}
+                disabled={decisionDraft.decision === 'no_bid' && !decisionDraft.note.trim()}
+                onClick={() => void save({ bid_decision: decisionDraft.decision, bid_decision_note: decisionDraft.note.trim() }, `已保存决策：${bidDecisionLabel[decisionDraft.decision]}`)}>确认决策</Button>
+              <Button size="sm" variant="ghost" onClick={() => setDecisionDraft(undefined)}>取消</Button>
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   )
 }
 
 export function VetoChecklist({ taskID, items, onChanged, highlightId }: { taskID: number; items: RequirementItem[]; onChanged: () => void; highlightId?: number }) {
   const [checking, setChecking] = useState<{ item: RequirementItem; status: VetoStatus }>()
-  const vetoes = items.filter((i) => i.category === 'veto_item' && !i.out_of_bid)
+  const vetoes = items.filter((i) => i.category === 'veto_item' && !i.out_of_bid && !i.superseded_by_id && i.review_status !== 'stale')
   const failed = vetoes.filter((i) => i.veto_status === 'failed').length
   const pending = vetoes.filter((i) => i.veto_status === 'pending').length
   return (
@@ -102,6 +174,9 @@ export function VetoChecklist({ taskID, items, onChanged, highlightId }: { taskI
                   <span className="font-medium">{it.title}</span>
                   {it.lot && <span className="text-xs text-slate-400">包{it.lot}</span>}
                 </div>
+                {it.proof_rules?.raw_summary && (
+                  <p className="mt-0.5 text-xs text-amber-700">证明要求：{it.proof_rules.raw_summary}</p>
+                )}
                 <details><summary className="cursor-pointer text-xs text-slate-400">审查内容</summary>
                   <p className="whitespace-pre-wrap text-xs text-slate-600">{it.description}</p>
                   {it.source_loc.covered_by && it.source_loc.covered_by.length > 0 &&

@@ -2470,3 +2470,340 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_d2_objective_changed ON objective_score_runs;
 CREATE TRIGGER trg_d2_objective_changed AFTER INSERT ON objective_score_runs
     FOR EACH ROW EXECUTE FUNCTION d2_objective_changed();
+
+
+-- =============================================================================
+-- D3：章节故事板（Pink Team 粉队评审）与句子级证据绑定写作核验（Domain C）
+-- =============================================================================
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_proposal_sections_tenant_id ON proposal_sections(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_section_revisions_tenant_id ON section_revisions(tenant_id, id);
+
+CREATE TABLE IF NOT EXISTS section_storyboards (
+    id                      BIGSERIAL PRIMARY KEY,
+    tenant_id               TEXT NOT NULL DEFAULT 'default',
+    task_id                 BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    section_id              BIGINT NOT NULL,
+    outline_version         INT NOT NULL DEFAULT 1,
+    version                 INT NOT NULL DEFAULT 1 CHECK (version >= 1),
+    theme_sentence          TEXT NOT NULL DEFAULT '',
+    scoring_points          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    admissibility_item_ids  BIGINT[] NOT NULL DEFAULT '{}',
+    evidence_ids            BIGINT[] NOT NULL DEFAULT '{}',
+    commitment_ids          BIGINT[] NOT NULL DEFAULT '{}',
+    chart_plans             JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status                  TEXT NOT NULL DEFAULT 'draft'
+                            CHECK (status IN ('draft','pending_pink_review','pink_approved','pink_rejected','stale','superseded')),
+    stale_reason            TEXT NOT NULL DEFAULT '',
+    review_note             TEXT NOT NULL DEFAULT '',
+    submitted_by            TEXT NOT NULL DEFAULT '',
+    submitted_at            TIMESTAMPTZ,
+    reviewed_by             TEXT NOT NULL DEFAULT '',
+    reviewed_at             TIMESTAMPTZ,
+    created_by              TEXT NOT NULL DEFAULT 'system',
+    updated_by              TEXT NOT NULL DEFAULT 'system',
+    approved_by             TEXT NOT NULL DEFAULT '',
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, id),
+    UNIQUE (tenant_id, section_id, version),
+    FOREIGN KEY (tenant_id, section_id) REFERENCES proposal_sections(tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT section_storyboards_pink_separation_chk CHECK (
+        status <> 'pink_approved' OR (
+            approved_by <> '' AND
+            approved_by <> created_by AND
+            (submitted_by = '' OR approved_by <> submitted_by)
+        )
+    )
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_section_storyboards_current
+    ON section_storyboards(tenant_id, section_id) WHERE status <> 'superseded';
+CREATE INDEX IF NOT EXISTS idx_section_storyboards_task_section
+    ON section_storyboards(tenant_id, task_id, section_id, status);
+
+CREATE TABLE IF NOT EXISTS section_writing_verifications (
+    id                          BIGSERIAL PRIMARY KEY,
+    tenant_id                   TEXT NOT NULL DEFAULT 'default',
+    task_id                     BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    section_id                  BIGINT NOT NULL,
+    section_rev_id              BIGINT NOT NULL,
+    rev_no                      INT NOT NULL,
+    storyboard_id               BIGINT,
+    rule_version                TEXT NOT NULL DEFAULT 'd3-writing-v1',
+    verdict                     TEXT NOT NULL DEFAULT 'failed'
+                                CHECK (verdict IN ('passed','failed','stale')),
+    stale_reason                TEXT NOT NULL DEFAULT '',
+    ungrounded_claim_count      INT NOT NULL DEFAULT 0 CHECK (ungrounded_claim_count >= 0),
+    fact_binding_rate           DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    commitment_binding_rate     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    specificity_ratio           DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    kb_similarity_max           DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    boilerplate_similarity_max  DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    claims                      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metrics                     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reasons                     JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_by                  TEXT NOT NULL DEFAULT 'system',
+    updated_by                  TEXT NOT NULL DEFAULT 'system',
+    approved_by                 TEXT NOT NULL DEFAULT '',
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, section_rev_id),
+    FOREIGN KEY (tenant_id, section_id) REFERENCES proposal_sections(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, section_rev_id) REFERENCES section_revisions(tenant_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_section_writing_verifications_task_section
+    ON section_writing_verifications(tenant_id, task_id, section_id, rev_no DESC);
+
+-- 已通过粉队评审的故事板内容不可原地篡改；后续修订须将旧版置为 superseded 并新建版本，或由上游变更置为 stale。
+CREATE OR REPLACE FUNCTION d3_storyboard_immutable() RETURNS trigger AS $$
+BEGIN
+    IF OLD.status = 'pink_approved' AND
+       (NEW.theme_sentence, NEW.scoring_points, NEW.admissibility_item_ids, NEW.evidence_ids, NEW.commitment_ids,
+        NEW.chart_plans, NEW.created_by, NEW.submitted_by, NEW.approved_by, NEW.version)
+       IS DISTINCT FROM
+       (OLD.theme_sentence, OLD.scoring_points, OLD.admissibility_item_ids, OLD.evidence_ids, OLD.commitment_ids,
+        OLD.chart_plans, OLD.created_by, OLD.submitted_by, OLD.approved_by, OLD.version) THEN
+        RAISE EXCEPTION 'pink_approved storyboard % is immutable; create a new version instead', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_d3_storyboard_immutable ON section_storyboards;
+CREATE TRIGGER trg_d3_storyboard_immutable BEFORE UPDATE ON section_storyboards
+    FOR EACH ROW EXECUTE FUNCTION d3_storyboard_immutable();
+
+-- D3 级联失效：可采性运行失效时，引用该运行明細的故事板与写作核验同步置为 stale。
+CREATE OR REPLACE FUNCTION d3_run_invalidated() RETURNS trigger AS $$
+DECLARE
+    why TEXT;
+    item_ids BIGINT[];
+    affected_sections BIGINT[];
+BEGIN
+    IF NEW.status NOT IN ('stale','superseded') OR OLD.status <> 'current' THEN
+        RETURN NULL;
+    END IF;
+    why := format('admissibility run %s is %s', NEW.id, NEW.status);
+    SELECT COALESCE(array_agg(id), '{}') INTO item_ids
+      FROM admissibility_items
+     WHERE tenant_id = NEW.tenant_id AND run_id = NEW.id;
+    IF array_length(item_ids, 1) IS NULL THEN
+        RETURN NULL;
+    END IF;
+    UPDATE section_storyboards SET status = 'stale', stale_reason = why, updated_by = 'system', updated_at = NOW()
+        WHERE tenant_id = NEW.tenant_id AND status IN ('draft','pending_pink_review','pink_approved')
+          AND admissibility_item_ids && item_ids;
+    SELECT COALESCE(array_agg(DISTINCT section_id), '{}') INTO affected_sections
+      FROM section_storyboards
+     WHERE tenant_id = NEW.tenant_id AND admissibility_item_ids && item_ids;
+    UPDATE section_writing_verifications SET verdict = 'stale', stale_reason = why, updated_by = 'system', updated_at = NOW()
+        WHERE tenant_id = NEW.tenant_id AND verdict <> 'stale'
+          AND (section_id = ANY(affected_sections) OR EXISTS (
+              SELECT 1 FROM section_revision_evidence sre
+               WHERE sre.tenant_id = section_writing_verifications.tenant_id
+                 AND sre.section_rev_id = section_writing_verifications.section_rev_id
+                 AND sre.admissibility_item_id = ANY(item_ids)
+          ));
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_d3_run_invalidated ON admissibility_runs;
+CREATE TRIGGER trg_d3_run_invalidated AFTER UPDATE OF status ON admissibility_runs
+    FOR EACH ROW EXECUTE FUNCTION d3_run_invalidated();
+
+-- D3 级联失效：承诺台账变化时，引用该台账的故事板与写作核验同步置为 stale。
+CREATE OR REPLACE FUNCTION d3_commitment_changed() RETURNS trigger AS $$
+DECLARE
+    t TEXT; cid BIGINT; why TEXT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        t := OLD.tenant_id; cid := OLD.id;
+    ELSE
+        t := NEW.tenant_id; cid := NEW.id;
+        IF TG_OP = 'UPDATE' AND
+           (NEW.committed_value, NEW.tender_threshold_value, NEW.threshold_cmp, NEW.status, NEW.capability_limit,
+            NEW.capability_basis, NEW.source_admissibility_item_ids, NEW.version, NEW.unit, NEW.metric)
+           IS NOT DISTINCT FROM
+           (OLD.committed_value, OLD.tender_threshold_value, OLD.threshold_cmp, OLD.status, OLD.capability_limit,
+            OLD.capability_basis, OLD.source_admissibility_item_ids, OLD.version, OLD.unit, OLD.metric) THEN
+            RETURN NULL;
+        END IF;
+    END IF;
+    why := format('commitment %s changed', cid);
+    UPDATE section_storyboards SET status = 'stale', stale_reason = why, updated_by = 'system', updated_at = NOW()
+        WHERE tenant_id = t AND status IN ('draft','pending_pink_review','pink_approved')
+          AND commitment_ids @> ARRAY[cid];
+    UPDATE section_writing_verifications wv SET verdict = 'stale', stale_reason = why, updated_by = 'system', updated_at = NOW()
+        WHERE wv.tenant_id = t AND wv.verdict <> 'stale'
+          AND (
+              EXISTS (
+                  SELECT 1 FROM section_revisions rv
+                   WHERE rv.tenant_id = wv.tenant_id AND rv.id = wv.section_rev_id
+                     AND rv.commitment_ids @> ARRAY[cid]
+              )
+              OR EXISTS (
+                  SELECT 1 FROM section_storyboards sb
+                   WHERE sb.tenant_id = wv.tenant_id AND sb.id = wv.storyboard_id
+                     AND sb.commitment_ids @> ARRAY[cid]
+              )
+          );
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_d3_commitment_changed ON commitment_ledger;
+CREATE TRIGGER trg_d3_commitment_changed AFTER UPDATE OR DELETE ON commitment_ledger
+    FOR EACH ROW EXECUTE FUNCTION d3_commitment_changed();
+
+-- D3 级联失效：知识库证据失效或矛盾时，引用该证据的故事板与写作核验置为 stale。
+CREATE OR REPLACE FUNCTION d3_retrieval_evidence_changed() RETURNS trigger AS $$
+DECLARE why TEXT;
+BEGIN
+    IF NEW.status IN ('stale','contested') OR NEW.relation = 'contradicts' THEN
+        why := format('retrieval evidence %s is %s/%s', NEW.id, NEW.status, NEW.relation);
+        UPDATE section_storyboards SET status = 'stale', stale_reason = why, updated_by = 'system', updated_at = NOW()
+            WHERE tenant_id = NEW.tenant_id AND status IN ('draft','pending_pink_review','pink_approved')
+              AND evidence_ids @> ARRAY[NEW.id];
+        UPDATE section_writing_verifications wv SET verdict = 'stale', stale_reason = why, updated_by = 'system', updated_at = NOW()
+            WHERE wv.tenant_id = NEW.tenant_id AND wv.verdict <> 'stale'
+              AND (
+                  EXISTS (
+                      SELECT 1 FROM section_revisions rv
+                       WHERE rv.tenant_id = wv.tenant_id AND rv.id = wv.section_rev_id
+                         AND rv.evidence_ids @> ARRAY[NEW.id]
+                  )
+                  OR EXISTS (
+                      SELECT 1 FROM section_storyboards sb
+                       WHERE sb.tenant_id = wv.tenant_id AND sb.id = wv.storyboard_id
+                         AND sb.evidence_ids @> ARRAY[NEW.id]
+                  )
+              );
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_d3_retrieval_evidence_changed ON retrieval_evidence;
+CREATE TRIGGER trg_d3_retrieval_evidence_changed AFTER UPDATE OF status, relation ON retrieval_evidence
+    FOR EACH ROW EXECUTE FUNCTION d3_retrieval_evidence_changed();
+
+-- D3 级联失效：章节因提纲变更置为 stale_outline 时，故事板与写作核验同步置为 stale。
+CREATE OR REPLACE FUNCTION d3_section_outline_stale() RETURNS trigger AS $$
+BEGIN
+    IF NEW.status = 'stale_outline' AND OLD.status <> 'stale_outline' THEN
+        UPDATE section_storyboards SET status = 'stale', stale_reason = 'outline superseded', updated_by = 'system', updated_at = NOW()
+            WHERE tenant_id = NEW.tenant_id AND section_id = NEW.id
+              AND status IN ('draft','pending_pink_review','pink_approved');
+        UPDATE section_writing_verifications SET verdict = 'stale', stale_reason = 'outline superseded', updated_by = 'system', updated_at = NOW()
+            WHERE tenant_id = NEW.tenant_id AND section_id = NEW.id AND verdict <> 'stale';
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_d3_section_outline_stale ON proposal_sections;
+CREATE TRIGGER trg_d3_section_outline_stale AFTER UPDATE OF status ON proposal_sections
+    FOR EACH ROW EXECUTE FUNCTION d3_section_outline_stale();
+
+-- D3 级联失效：要求项变更时，关联章节的故事板与写作核验同步置为 stale。
+CREATE OR REPLACE FUNCTION d3_requirement_changed() RETURNS trigger AS $$
+DECLARE why TEXT;
+BEGIN
+    IF (NEW.code, NEW.category, NEW.title, NEW.description, NEW.is_mandatory, NEW.score_weight, NEW.score_group,
+        NEW.source_hash, NEW.proof_rules, NEW.scoring_tiers, NEW.eval_kind, NEW.parent_id, NEW.superseded_by_id, NEW.review_status)
+       IS NOT DISTINCT FROM
+       (OLD.code, OLD.category, OLD.title, OLD.description, OLD.is_mandatory, OLD.score_weight, OLD.score_group,
+        OLD.source_hash, OLD.proof_rules, OLD.scoring_tiers, OLD.eval_kind, OLD.parent_id, OLD.superseded_by_id, OLD.review_status) THEN
+        RETURN NULL;
+    END IF;
+    why := format('requirement %s changed', NEW.code);
+    UPDATE section_storyboards sb SET status = 'stale', stale_reason = why, updated_by = 'system', updated_at = NOW()
+        WHERE sb.tenant_id = NEW.tenant_id AND sb.task_id = NEW.task_id
+          AND sb.status IN ('draft','pending_pink_review','pink_approved')
+          AND EXISTS (
+              SELECT 1 FROM proposal_section_requirements m
+               WHERE m.tenant_id = sb.tenant_id AND m.section_id = sb.section_id
+                 AND m.requirement_id = NEW.id
+          );
+    UPDATE section_writing_verifications wv SET verdict = 'stale', stale_reason = why, updated_by = 'system', updated_at = NOW()
+        WHERE wv.tenant_id = NEW.tenant_id AND wv.task_id = NEW.task_id AND wv.verdict <> 'stale'
+          AND EXISTS (
+              SELECT 1 FROM proposal_section_requirements m
+               WHERE m.tenant_id = wv.tenant_id AND m.section_id = wv.section_id
+                 AND m.requirement_id = NEW.id
+          );
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_d3_requirement_changed ON requirement_items;
+CREATE TRIGGER trg_d3_requirement_changed AFTER UPDATE ON requirement_items
+    FOR EACH ROW EXECUTE FUNCTION d3_requirement_changed();
+
+-- R1: durable section writing requests; domain C, independent from tool approvals.
+CREATE TABLE IF NOT EXISTS section_write_jobs (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    section_id BIGINT NOT NULL,
+    section_code TEXT NOT NULL,
+    base_rev_no INT NOT NULL,
+    outline_version INT NOT NULL,
+    request_key TEXT NOT NULL,
+    instruction TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','awaiting_review','candidate','blocked','cancelled')),
+    attempts INT NOT NULL DEFAULT 0,
+    max_attempts INT NOT NULL DEFAULT 3 CHECK(max_attempts BETWEEN 1 AND 10),
+    deadline_at TIMESTAMPTZ NOT NULL DEFAULT now()+interval '30 minutes',
+    lease_token BIGINT NOT NULL DEFAULT 0,
+    lease_until TIMESTAMPTZ,
+    result_rev_no INT,
+    error TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL DEFAULT '',
+    updated_by TEXT NOT NULL DEFAULT '',
+    approved_by TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id,task_id,request_key),
+    FOREIGN KEY(tenant_id,task_id,section_id) REFERENCES proposal_sections(tenant_id,task_id,id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS section_write_jobs_active ON section_write_jobs(tenant_id,section_id) WHERE status IN ('queued','running');
+CREATE INDEX IF NOT EXISTS section_write_jobs_pending ON section_write_jobs(task_id,id) WHERE status IN ('queued','running');
+
+-- R1: durable per-recipient operator inputs, domain B.
+CREATE TABLE IF NOT EXISTS intent_inputs (
+ id BIGSERIAL PRIMARY KEY,
+ tenant_id TEXT NOT NULL DEFAULT 'default',
+ exploration_id BIGINT NOT NULL REFERENCES explorations(id) ON DELETE CASCADE,
+ hint_id BIGINT NOT NULL REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+ intent_id BIGINT NOT NULL REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+ body TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','delivered','acknowledged','returned')),
+ delivery_epoch BIGINT NOT NULL DEFAULT 0,
+ created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT '',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ UNIQUE(tenant_id,hint_id,intent_id)
+);
+CREATE INDEX IF NOT EXISTS intent_inputs_pending ON intent_inputs(exploration_id,intent_id,id) WHERE state IN ('pending','delivered');
+
+-- Producer provenance, domain B; referenced text remains in domain C.
+CREATE TABLE IF NOT EXISTS intent_section_outputs (
+ tenant_id TEXT NOT NULL DEFAULT 'default',
+ intent_id BIGINT NOT NULL REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+ lease_epoch BIGINT NOT NULL,
+ section_rev_id BIGINT NOT NULL REFERENCES section_revisions(id) ON DELETE CASCADE,
+ created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT '',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,section_rev_id)
+);
+CREATE INDEX IF NOT EXISTS intent_section_outputs_producer ON intent_section_outputs(tenant_id,intent_id);
+
+-- A stopped recipient must not strand an active Hint after a crash or direct
+-- state transition. The Planner can consume/replan the returned instruction.
+CREATE OR REPLACE FUNCTION return_terminal_intent_inputs() RETURNS trigger AS $$
+BEGIN
+ IF NEW.kind='intent' AND NEW.state NOT IN ('running','open','paused') AND OLD.state IS DISTINCT FROM NEW.state THEN
+  UPDATE intent_inputs SET state='returned',updated_at=now()
+   WHERE intent_id=NEW.id AND state IN ('pending','delivered');
+ END IF;
+ RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_return_terminal_intent_inputs ON exploration_nodes;
+CREATE TRIGGER trg_return_terminal_intent_inputs AFTER UPDATE OF state ON exploration_nodes
+ FOR EACH ROW EXECUTE FUNCTION return_terminal_intent_inputs();

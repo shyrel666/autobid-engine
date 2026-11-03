@@ -131,6 +131,9 @@ func scanChart(sc rowScanner) (*ProposalChart, error) {
 
 // CreateChart 新建图表并绑定到章节当前主版本（章节 FOR SHARE，期间不会产生新修订）。
 func (d *DB) CreateChart(ctx context.Context, tenant string, taskID int64, actor string, in ChartInput) (*ProposalChart, error) {
+	if err := CheckSectionScope(ctx, in.SectionID); err != nil {
+		return nil, err
+	}
 	tenant = tenantOr(tenant)
 	if !validChartType(in.ChartType) {
 		return nil, fmt.Errorf("%w: unknown chart_type %q", ErrInvalidChart, in.ChartType)

@@ -14,6 +14,8 @@ test('每种阻断都有确定的修复位置', () => {
   assert.equal(blockerLink(1, b('veto_failed'))?.href, '/tasks/1/requirements?filter=veto')
   assert.equal(blockerLink(1, b('section_not_approved', { section_id: 4 }))?.href, '/tasks/1/writing/4')
   assert.equal(blockerLink(1, b('section_not_approved'))?.href, '/tasks/1/writing')
+  for (const k of ['storyboard_missing', 'storyboard_unapproved', 'storyboard_stale', 'ungrounded_claim', 'writing_verification_stale', 'writing_verification_failed', 'section_self_approved'])
+    assert.equal(blockerLink(1, b(k, { section_id: 4 }))?.href, '/tasks/1/writing/4')
   for (const k of ['matrix_stale', 'matrix_failed', 'matrix_unverified'])
     assert.equal(blockerLink(1, b(k, { requirement_item_id: 2, section_id: 3 }))?.href, '/tasks/1/matrix?requirement=2&section=3')
   assert.equal(blockerLink(1, b('consistency_not_run'))?.href, '/tasks/1/consistency')

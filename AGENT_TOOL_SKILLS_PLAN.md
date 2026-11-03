@@ -1,0 +1,384 @@
+# Agent 工具 Skills 与开源运行组件实施计划
+
+编制日期：2026-11-02
+
+状态：二轮审查修订版。S0 文档核对完成，可启动首版工程实现，尚无新增能力的 E 级验收。部署实测、分域候选扩展与业务效果的不确定项见第 12 节。
+
+适用项目：AutoBid Engine。本文中的 Skill 指项目提供给 Agent 的业务技能（`bidtools.Skills()`），不是 Codex 桌面插件。
+
+## 1. 实施目标与范围
+
+将文档处理、知识检索、图表生成、标书合稿封装为 Agent 可按需调用的 Skills 与 Tools，并将所需开源程序、运行时、模型和字体纳入统一部署。
+
+用户侧目标：企业业务人员使用浏览器即可上传资料、查看处理结果、编辑章节和下载标书，无需逐项安装 Python、OCR、Mermaid-CLI、LibreOffice。服务器管理员仍需提供容器运行环境、存储及按部署方案需要的 GPU 驱动。“免安装”指业务用户免配置，不代表运行依赖消失。
+
+本计划交付：
+
+1. 四类技能的使用规则、工具契约、宿主授权及真实执行入口。
+2. 开源运行组件的版本固定、镜像构建、离线资源准备与功能自检。
+3. 耗时作业提交、查询、取消、幂等恢复及 Agent 后续处理机制。
+4. 与既有解析采用、证据核验、章节修订、审批和导出快照的连接。
+5. 工程回归、故障演练、部署验收和业务评测记录。
+
+本计划不重建 Planner/Worker 框架，不引入 LangChain/Dify、独立向量数据库或通用脚本执行器，不开放 Agent 安装软件、执行任意 Shell、选择任意服务地址或访问宿主路径。原有 F2 脚本 Runner 仍受自身启动关口约束。Windows 单机离线安装包作为后续交付形态，首版以服务器部署为准。
+
+与既有计划的关系：
+
+- [ROADMAP.md](ROADMAP.md)：继续采用 E（工程实现）、V（外部验证）、P（生产启用）分级。
+- [CLAUDE.md](CLAUDE.md)：遵守数据域、迁移、审批、检索与验证约束。
+- [可靠性计划](docs/RELIABILITY_PLAN.md)：复用 R1 作业机制；R2 可信身份和显式质量策略是开放高影响工具的前置条件。本文不是对 R2/R3/R4 的完成声明。
+- [文件处理计划](docs/file-processing/PLAN.md)：复用 F1/F3a/F3a+ 固定文件处理，固定 OCR/解析服务不等同于开放 F2。
+- [检索工程边界](eval/retrieval/README.md)：索引版本、证据核验与模型评测要求保持有效。
+- ROADMAP 原先延后的 mmdc 适配，在本计划 S3 中列为拟实施项；通过验收后再同步其状态。
+
+## 2. 当前代码基线与实施落点
+
+以下以本次工作区代码为准，不把接口存在等同于真实依赖已验证。
+
+| 能力 | 已有实现 | 实施差集 |
+| --- | --- | --- |
+| Skills / Tools | `bidtools/skills.go` 有 **6** 个 Skill；`agent/worker.go` 经 `Skill` 解锁、`SearchExtraTools` 获取 Schema；`server/task_llm.go:LLMService.Resolve` 装配 Worker；Planner 尚未挂载业务工具 | 新增 3 个 Skill，复用 knowledge-reuse；Planner 只读注入、宿主授权 |
+| 文档 | `filework.Processor.process` 首次导入直接 PersistTender；reparse 将完整 PreparedTender 存入 FileProcessingRecord.Payload，Preview 仅为差异摘要；Adopt 目前只支持 reparse；固定队列已有幂等/租约/取消 | Agent 首次导入候选模式、人工采用 import 分支、解析后端与结果分页 |
+| 检索 | `retrieval/providers.go`、版本化索引、核验与 knowledge-reuse 已有 | 健康探测、版本回显与可选模型部署，不重写协议 |
+| 图表 | `export.BuildChartSource` 支持 architecture/gantt/org/equipment_table；`export.Renderer.RenderPNG` 与 `export.MMDC`；proposal_charts 已有 source_hash、pending、修订绑定、产物路径/哈希 | 期望修订围栏、持久化渲染作业、幂等取消、结构化图表计划 |
+| 导出 | `db.CreateExportJobs` 冻结快照；**CompleteExportJob、FailExportJob、Heartbeat 已检查 lease_token + running**；export/runner.go 异步执行 | 全生命周期请求幂等、cancelled、严格最终稿策略与完成通知；复用已有围栏，没有 FinishExportJob 这个待修补接口 |
+| HTTP 章节 Writer | `server/proposal.go:llmSectionWriter.WriteSection` 已调用 harness.Run（最多 6 轮工具调用，再解析 JSON）；SectionWriterTools 包含证据绑定，非纯只读；`server/section_jobs.go:executeSectionJob` 调 FinishSectionWriteJob 原子保存修订/结果 | 增加图表计划，并在修订提交事务内登记渲染作业；不改回单次 LLM 调用 |
+| Intent | intent_completion.go 校验产物；intent_inputs.go 持久化 Hint；runIntent 正常回合校验后 ACK；终态触发器和函数尾部均退回 Hint | 持久化作业事件、原子回合收尾与等待恢复、Hint 等待态兼容 |
+
+真实边界：
+
+- 未直接内置 MinerU/PaddleOCR 或指定 BGE 模型；没有截图中四个同名工具包。模板上传继续接受 .docx。
+- LibreOffice 记录有先后：`data/libreoffice-repair-2026-11-01/go-test-race.jsonl` 当地时间约 02:26 通过；`data/reliability-checks/race-final.jsonl` 约 21:34 开始的回归再次失败两个真实导出用例。保留[最近失败](docs/RELIABILITY_PLAN.md)，[较早通过](docs/LIBREOFFICE_VALIDATION.md)不能覆盖它。本次未重跑，不判定根因；mmdc 真实渲染仍未验收。
+- 用户暂无企业历史投标、得分、证明材料原件和评审人员，V/P 继续待验证。
+
+## 3. 目标架构与执行接线
+
+```mermaid
+flowchart TD
+    U[浏览器用户] --> A[Planner / Worker / HTTP Writer]
+    A --> T[Skills 与受限 Tools]
+    T --> B[业务服务与持久化门禁]
+    B --> Q[(PostgreSQL 作业、订阅、事件)]
+    Q --> W[固定后台执行器]
+    W --> R[解析 / OCR / Mermaid / Office]
+    R --> F[受管产物与业务结果]
+    F --> Q
+    Q --> N[恢复扫描与调度唤醒]
+    N --> A
+    N --> U
+```
+
+Skill 描述步骤，Tool 调应用内业务服务，不经 HTTP 回环重复实现逻辑。内部 HTTP 适配器承载运行组件，保留本机 CLI 开发兼容；Go 单体与 PostgreSQL 不变，应用不挂载 Docker socket。
+
+### 3.1 Worker 与 Planner
+
+- 在 LLMService.Resolve 注入工具，沿用 Skill → SearchExtraTools → 执行。提交业务作业与订阅须同事务。
+- 现有 `db.WithIntentExecution/WithExecutionScope` 注入执行身份和范围。原稿所称 IntentExecutionFromContext/ExecutionScopeFromContext **目前不存在**。S2 在 db 内新增校验/提交方法，使用现有私有 Context 值并在事务内校验活租约；不必向模型开放身份读取接口。
+- Planner 新增可选 `ExtraTools []tool.CoreTool`，仅装配 tool_runtime_status、proposal_export_check、agent_job_status。解析/图表/导出由 add_intent 派发 Worker，人工采用不派发为 Agent 操作。
+- `agent.WorkerWritebackTools` 是收尾白名单；`server/watchdog.go:isWatchdogWritebackTool` 是另一套写回识别。修改前者不会自动改变后者。**submit 不是交付物**：S2 为 Watchdog Stop 和 runIntent 增加“持久化订阅允许释放本轮槽位”分支，done 仍校验真实结果。不得添加工具名称后就绕过完成门禁。
+
+### 3.2 HTTP Writer 与图表原子登记
+
+保留现有有界工具循环/JSON，不引入 Intent 挂起协议。新增 `SectionDraft.Charts []ChartPlanDraft`（code/title/chart_type/spec），同一修订 code 唯一、首版最多 20 项，复用 BuildChartSource 规格。
+
+服务层先校验全部计划并生成确定性源码，再将纯数据传入扩展的 FinishSectionWriteJob；db 不反向导入 export。**同一事务**保留现有租约/大纲/修订门禁，SaveApplied 时保存修订并创建 proposal_charts 与 chart_render_jobs，键由章节作业 ID、修订 ID、code 确定性生成。冲突候选不创建正式图表作业，计划可随候选留存。无效规格在提交修订前报错。
+
+提交后只发唤醒提示，Runner 从库领取。禁止“先提交修订、再循环 Submit”产生崩溃漏图窗口，也禁止在数据库事务内渲染或发网络请求。
+
+## 4. 工具契约与业务规则
+
+新增名称均为**拟实现接口**。tenant_id/task_id/actor/intent_id/lease_epoch 由宿主注入。请求只接收受管 ID 与枚举，HTTP 与 Tool 共用业务状态机。
+
+### 4.1 首版工具清单
+
+| Skill | 工具 | 输入与输出契约 |
+| --- | --- | --- |
+| 新增 document-processing | document_parse_submit | S5a 仅 source_kind=tender_file；file_id、operation=import/reparse、document_id、expected_parse_revision、parser_profile、request_key。import 的目标文档/修订为空；reparse 两者必填，revision 是目标 **parse_revision 整数**，不是文档 ID/source_epoch。返回 job_ref、状态、解析配置、截止时间；记录生成后才有 record_ref |
+| 同上 | document_parse_status/result/cancel | status/cancel 接收 job_ref；result 接收 record_ref={kind:tender_parse_record,id}，支持 cursor、limit_sections(1..20)、max_chars(500..8000)；返回定位、原件哈希、缺口、next_cursor。取消未终态作业不等于拒绝候选 |
+| 已有 knowledge-reuse | kb_search_*、kb_read_chunk/evidence、kb_verify_evidence、kb_research | 保持现有权限、证据状态、索引版本与预算契约 |
+| 新增 diagram-generation（proposal-writing 引用） | chart_render_submit | section_id/section_code 二选一，expected_rev_no>0 必填，title/chart_type/spec/request_key；类型沿用 architecture/gantt/org/equipment_table，spec 为对应 JSON。返回 chart_id、修订、source_hash、job_ref、状态 |
+| 同上 | chart_render_status/cancel | job_ref；返回图表状态、作业状态、尺寸、是否对当前修订过期与失败原因 |
+| 新增 proposal-export | proposal_export_check | formats 为非空去重 docx/pdf 子集，可选 template_id；返回 ready、批准大纲版本、blockers、warnings、依赖健康/检查时间。预检不承诺提交成功 |
+| 同上 | proposal_export_submit | formats/template_id/bidder_name（映射现有 Bidder）/expected_outline_version/request_key；项目名读取任务。返回请求组、各格式 job_ref、快照指纹和状态。最终稿强制 strict_runtime=true，模型无权关闭 |
+| 同上 | proposal_export_status/cancel | job_ref 或导出请求组；组取消逐项返回取消/已终态结果。返回快照状态、toc_refreshed、sha256、受鉴权下载路由 |
+| 公共只读 | tool_runtime_status | capability 可选 all/ocr/enhanced_pdf/mermaid/libreoffice/embedding/reranker；返回 unconfigured/starting/healthy/degraded/self_test_failed、版本、自检时间、脱敏原因 |
+| 公共只读 | agent_job_status | job_ref 或当前宿主绑定 Intent 下分页列表；返回目标版本、状态、失败及下一步动作，不能借类型/ID 越权 |
+
+`job_ref={kind,id}` 首版 kind 为 **tender_parse/chart_render/proposal_export**，分别映射 fixed_file_jobs/chart_render_jobs/export_jobs；未来知识/证据解析使用不同 kind，不以裸数字 ID 混查。Tool 提交强制订阅当前 Intent，不开放模型 subscribe=false；HTTP 用户提交可无 Intent 订阅。
+
+parser_profile 限 auto/native/ocr_only/enhanced_pdf，并按实际部署能力启用；auto 的解析路由与执行版本在首次提交时固定，重试不随配置变化。未交付的增强后端返回 FEATURE_DISABLED/RUNTIME_UNAVAILABLE。
+
+import 还需现有 ProcessInput 的 TenderNo/LotNo/Title/DocRole/PublishedAt 元数据：优先读取受管材料/任务配置，缺失则返回具体缺项供补充，不臆造 tender_no；允许用户补充的字段沿用现有导入校验并计入指纹。
+
+**首版不注册 document_parse_adopt。** 人工通过采用接口操作；解析完成事件只表示“候选就绪”。正式入库后的下游工作继续受人工采用及 source_epoch 门禁控制，不把一个终态事件复用为后续审批事件。
+
+### 4.2 返回、状态与错误
+
+```json
+{
+  "accepted": true,
+  "job_ref": {"kind": "tender_parse", "id": 123},
+  "status": "queued",
+  "business_state": "pending",
+  "deadline_at": "2026-11-02T12:30:00Z",
+  "next_action": "wait_for_job_event"
+}
+```
+
+对外状态 queued/running/succeeded/failed/cancelled/superseded 由底层映射；只有记录 ready 才返回 candidate_pending_review，adopted/rejected 与处理作业状态分开。提交门禁失败返回 accepted=false/error_code/retryable/blockers，不插入伪成功作业。
+
+错误码：INVALID_ARGUMENT（Schema 错误）、FEATURE_DISABLED、RUNTIME_UNAVAILABLE、SCOPE_VIOLATION、PRECONDITION_FAILED、CONFLICT_STALE_REVISION、IDEMPOTENCY_KEY_CONFLICT、HUMAN_ACTION_REQUIRED。上述条件未纠正不自动盲重试。截止/总尝试耗尽为 BUDGET_EXHAUSTED；临时容量不足应排队或 CAPACITY_BUSY（retryable=true），不能当永久预算耗尽。运行期瞬断可在原期限/尝试预算内重试。
+
+### 4.3 执行规则
+
+**文档**：ProcessInput 和固定作业不可变 input 增加 candidate_only/parser_profile。Agent 强制 candidate_only=true，旧固定导入默认 false。保存现有 Payload 中完整 PreparedTender，Preview 仅摘要/差异；保留页码、表格定位、OCRLine.BBox、source_hash、解析器版本和缺口。import 人工采用在同事务调用 PersistTender + CompleteFileProcessing，检查原件哈希/候选状态/任务门禁并幂等；reparse 保留 ExpectedRevision 和失效链。source_epoch 为任务级来源门禁，不能替代文档 parse_revision。
+
+招标原件/正文属于招标来源域，file_processing_records/fixed_file_jobs 是过程记录，不是企业事实。知识库和企业证明材料保持各自存储与核验，S5a 以外来源先拒绝，S5b/c 单独设计后开放。
+
+**图表**：ChartInput/ChartRequest 增加 ExpectedRevNo，Tool 强制提供，旧接口可兼容缺省。事务内校验正式修订并绑定 section_rev_id+rev_no；复用 BuildChartSource 的 SourceHash，另用 request_hash 比较完整请求，不重复新增 spec_hash。Renderer.RenderPNG 产物经 export.Store 保存路径/哈希/尺寸，不增设不存在的 svg_bytes/png_bytes。equipment_table 保持原生 Word 表格，不依赖 mmdc。
+
+完成回调检查活租约、期限、未取消、source_hash 与修订；章节已前进则 superseded，不挂新修订。已完成历史作业仍 succeeded，查询另标 stale。兼容 chart_generate/render/rebind/delete 必须检查活跃异步作业，拒绝并发改写或先明确取消，不能绕过新围栏。
+
+**导出**：CreateExportJobs 快照事务比较实际批准大纲版本（现有 ExportPreflight 的版本在 Readiness 内，不存在 pref.OutlineVersion），重验正文、材料和图表门禁。最终稿必须真实刷新目录；所需 Mermaid 图有可读且哈希正确的 PNG，equipment_table 按 native 处理。已有合格 PNG 时不因 mmdc 临时离线拒绝导出。
+
+严格策略写入不可变快照，执行时重验；服务在预检后故障不能静默生成未刷新最终稿。旧 HTTP 兼容产物明确 preview_only，不能凭 succeeded 声称最终交付。外部探测不在数据库长事务内执行。
+
+**检索**：沿用 retrieval 协议、版本化索引、预算和证据状态。配置语义模型后不静默用 HashEmbedder 冒充；模型切换先重建再激活，质量按业务评测另行验证。
+
+## 5. 持久化、事务与恢复契约
+
+### 5.1 数据模型实施清单
+
+以下为字段与约束规范，**不是已执行的迁移脚本**。实施时写入 db/schema.sql 幂等 DDL，由 db.Migrate 执行。所有新表含 tenant_id、created_by/updated_by/approved_by、created_at/updated_at；旧行采用兼容默认或可空外键，不强造历史请求键。
+
+| 表 / 落点 | 字段与必须成立的约束 |
+| --- | --- |
+| fixed_file_jobs / file_processing_records | input 增加 candidate_only/parser_profile/执行版本，纳入输入不可变校验与指纹；记录增加 parser_profile/parser_version，完整候选复用 payload。既有 request_key/fingerprint/租约/期限继续使用 |
+| 新增 chart_render_jobs | id、tenant_id/task_id、chart_id、request_key/request_hash、source_hash/执行版本、status 六态、attempts/max_attempts（默认 3）、首次提交固定 deadline_at（初始默认 10 分钟，可配置）、lease_token/lease_until、error_code/error。全生命周期 UNIQUE(tenant_id,task_id,request_key)，活跃 UNIQUE(tenant_id,chart_id)。**FK(tenant_id,task_id,chart_id) → proposal_charts(tenant_id,task_id,id)** 才匹配现有唯一键；修订从绑定图表读取，不复制未经约束的 section/revision |
+| proposal_charts | 可增加 HTTP 图表计划 plan_code；计划请求键使用服务端保留命名空间。复用 source_hash/artifact_path/artifact_hash。活动作业期间禁止改输入，所有修改入口遵守同一版本与锁规则 |
+| 新增 export_requests | id、tenant_id/task_id、request_key、request_hash（规范化客户端输入）、snapshot_hash（首次冻结输入）、formats、strict_runtime、执行版本。UNIQUE(tenant_id,task_id,request_key)，另建 UNIQUE(tenant_id,task_id,id) 供复合 FK；输入不可变 |
+| export_jobs | 新增可空 export_request_id、strict_runtime、首次提交固定 deadline_at（旧作业兼容可空、新入口必填）；复合 FK 关联 export_requests；UNIQUE(tenant_id,task_id,export_request_id,format)。status CHECK 增 cancelled，不可变触发器覆盖新输入。保留 lease_token 围栏，补取消/到期/任务生命周期检查与事件发布；不能只建活跃 fingerprint 索引 |
+| 新增 agent_job_subscriptions | id、tenant_id/task_id/exploration_id/intent_id、created_intent_epoch（审计）、job_kind/job_id、target_ref/expected_version、required=true、state=waiting/notified/acknowledged/cancelled。UNIQUE(tenant_id,intent_id,job_kind,job_id)；索引覆盖租户+作业+等待态、Intent+state |
+| 新增 agent_job_events | id、subscription_id 外键、terminal_status/business_state/payload、state=pending/delivered/acknowledged/expired、delivery_epoch、delivered_at/acknowledged_at。UNIQUE(subscription_id)；归属通过 subscription 读取，避免冗余 task/intent 漂移；终态 payload 不可改写 |
+
+多态 job 引用不能用普通 FK 验证：同事务检查作业租户/任务、目标权限、tasks.exploration_id = intent.exploration_id 以及当前活租约。禁止按模型自报 ID 插入订阅。未来新增 kind 必须先实现对应验证。
+
+迁移验证覆盖新库、旧库升级、再次执行、旧 CHECK 替换及历史查询；原稿错误 FK 与不完整索引已改为上述约束，不把未运行的 DDL 当验收。
+
+### 5.2 幂等、围栏与锁序
+
+**请求幂等**：范围为 (tenant_id,task_id,job_kind,request_key)，各作业表天然隔离 kind。先校验权限，再查原请求并比较规范化客户端 request_hash；相同返回原作业，涵盖成功/失败/取消终态，不同则冲突。只有新键才解析当前版本、冻结快照并检查新提交门禁。不能用变化后的当前修订重算旧请求指纹，导致原请求无法重放。主动重试使用新键；自动重试沿用原作业/期限/总预算。
+
+图表指纹覆盖章节、expected_rev_no、类型、标题与规范化 spec；导出请求指纹覆盖 formats/template_id/bidder/期望大纲版本及服务端策略，snapshot_hash 另覆盖实际模板哈希、章节修订、图表和材料门禁。一个导出请求组与全部格式作业/订阅原子创建，禁止半组入队。
+
+**取消/暂停**：取消事务写终态并撤销租约/推进令牌，发布事件；旧成功、失败与心跳均不能改写。暂停停止领取且撤销在途写回资格，恢复不延长原期限/预算；终止不再派发。固定解析复用原机制，图表/导出补同等检查。产物按作业+尝试隔离写受管目录，数据库拒绝后清理孤立文件，不覆盖已成功文件。
+
+**锁序按操作规定**：
+
+- Agent 提交：需要任务锁时先任务行，再 Intent 活租约；图表随后大纲 → 章节 → 图表 → 作业 → 订阅/事件。固定解析/导出保留业务锁序，新增 Intent 锁须在业务锁前。多个同类对象按 ID 排序。
+- 图表完成：任务 → 大纲 → 章节 → 图表 → 作业 → 订阅/事件；仅领取作业的短事务不继续申请大纲/章节锁。
+- HTTP Writer：保留任务 → section_write_jobs → 大纲 → 章节；同事务只插入本次新图表/作业，不反向锁其他 Intent。
+- **终态发布仅写业务结果、订阅、事件，不锁 exploration_nodes**。原稿作业 → 订阅 → Intent 与提交 Intent → 作业存在反序，禁止沿用。
+- 回合收尾/唤醒先锁 Intent；最终正文校验按大纲 → 章节，再订阅/事件，不反向锁业务作业。订阅/事件变更后不得回头申请 Intent 锁；新写回仍走业务门禁。
+
+### 5.3 等待、事件确认与交付
+
+下述方法名为拟新增；真实接线点是 runIntent、intent_completion.go、intent_inputs.go、exploration.go 和各队列终态方法。
+
+1. **提交/订阅**：同事务锁作业行并读状态，非终态建立 waiting，已终态建立 notified + pending event。终态更新也锁同一作业行，避免先完成后订阅丢通知。拒绝结束/越界 Intent 的订阅。
+2. **持久化完成**：Runner 的终态事务更新订阅并插入唯一事件，覆盖成功、不可重试失败、取消、到期、重试耗尽回收等全部终态路径；回 queued 不发终态。Task.Notify 只是加速信号。
+3. **原子收尾**：Worker 正常完成且 session.Resume 保存 transcript 成功后，ACK 本轮确已送达的事件，再调用拟新增 FinalizeIntentTurn。该方法锁 Intent/活租约统一决策：有未消费事件或 Hint → open；仅剩 waiting 订阅 → blocked+waiting_job；都无则校验真实产物后 done。不得先 HasWaiting 再单独 UPDATE。租约丢失、取消、错误、超时维持原分支优先级。
+4. **唤醒协调**：独立短事务锁 Intent 再检查订阅/事件，仅重开 blocked_reason=waiting_job 且有未消费事件的节点，允许部分作业完成先处理。与第 3 步串行化：事件先到则收尾可见，收尾先到则协调器可见等待态。不复活 done/stopped/手动暂停/其他阻断。启动与周期扫描数据库，暂停不派发、恢复重扫；允许后台扫描，不要求模型持续轮询。
+5. **消费与 ACK**：TakeAgentJobEvent 按 Intent/当前 epoch 领取；旧 epoch delivered 可重放，同 epoch 不重复注入。created_intent_epoch 仅审计，不能屏蔽接管后的订阅。事件 ID 写入结构化消息，调用或 transcript 保存失败不 ACK；只 ACK 本轮已送达且保存的消息。不得让 CheckIntentDeliverables 先以未 ACK 为由拒绝，再把 ACK 放到其后。
+6. **Hint 兼容**：触发器 return_terminal_intent_inputs 和 runIntent 尾部 ReturnIntentInputs 都豁免 blocked+waiting_job。触发器监听 state **及 blocked_reason**，等待态转普通 blocked 即使 state 未变也退回。已处理并保存的 Hint 按协议确认，未处理保留可重放；不能全量误消费。检查 Frontier/Claim/ResumePaused/通用 set_state/Reopen 入口，不能绕过等待门禁。等待期间新 Hint 要么持久化投递并唤醒，要么交回 Planner，不能无人消费。
+7. **完成判据**：宿主 Mandate 扩展必需作业引用/输出类型，只有必需作业成功且结果版本有效才满足；ACK 失败事件不代表工作成功。解析候选就绪、正确修订真实图表、严格导出快照分别校验；人工审批另行处理。RequireWriteback 对异步工作读取订阅关联产物，不能要求唤醒回合重复写工具，也不能凭 submit 结束。失败交由 Planner 重规划，不无限重试。
+
+## 6. 开源组件与统一部署
+
+| 组件 | 首版决策 | 验收重点 |
+| --- | --- | --- |
+| Mermaid-CLI | 纳入固定版本的渲染镜像，包含 Chromium 运行依赖和思源黑体/宋体中文字体 | 实际 PNG、中文标签、甘特图、超时与子进程清理 |
+| LibreOffice＋UNO | 优先将现有 `export/office_refresh.py` 转换流程放入固定 Linux 运行容器，通过内部 HTTP 适配器或容器进程调用，保留回读检查 | 能真实打开 DOCX、刷新目录、另存 DOCX、生成 PDF；仅检测程序存在或版本号不算通过 |
+| PaddleOCR | 提供内部 HTTP 服务适配器（实现 `ingest.OCRProvider` 接口），转换为 `ingest.OCRPage`/`OCRLine.BBox`；CPU 基础配置与 GPU 可选配置分开 | 中文扫描件、坐标和页码、数字/表格识别、错误与缺口保留 |
+| MinerU | 作为复杂 PDF 增强后端按需启用，版本与资源要求在 S5 确认 | 多栏、跨页表格、阅读顺序、原文定位；与现有解析器对比 |
+| embedding/reranker | 延续已有 `retrieval/providers.go` 协议；可选本地模型部署包 | 索引一致性、故障降级、成本和业务检索评测 |
+| Gotenberg | 作为转换服务候选做小范围验证，不作为首版必需依赖 | 是否覆盖本项目刷新后 DOCX、PDF、目录和图表要求；只有 PDF 转换通过不能替代整个导出链路 |
+| python-docx/Pandoc | 首版不为更换工具名重写现有编译器 | 仅在明确模板能力缺口且回归收益成立时引入 |
+
+拟交付目录：`deploy/agent-tools/`，包含 Compose 配置、各运行镜像构建文件、环境变量样例、功能自检、备份恢复与升级说明。新文件名与目录均为计划产物，当前不表示已存在。
+
+S1 接线注意：Renderer 已是接口，远程实现复用 RenderPNG；OCR 复用 OCRProvider。`export.Service.Office` 当前是具体 `*Office`，远程转换需抽取转换接口并调整 Execute/Status 的调用，保留本机实现与测试；不能只增加 URL 配置便声称已接入。内部服务协议至少固定请求 ID、执行版本、输入内容/哈希、受限选项、超时、产物类型/哈希及结构化错误；Office 返回刷新后的 DOCX 和所需 PDF，不能只返回 PDF。文件大小/页数/像素和并发限额由部署配置与服务端共同强制执行。
+
+部署规则：
+
+- 版本使用已验证的固定版本和镜像 digest，不能发布为浮动 `latest`；记录程序、模型、字体版本和包校验和。
+- CPU 基础安装默认不启动所有重模型；增强解析/本地检索模型通过明确的部署 profile 启用。不能未经测量承诺单张 GPU 可同时承载所有服务。
+- 模型文件与字体提供预下载/离线导入流程，记录授权与第三方 notices；业务请求中不临时执行 pip/npm 安装或首次联网下载。
+- 内部服务不直接暴露给浏览器。主应用发送受管文件内容和受限参数，不把宿主路径或任意用户 URL 传给执行器。
+- 运行容器只获得所需暂存目录、资源限额和网络范围；程序调用有超时、并发上限与失败清理。
+- 新增远程解析/渲染/Office 配置时保留旧本机配置兼容；凭据由服务器管理，不写进 Skill、模型上下文或诊断响应。
+- 功能自检使用小型固定样本实际完成 OCR、PNG 和 DOCX/PDF 转换。配置存在但功能失败时，UI 与 Agent 都应看到不可用原因。
+
+本机（Windows 开发机）此前记录缺少可用 Linux 容器后端，S1 必须重新探测或在实际目标 Linux 服务器/WSL2 Docker 环境验收；写出 Dockerfile 不等于部署验证完成。
+
+## 7. 身份、权限与人工操作
+
+| 主体 | 能力 | 强制限制 |
+| --- | --- | --- |
+| Planner | 健康/预检/范围内作业查询；派发 Intent | 无直接提交/业务审批工具 |
+| Worker | 经宿主授权的解析、图表、导出与原有知识工具 | 宿主身份、活租约、目标范围检查，无人工采用/批准工具 |
+| HTTP Writer | 原有有界检索/证据绑定及图表计划 | 仅当前章节与要求；修订和图表入队原子提交 |
+| 人类角色 | 采用候选、批准大纲/故事板/章节、确认承诺/交付 | 按各自状态机校验；粉队/红队保留作者与评审人分离，不对所有操作套用同一种批准字段语义 |
+
+现有 CheckSectionScope/CheckRequirementScope 不覆盖文件、模板或全项目导出。S2/S4/S5a 扩展**宿主授予**的对象/动作能力：allowed_file_ids、allowed_template_ids、允许作业类型、can_export_task；受限空集合表示无权限。Planner/模型给出的 Mandate 只能收窄宿主能力，不能自授全任务导出。查询、取消、分页及下载均复验权限，不能只保护提交。
+
+X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环境验证受限工具；开放高影响自动化入口前完成相关可信身份/策略，跨企业生产仍要求 Phase 7 RBAC。Skill 解锁不是授权。
+
+## 8. HTTP 与前端衔接
+
+路由由 server/http.go 和各 register*Routes 注册；下列新增项不能冒称已有。
+
+| 能力 | 现有与新增路由 |
+| --- | --- |
+| 健康 | 新增 GET /api/runtime/tools，与 Tool 同源 |
+| 固定解析 | 已有 POST/GET /api/tasks/{id}/file-jobs、GET /api/tasks/{id}/file-jobs/{jobID}、POST /api/tasks/{id}/file-jobs/{jobID}/cancel；扩展 parser_profile/candidate_only |
+| 候选 | 现有路径为 /api/tasks/{id}/file-processing-records，含列表、GET /{recordID} 与 POST /{recordID}/adopt；**没有现成 reject 路由**。S5a 若提供拒绝按钮，新增同前缀 POST /{recordID}/reject，持久化拒绝人/原因/时间，已采用不得再拒绝 |
+| 图表 | 已有 GET/POST /api/tasks/{id}/charts（section_id 过滤/提交）、GET /charts/{chartID} 和 /image，以及 render/rebind/delete；不是 sections/{id}/charts。新增 POST/GET /api/tasks/{id}/chart-jobs、GET /api/tasks/{id}/chart-jobs/{jobID}、POST /api/tasks/{id}/chart-jobs/{jobID}/cancel |
+| 导出 | 保留 /api/tasks/{id}/exports/preflight、POST/GET exports、GET /{jobID} 与 /{jobID}/download；新增取消、request_key、expected_outline_version、服务器授权的最终稿/预览策略；旧兼容结果不默认为最终稿 |
+| 通知 | 复用任务 SSE 更新视图；刷新/重连读取持久化列表恢复，不用 SSE 代替数据库完成状态 |
+
+页面展示状态、输入版本、尝试/期限、失败、产物与下一步；候选可对照原件人工采用，旧修订图表明确标记，导出区分 preview_only/严格最终稿。业务用户无需安装运行依赖或读取宿主日志。
+
+### 8.1 前端随功能阶段同步交付
+
+前端是本计划的交付范围。每个涉及用户操作或可见状态的阶段，应同步完成 API 类型、调用封装、页面状态、操作反馈与浏览器验收；S7 负责全链路联调和交付，不集中补做前面阶段的页面。后台接口完成但对应页面未接通时，只能记录为后端子任务完成，不能勾选整个阶段 E。
+
+下表路径相对于 `web/src/`，均以现有页面为落点；新增共享组件在实施时按复用需要拆分，不要求另建独立“插件管理平台”。
+
+| 同步阶段 | 前端工作与现有落点 | 页面验收 |
+| --- | --- | --- |
+| S1 运行能力 | `features/task-workspace/TaskHeader.tsx` 及解析/导出入口展示相关能力状态，必要时复用能力提示组件 | 依赖未配置、自检失败、检查中分别可见；显示影响和下一步，不泄漏宿主路径/密钥；已有有效图表时不因渲染器离线误禁导出 |
+| S2 作业等待 | `features/execution/ExecutionPage.tsx`、`features/task-workspace/TaskWorkspaceProvider.tsx`、`resources.ts` 接入等待原因与作业事件；按当前用户权限读取业务作业 | “等待后台处理”与执行失败分开；刷新/断线重连恢复状态；Agent 提交的作业同样可见，不只显示页面提交的作业 |
+| S3 图表 | `features/proposal/export/ExportParts.tsx` 的 ChartsCard 与 `features/proposal/writing/SectionWorkspace.tsx` 接入异步生成、取消、失败重试和修订标记 | 两条写作路径产图自动刷新；旧修订图不显示为当前图；取消后迟到响应不恢复成功；重试按新请求语义提交 |
+| S4 导出 | `features/proposal/export/ExportPage.tsx`、`ExportParts.tsx` 接入预检阻断、请求组、各格式状态、取消与下载 | 明确区分预览/最终稿；多格式部分失败逐项展示；提交响应丢失后同键重发不重复生成；权限不足/版本冲突有明确提示 |
+| S5a 解析 | `features/proposal/documents/FixedWorkflow.tsx` 接入解析能力、候选模式、分页对照、人工采用及作业控制 | 区分处理中、候选待确认、已采用、失败/取消；不将 OCR 完成标成证据已核验；采用后刷新文档、要求、大纲及导出门禁 |
+| S5b/S5c 条件扩展 | `pages/KnowledgePage.tsx` 及企业证据对应页面随分域协议一起设计，页面落点在该阶段确认 | 知识候选、索引生效与企业证据核验分开；未实现来源类型不出现在可提交选项中 |
+| S6 检索 | `pages/KnowledgePage.tsx`、`pages/task/ResearchTab.tsx` 显示当前索引/模型状态、检索降级原因与证据状态 | 模型故障不冒充正常语义检索，模型切换不混用索引；技术信息只在诊断详情中展示 |
+| S7 整体验收 | 连通上述页面，验证权限、关闭能力、刷新恢复、升级后的历史记录 | 业务用户只用浏览器完成所声明范围的全流程，无需安装依赖 |
+
+### 8.2 前后端契约与状态更新规则
+
+- 同步维护 `api/client.ts`、`api/types.ts`、`api/processing-types.ts`；请求和响应字段对齐真实注册路由，区分作业状态与业务状态。未实现的接口不得以假成功或固定演示数据接入正式页面。
+- 扩展 `features/task-workspace/resources.ts` 的失效映射：图表完成刷新图表/导出预检，导出事件刷新作业/下载状态，解析采用刷新来源及受影响门禁。采用后的后端失效规则不由前端重新推断。
+- SSE 用于触发重读，列表/详情 API 是恢复依据；S2 同步定义用户可见事件字段与可查询的作业引用，不能只把 Agent 内部事件存进数据库。事件不足以定位对象时做有界资源重读；断线、页面切换与迟到响应不得覆盖新任务或新修订状态。
+- 同一次提交的重复点击/网络重试复用 request_key；用户更改输入或明确重新执行才使用新键。按钮禁用只改善体验，权限、幂等与版本门禁仍由服务器执行。
+- 每个改动阶段执行前端 build、相关状态/资源映射单测与核心浏览器用例；浏览器验收覆盖真实 API 的成功、阻断、失败、刷新恢复。替身可测试 UI 分支，但不能替代真实 OCR、Mermaid、Office 的阶段验收。
+
+## 9. 分阶段实施与退出标准
+
+S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均未验收。
+
+各阶段的工作与退出标准同时包含第 8.1 节对应的前端交付及第 8.2 节联调要求，按“后端服务 → API/类型 → 页面接入 → 联调验收”闭环推进。
+
+| 阶段 | 工作与落点 | 退出标准 |
+| --- | --- | --- |
+| S0 文档核对（已完成） | 校正接口、契约、事务与不确定项 | 第 2~5、12 节作为编码输入，不代替迁移实测 |
+| [ ] E S1 运行包与自检 | deploy/agent-tools；Mermaid/Office 适配器；健康 Tool/API | 干净目标环境真实 PNG、刷新 DOCX、PDF 回读通过；最近失败用例复验；固定版本/digest |
+| [ ] E S2 订阅与回合状态机 | schema、拟新增 db/agent_jobs.go、engine/watchdog/intent_completion/intent_inputs | 原子提交/等待、恢复扫描、ACK、Hint 保留、范围授权；故障注入无丢唤醒/重复应用；测试作业可验证框架，不代表真实工具交付 |
+| [ ] E S3 图表 Skill | chart_render_jobs、服务/Tool/HTTP、SectionDraft.Charts 与章节事务 | 两条写作路径生成真实图；修订+图表入队崩溃恢复；取消/旧修订/兼容入口不覆盖新图 |
+| [ ] E S4 合稿 Skill | export_requests、组幂等、严格策略、取消/暂停与完成事件 | 终态重发复用，同键异参拒绝，真实目录/图片/表格回读，无迟到发布；高影响入口符合 R2 |
+| [ ] E S5a 招标解析 Skill | tender_file、candidate_only、人工 import 采用、原生解析/PaddleOCR | 真实 OCR、完整候选、原件定位、幂等采用、source_epoch 失效通过；不开放知识/企业来源 |
+| [ ] E S5b 知识库增强解析（条件阶段） | 先设计知识原件/候选/采用/索引失效，再实现；MinerU 按评测决定 | 分域表/API 设计与实现验收，不能借用招标表或改写已激活索引 |
+| [ ] E S5c 企业证据 OCR（条件阶段） | 先设计原件版本/页级候选/采用/可采性失效，再实现 | OCR 仅产待核验结果，原件变化传播失效，不声称业务可采性已通过 |
+| [ ] E S6 检索部署 | providers/健康回显/可选本地模型 | 真实接口、索引重建回滚与降级；无稳定收益保持既有模型和单 Agent |
+| [ ] E S7 一体交付 | 前端、端到端、升级恢复、离线/运维 | 浏览器完成声明范围，干净环境与全量验证通过；S5b/c 未完成时明确首版只含招标解析 |
+| [ ] V 外部验证 | 真实材料、保留集、专家 | 按 D0~D5/检索协议验收，目前缺材料 |
+| [ ] P 试点 | 受控真实企业/项目 | ROADMAP 发布门槛，不由 E 自动升级 |
+
+默认顺序：S1 → S2 → S3 → S4 → S5a → S6 → S7。S5b/c 是单独设计与验收的扩展，不以尚未冻结的分域 Schema 阻塞首版，未完成不声称三域全覆盖。S1 缺目标环境时可继续不依赖它的 S2 编码，但运行验收仍未通过。R2 与基础工程衔接，未完成不开放高影响入口。每阶段退出后重估工作量，不承诺固定周期或未经测量的 GPU 容量。
+
+## 10. 验证矩阵与测量口径
+
+| 场景 | 必须验证的结果 |
+| --- | --- |
+| 按需调用 | Agent 能发现已授权技能；错误技能/参数会得到可操作错误，不触发任意程序执行 |
+| 对象越界 | 修改 ID、章节编号、作业类型、结果引用均不能读取或操作其他授权范围对象 |
+| 重复与并发 | 相同请求重复提交不产生重复业务产物；同键不同输入拒绝；多实例不超出已配置并发预算 |
+| 恢复 | 在领取、执行、文件生成、事务提交、事件消费等节点终止进程，重启后不丢结果、不延长原期限、不接受旧租约写回 |
+| 取消与暂停 | 暂停/取消立即建立数据库围栏；进程清理、续跑/新请求语义与 UI 一致 |
+| 通知竞态 | 先完成后订阅、重复通知、保存会话前崩溃和旧 Intent 已终止均有确定结果 |
+| 收尾竞态 | 用事务屏障分别复现完成先于挂起、挂起先于完成；提交与终态并发无锁反序；全部错误/耗尽回收路径均产生终态事件 |
+| 确认与 Hint | ACK 前后崩溃可恢复；旧 epoch 可重放；waiting_job 转普通 blocked（state 不变）正确退回 Hint；暂停恢复不误派发 |
+| 图表原子性 | 在修订与图表登记之间故障注入，两者一起回滚或提交；无规格、多个规格、冲突候选、原生设备表及旧接口并发分别验证 |
+| 幂等与最终稿 | 成功/失败/取消后同键重发及快照已变化时重发仍返回原请求；同键异参冲突；预检后 Office 故障不能降级成最终稿成功 |
+| 解析 | 文本 PDF、扫描 PDF、复杂表格、图片、DOCX/XLSX/ZIP 等按实际支持范围处理；缺页/缺坐标显式记录，不伪造 |
+| 资料域 | 招标来源不能被当企业证明材料；知识库引用不得跳过证据核验；原件改变触发相应失效 |
+| 图表 | 真实 Mermaid-CLI 绘制中文架构图/甘特图；检验 PNG、尺寸和修订绑定，不使用替身图片作为运行验收 |
+| 导出 | 真实 LibreOffice 执行目录更新、另存 DOCX/PDF；检查页码、图表、横向表格、中文字体、快照一致性 |
+| 检索 | 与既有服务结果/预算规则一致；模型变更后的新旧索引隔离、重建、回滚和降级均有记录 |
+| 部署与迁移 | 干净环境无需业务用户安装依赖；旧库升级、历史作业查询、备份恢复、旧版本回退不破坏已留存产物 |
+
+工程命令：`go vet ./...`；设置真实 `AUTOBID_TEST_DATABASE_URL` 后执行 `go test -race -count=1 ./...`；前端改动执行 `npm --prefix web run build` 和 `npm --prefix web run test:unit`，并对新增核心流程做浏览器验收。只修改本计划文档不触发上述工程通过声明。
+
+建议收集的测量项：解析每页耗时、表格/数字还原与来源定位正确率；图表成功率和排队时间；导出成功率、页码/版式问题；检索完整证据召回与每个正确任务成本；作业恢复时长、重复应用次数、P95、CPU/内存/显存峰值。质量门槛在看保留集结果之前冻结；这些是待测项目，不是本项目已有成绩。
+
+每份报告标明代码版本、镜像/模型/字体版本、配置、样本规模、测试环境、通过/失败/跳过原因，以及 E/V/P 等级。原始日志留在 Git 忽略的数据目录，仓库保存不含凭据和企业敏感原文的验收摘要。
+
+## 11. 启用、回滚与验收清单
+
+新增能力默认通过配置显式启用；缺失运行服务时不向 Agent 宣称可用。技能可见性不能代替执行时检查，关闭能力后应拒绝新提交，并按既定策略处理在途作业。
+
+升级先部署版本化运行服务并做功能探测，再开放新提交。作业固定执行版本；回滚不篡改旧作业输入、已批准修订、证据来源或导出快照。禁用新解析器可继续使用原解析器处理其支持范围，不能把不支持的扫描件静默当空白文档成功导入。回退应用版本前须确认数据库兼容性，必要时停止新提交并完成/取消在途作业。
+
+交付验收：
+
+- [ ] 四类技能有实际执行工具、Schema、角色配置及失败示例。
+- [ ] 新增耗时解析、渲染与合稿工具具备持久化作业，Agent 不依靠持续对话或内存通知等待结果。
+- [ ] 通用 Worker 与 HTTP 章节 Writer 的能力范围分别经过测试。
+- [ ] 第 8.1 节各已交付阶段的页面、API 类型、SSE/资源刷新与操作反馈同步完成，并通过相应前端检查和浏览器验收。
+- [ ] 原件、解析候选、知识证据、章节正文和导出产物保持各自数据域及审批边界。
+- [ ] 图表与导出使用真实程序验证，未渲染/未刷新结果不会冒充最终交付。
+- [ ] 至少一个干净目标部署完成依赖自检、升级恢复与浏览器全流程验收。
+- [ ] 所有工程失败和可选跳过可查，ROADMAP 只在对应验收通过后更新。
+- [ ] 真实业务效果与生产启用继续按 V/P 单独验收。
+
+## 12. 二轮审查结论与不确定项
+
+### 12.1 已修正的实质问题
+
+| 审查项 | 原稿问题 / 代码依据 | 修订结论 |
+| --- | --- | --- |
+| 真实接线 | Writer 已有工具循环、CompleteExportJob 已围栏；含不存在的函数/类型/路由 | 按代码改正，新增接口明确标拟实现，避免重复建设 |
+| 图表提交 | 修订提交后 Submit 有崩溃丢单；示例 FK 不匹配父表唯一键 | 同事务登记图表作业，复合 FK 对齐，复用 source_hash 与文件产物 |
+| 等待恢复 | 先查后挂起会漏唤醒；作业与 Intent 锁反序；先检查未 ACK 再 ACK 无法消费 | 原子收尾、终态与节点唤醒分事务、持久化扫描、ACK/完成判据分离 |
+| 幂等 | 活跃 fingerprint 索引不能保证终态重放或拒绝同键异参 | 持久化导出请求组，原请求哈希与冻结快照分离，多格式原子提交 |
+| 人工边界 | 人工采用要求与 Worker adopt 冲突；模型可关闭 strict_runtime | 首版不注册 adopt，最终稿策略服务器强制，预览另标 |
+| 资料范围 | document ID/parse_revision/source_epoch 混用；仅存 Preview；章节授权不足以覆盖文件/导出 | 字段拆清、完整 Payload、宿主能力扩展；S5b/c 显式待分域设计 |
+
+### 12.2 已选定的首版设计
+
+采用 Planner 只读/派单、Agent 首次导入候选先行并人工采用、最终稿严格运行策略、Intent 使用 blocked+waiting_job 四项设计。作为实施默认，不再要求用户重复确认常规技术决策；触发器/Watchdog/HTTP 兼容与身份要求已写入正文。
+
+### 12.3 仍须实测或补充的信息
+
+| 不确定项 | 可确认范围 | 何时解决 / 未通过处理 |
+| --- | --- | --- |
+| 目标部署环境 | 本轮未重新探测 Linux/WSL2、CPU/GPU/存储与联网/离线条件 | S1 记录目标环境、功能自检；缺环境可继续纯工程开发，不通过运行验收 |
+| LibreOffice 故障根因 | 同日凌晨通过、晚间失败，不能据此认定容器化一定解决 | S1 固定环境复现并真实导出；失败保留阻断，不以版本检测替代 |
+| OCR/复杂 PDF/模型效果与容量 | 有适配接口和候选后端，没有本项目质量/资源结论 | S5a/增强解析试验/S6 用代表样本实测、固定版本；无收益不启用可选后端 |
+| 知识/证据候选域 | 既有知识与原件表不等于已有统一候选协议 | S5b/c 先提交表/API/采用/失效设计并核对；首版拒绝这些 source_kind，不先占字段宣称冻结 |
+| 业务质量与生产权限 | 外部材料/评审暂无；审计头非可信身份，Phase 7 未完成 | R2/Phase 7 按范围验收，V/P 待真实材料；与工程进度分开 |
+
+结论：**首版可以开始工程实现；整套方案仍需分阶段实测，不能宣称全部能力可生产使用。** 本轮仅修订计划，未修改业务代码、安装组件、执行迁移或重跑工程测试；未把未知项写成已证实故障。
+
+## 13. 上游参考与版本核对入口
+
+以下用于实施时核对安装方式、接口和版本；不把上游宣传指标当成本项目结果。最终版本与镜像 digest 在各组件打包与真实依赖验收阶段冻结；链接仅作为后续核对入口，本轮未重新核对上游版本。
+
+- [MinerU 官方仓库](https://github.com/opendatalab/MinerU)：增强文档解析及部署资料。
+- [PaddleOCR 官方仓库](https://github.com/PaddlePaddle/PaddleOCR)：OCR/文档处理及部署资料。
+- [Mermaid-CLI 官方说明](https://github.com/mermaid-js/mermaid-cli/blob/master/README.md)：CLI 与容器运行方式。
+- [Gotenberg 官方安装说明](https://gotenberg.dev/docs/getting-started/installation)：容器转换服务候选。
+- [python-docx 官方文档](https://python-docx.readthedocs.io/en/latest/)：仅作为未来生成库比较入口，首版继续使用现有编译器。
+
+本文交付的是实施计划。创建文档不会安装组件、改变现有开关、采用任何解析候选或启用自动导出。

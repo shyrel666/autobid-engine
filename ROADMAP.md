@@ -26,12 +26,12 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 
 | # | 能力 | 已有（E） | 按专家标准的缺口 → 深化阶段 |
 | :--- | :--- | :--- | :--- |
-| 9 | 网页工作台 | `web/` 覆盖从导入到导出的全流程 | 审批只有"一个人点批准"，没有撰写与评审分离的色队评审 → D3 |
+| 9 | 网页工作台 | `web/` 覆盖从导入到导出的全流程；写作工作台补齐章节故事板、粉队评审（撰写与评审分离）、受控引用渲染与句子级写作核验 E 级指标面板（2026-11-01，E） | 色队评审仍靠 `X-Autobid-User` 审计校验，尚未接入多角色 RBAC → Phase 7 |
 | 1 | 解析 PDF / Word / 扫描件 | 自研 DOCX / PDF 解析、框线表格、跨页表、OCR 接口；文件角色、发布时间与后发更正/澄清逐条覆盖（2026-10-30，E） | 更正/澄清逐条覆盖尚未在保留集上做外部评测 → D1（V） |
 | 4 | 复用企业资料 | 知识库、混合检索、证据快照（检索质量未验收）；证书有效期默认按项目投标截止日（含澄清顺延）核验（2026-10-30，E） | 资信库只有整理后的字段，没有原件和页码，无法判定证明材料是否"可采" → D2 |
 | 2 | 按评分标准生成目录 | 评分表结构化解析，16 个分包合计均为 100 分；评分档次/得分点拆解、主客观属性、证明规则抽取、关联采购需求条目、否决项门禁、投标分包选择与 Bid/No-Bid 决策门禁（2026-10-30，E） | 档次判据尚未接入实质响应核验器（仍按字面覆盖判定） → D2、D4 |
-| 3 | 编写章节 | 依赖门禁、单次 LLM 调用（测试用替身 Writer） | "不得编造"只写在提示词里；没有故事板；"针对性"没有度量 → D3 |
-| 5 | 草稿、修订与确认 | 乐观锁、批准绑定版本、自动撤销、回滚 | 机制已够用；缺的是由谁批准、按什么标准批准 → D3、D5 |
+| 3 | 编写章节 | 依赖门禁、单次 LLM 调用（测试用替身 Writer）；章节故事板、受控引用标记 `[[EVID:...]] / [[KB:...]] / [[COMMIT:...]]` 确定性展开、句子级断言落证门禁与针对性/套话度 E 级指标（2026-11-01，E） | 尚未在合作企业真实原件与外部专家盲评上完成 V 级验证 → D3（V） |
+| 5 | 草稿、修订与确认 | 乐观锁、批准绑定版本、自动撤销、回滚；故事板粉队评审与章节红队定稿的撰写人/评审人分离门禁（2026-11-01，E） | 尚未经过外部盲评与回测验证 → D3（V）、D5 |
 | 6 | 一致性与逐条响应 | 双层矩阵；实质响应以关键词二元组覆盖率（≥ 45%）加数值、否定等字面规则判定；技术标章节之间做数值比对 | 判据是字面覆盖，而不是得分点；只比较技术标内部，不比商务响应、报价、承诺函和人员表；没有承诺台账 → D2、D4 |
 | 7 | 图表 | 结构化规格 → Mermaid / 设备表；mmdc 渲染未验证 | 延后（见第五节） |
 | 8 | 套模板导出 | 锁定快照、刷新目录、版式回读自检 | 没有评分索引表和证明材料页码；模板作者字段写死；没有在任何交易平台的投标文件制作工具中验证过导入 → D4 |
@@ -48,16 +48,18 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 
 ### 1.3 基座的既有边界（仍然有效）
 
+- [ ] E **执行可靠性深化 R1 / 门禁边界 R2**（2026-11-01 进行中）：章节持久化队列、幂等派发、有界并发、租约恢复/取消/暂停围栏、Hint 持久化投递与确认、意图交付物归属校验及章节/要求对象范围检查已落地，详见 [`docs/RELIABILITY_PLAN.md`](docs/RELIABILITY_PLAN.md)。本次真实 PostgreSQL 全量竞态有 310 条测试/子测试通过，但两个真实 LibreOffice 导出测试失败，故尚未勾选 E。R2 显式质量策略与可信身份、R3/R4 仍未完成；不改变 D0~D5 的 V/P 状态。
+
 - [x] E **ARTEX 推演与长文上下文增强**（2026-11-01）：按 [`docs/ARTEX架构技术标系统解析.md`](docs/ARTEX架构技术标系统解析.md) 与 [`docs/implementation_plan.md`](docs/implementation_plan.md) 落地三大运行期机制，验收见 [`docs/walkthrough.md`](docs/walkthrough.md)：① Goals 目标分解器（`db/rfp_goals.go` `BootstrapRFPGoals` 串联要求拆解、`assets` 同步、四大图谱 Goal 根节点 `G-VETO/G-DEVIATION/G-SCORING/G-OUTLINE` 幂等初始化与 `v1 draft` 大纲生成）；② Intent `Mandate` 硬件门禁、确定性 `Watchdog` 跑偏纠偏/熔断（`server/watchdog.go`）与 `AddHint` 锚点事件直通；③ 章节上下文 `UsableEvidence/SpilledEvidence` 分离、`read_chunk` 分页预算与 `prepareContext` 两级 `ToolResult` Spill + 工具回合边界压缩（消除连续工具调用 `413` 崩溃）。不改变 D0~D5 外部验证（V/P）状态。
 
-- [ ] E **模型设置复刻**（2026-10-29）：[`实施与验证记录`](docs/MODEL_SETTINGS_PLAN.md) 的 M1 存储/API、M2 调用层、M3 页面已完成；模型相关竞态测试与浏览器 5/5 通过。M4 全量收口尚受本机 LibreOffice 启动失败影响（2 个导出测试），暂不勾选；不改变 D0~D5 业务验收状态。
+- [x] E **模型设置复刻**（2026-11-01 收口）：[`实施与验证记录`](docs/MODEL_SETTINGS_PLAN.md) 的 M1 存储/API、M2 调用层、M3 页面已完成；模型相关竞态测试与浏览器 5/5 通过。M4 已在真实 PostgreSQL 下通过全量竞态复验，原先阻塞的两个 LibreOffice 导出测试均实际通过；[复验结果与可选跳过项](docs/LIBREOFFICE_VALIDATION.md)。不改变 D0~D5 业务验收状态。
 
 - [ ] E **复杂文件处理与受限脚本执行**（2026-10-31 启动）：按 [`docs/file-processing/PLAN.md`](docs/file-processing/PLAN.md) 分阶段实施，跟踪进度见 [`docs/file-processing/PROGRESS.md`](docs/file-processing/PROGRESS.md)。
   - [x] E F0 基线与样本（2026-10-31）：样本/人工期望/契约/限额/导入基线与容器探测完成；证据见 [`eval/file-processing/`](eval/file-processing/)。
   - [x] E F1 原件与固定处理（2026-10-31）：原件留存与哈希校验、XLSX/CSV/TSV/ZIP 固定解析、表格行窗口与单元格溯源、`AdoptTenderParseRevision`、`source_epoch` 确认/导出门禁；验收见 [`F1_ACCEPTANCE.md`](docs/file-processing/F1_ACCEPTANCE.md)。
   - [ ] F2 执行服务：启动关口未通过（无 Linux 容器后端、无真实复杂样本），未建 F2 表、未注册脚本工具。
-  - [ ] E F3a 固定解析闭环：ZIP 页面导入、修订预览/采用、事务与幂等、浏览器 3/3、独立旧库升级恢复演练已完成；全量验收尚有 2 个既有 LibreOffice 环境失败，暂不勾选。见 [`F3A_ACCEPTANCE.md`](docs/file-processing/F3A_ACCEPTANCE.md)。
-  - [ ] E F3a+ 固定处理增强（2026-10-31）：必需材料清单/导出事务门禁、流式原件上传、持久化固定解析队列与租约恢复/取消/重试、浏览器 4/4 与独立升级恢复演练已完成；完整 E 仍受 LibreOffice 真实导出失败阻塞。见 [`F3A_PLUS_ACCEPTANCE.md`](docs/file-processing/F3A_PLUS_ACCEPTANCE.md)。不依赖或启用 F2。
+  - [x] E F3a 固定解析闭环（2026-11-01 收口）：ZIP 页面导入、修订预览/采用、事务与幂等、浏览器 3/3、独立旧库升级恢复演练已完成；真实 PostgreSQL 全量竞态及两个 LibreOffice 导出用例复验通过；[复验记录](docs/LIBREOFFICE_VALIDATION.md)。见 [`F3A_ACCEPTANCE.md`](docs/file-processing/F3A_ACCEPTANCE.md)。
+  - [x] E F3a+ 固定处理增强（2026-11-01 收口）：必需材料清单/导出事务门禁、流式原件上传、持久化固定解析队列与租约恢复/取消/重试、浏览器 4/4 与独立升级恢复演练已完成；真实 PostgreSQL 全量竞态及 LibreOffice 真实导出复验通过；[复验记录](docs/LIBREOFFICE_VALIDATION.md)。见 [`F3A_PLUS_ACCEPTANCE.md`](docs/file-processing/F3A_PLUS_ACCEPTANCE.md)。不依赖或启用 F2。
   - [ ] F3b / F4：脚本业务闭环与外部验证未开始。本条目不改变 D0~D5 状态。
 
 - `ExplorationStore.Frontier` 不检查前置依赖；依赖门禁只存在于 Phase 5 的状态机中。
@@ -200,6 +202,14 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 - **V 验收**：在合作企业的原件上，可采性判定与两名资深商务人员独立判定的一致率达到 D0 门槛；植入的过期、主体不符、口径不符证据全部被检出；官方登记抽查结果一致。
 
 ### D3 写作：故事板、句子级落证与针对性（深化 Phase 5 的章节写作）
+
+- **状态**：`[x] E`（2026-11-01），`[ ] V`，`[ ] P`。
+  - **已完成（E 级）**：
+    - 章节故事板与粉队评审持久化状态机（`section_storyboards`：`draft` → `pending_pink_review` → `pink_approved` / `pink_rejected` / `stale` / `superseded`），强制核验章节已映射要求全覆盖、我方做法（`our_approach`）与买方收益（`buyer_benefit`）非空、引用证据可采与承诺台账已确认，以及撰写人与粉队批准人分离（`ErrPinkSelfApproval`）；D3 启用后，故事板未获批前阻断 `ClaimSectionWrite` 与 `SaveSectionRevision`（`ErrStoryboardMissing` / `ErrStoryboardNotApproved`）；
+    - 受控引用标记确定性渲染（`RenderGroundedDraft` / `RenderSectionGroundedDraft`）：支持 `[[EVID:<id_or_code>]]`、`[[KB:<evidence_id>]]`、`[[COMMIT:<code_or_id>]]` 从当前 admissible 企业证据、verified 知识库证据与 confirmed/signed_off 承诺台账确定性展开为标准文字并携带句内 `[EVID:<id>]` / `[KB:<id>]` / `[COMMIT:<id>]` 溯源标记；
+    - 句子级断言抽取、证据/承诺绑定核验与写作核验 E 级指标（`compliance/d3_writing.go` + `section_writing_verifications`）：按句切分并分类（`bidder_fact` / `commitment` / `tender_restatement` / `general_narrative`），逐句核对证书编号、型号规格、合同金额、主体与承诺数值是否与所绑定来源一致；计算并持久化 `ungrounded_claim_count`、`fact_binding_rate`、`commitment_binding_rate`、`specificity_ratio`、`kb_similarity_max`、`boilerplate_similarity_max`；存在无证据断言（`ErrUngroundedClaim`）或违反针对性/套话阈值（`ErrWritingVerificationFailed`）时拒绝成为章节当前有效修订；
+    - 章节红队定稿职责分离（`ApproveSectionRevision` 拦截修订创建人自批 `ErrRedSelfApproval` 且要求当前修订通过写作核验）；上游大纲、要求、可采性明细、知识库证据或承诺台账变化由触发器将故事板与写作核验级联置为 `stale`；`ExportReadiness` 接入 `storyboard_missing/unapproved/stale` 与 `writing_verification_missing/failed/stale` 阻断；补齐 `bidtools`、`server/d3.go` 与前端写作工作台。
+  - **E 级验收**：`eval/bid/d3`（本地生成 `D3_ACCEPTANCE_REPORT.md`，不提交 Git）主链 S1~S16 95 项检查全部通过（失败 0）、`ExportReadiness.Ready=true`、DOCX 导出与回读通过、两轮归一化一致（差异 0 条）、D3-G01 ~ D3-G10 门禁正反例与恢复全部通过；`go vet ./...`、真实 PostgreSQL `go test -race ./...`、`npm --prefix web run test:unit && npm --prefix web run build`、M1 与 D2 回归全部通过。V 级仍缺合作企业真实原件与外部专家盲评，P 级仍缺多租户 RBAC 与试点记录。
 
 - **落点**：
   - 故事板对象：每节列出响应的得分点、主题句、引用的证据与承诺、图表计划。故事板作为 Pink 审批节点，复用现有的持久化审批状态机；撰写人不能批准自己的故事板。

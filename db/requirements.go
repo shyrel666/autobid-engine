@@ -823,6 +823,9 @@ func applyRequirementInput(ctx context.Context, q queryer, tenant string, taskID
 // UpdateRequirement 人工修订要求或绑定证据。实质字段变化（编码、类别、标题、描述、强制性、分值、原文来源）
 // 使清单 epoch 递增并使审批中 / 已批准大纲失效；仅证据绑定或复核状态变化不影响大纲。
 func (d *DB) UpdateRequirement(ctx context.Context, tenant string, taskID, id int64, actor string, in RequirementInput) (*RequirementItem, error) {
+	if err := CheckRequirementScope(ctx, id); err != nil {
+		return nil, err
+	}
 	tenant = tenantOr(tenant)
 	var out *RequirementItem
 	err := d.InTx(ctx, func(tx *sql.Tx) error {

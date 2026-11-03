@@ -9,12 +9,13 @@ import type {
   KnowledgeTextReq, KnowledgeUploadResp, LLMChain, LLMHealth, LLMProfile, LLMUsage, NodeDetail, Overview, Coverage,
   Task, TaskReport, TaskView, UploadDocumentFileReq, UploadDocumentReq, UploadDocumentResp, UploadArchiveResp, ResearchRequest, RetrievalRun,
   ExtractRequirementsResp, RFPGoalDecompResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
-  RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionClaim, SectionDetail, BidScopeInput, VetoStatus,
+  RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionDetail, BidScopeInput, VetoStatus, SectionWriteJob,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
   ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
   LLMSettings, LLMPoolStatus, LLMProfileInput, LLMTestResult, LLMRecordDetail, LLMRecordsResp, SystemCatalog, AgentRoleKey, TaskGraph,
   CompanyPerformance, EvidenceOriginal, EvidenceBinding, AdmissibilityRun, AdmissibilityDecision,
   Commitment, CommitmentInput, BidQuote, BidQuoteValidation, ObjectiveScoreRun,
+  SectionStoryboard, UpsertStoryboardReq, GroundedDraftRenderResult, SectionWritingVerification,
 } from './types'
 
 const TOKEN_KEY = 'autobid.token'
@@ -78,8 +79,8 @@ export function errorText(err: unknown): string {
 }
 
 // send 发送请求：FormData 以 multipart/form-data 发送（由浏览器生成 boundary），其余请求体按 JSON 序列化。
-async function send(method: string, path: string, body?: unknown): Promise<Response> {
-  const headers: Record<string, string> = {}
+async function send(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<Response> {
+  const headers: Record<string, string> = { ...extraHeaders }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
   const operator = getOperator()
@@ -110,8 +111,8 @@ async function send(method: string, path: string, body?: unknown): Promise<Respo
   return resp
 }
 
-async function json<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const resp = await send(method, path, body)
+async function json<T>(method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
+  const resp = await send(method, path, body, headers)
   if (resp.status === 204) return undefined as T
   const text = await resp.text()
   return (text ? JSON.parse(text) : undefined) as T
@@ -265,6 +266,25 @@ export const api = {
   listObjectiveScores: (taskId: number) => get<ObjectiveScoreRun[]>(`${t(taskId)}/objective-scores`),
   computeObjectiveScores: (taskId: number) => post<ObjectiveScoreRun[]>(`${t(taskId)}/objective-scores/compute`, {}),
 
+  // D3：章节故事板（粉队评审）、受控引用渲染与句子级写作核验
+  listStoryboards: (taskId: number) => get<SectionStoryboard[]>(`${t(taskId)}/storyboards`),
+  getSectionStoryboard: (taskId: number, sectionId: number) => get<SectionStoryboard>(`${t(taskId)}/sections/${sectionId}/storyboard`),
+  upsertSectionStoryboard: (taskId: number, sectionId: number, req: UpsertStoryboardReq) =>
+    put<SectionStoryboard>(`${t(taskId)}/sections/${sectionId}/storyboard`, req),
+  submitSectionStoryboard: (taskId: number, sectionId: number) =>
+    post<SectionStoryboard>(`${t(taskId)}/sections/${sectionId}/storyboard/submit`, {}),
+  approveSectionStoryboard: (taskId: number, sectionId: number, reviewNote = '') =>
+    post<SectionStoryboard>(`${t(taskId)}/sections/${sectionId}/storyboard/approve`, { review_note: reviewNote }),
+  rejectSectionStoryboard: (taskId: number, sectionId: number, reviewNote: string) =>
+    post<SectionStoryboard>(`${t(taskId)}/sections/${sectionId}/storyboard/reject`, { review_note: reviewNote }),
+  renderSectionGroundedDraft: (taskId: number, sectionId: number, templateMD: string) =>
+    post<GroundedDraftRenderResult>(`${t(taskId)}/sections/${sectionId}/storyboard/render`, { template_md: templateMD }),
+  listWritingVerifications: (taskId: number) => get<SectionWritingVerification[]>(`${t(taskId)}/writing-verifications`),
+  getSectionWritingVerification: (taskId: number, sectionId: number) =>
+    get<SectionWritingVerification>(`${t(taskId)}/sections/${sectionId}/writing-verification`),
+  evaluateSectionWritingVerification: (taskId: number, sectionId: number) =>
+    post<SectionWritingVerification>(`${t(taskId)}/sections/${sectionId}/writing-verification/evaluate`, {}),
+
   // 企业方案知识库
   listKnowledge: (f: { category?: string; tags?: string; q?: string; limit?: number }) =>
     get<KnowledgeDocument[]>(`/api/knowledge/documents${qs(f)}`),
@@ -304,8 +324,10 @@ export const api = {
   submitOutline: (id: number, version: number) => post<OutlineDetail>(`${t(id)}/outlines/${version}/submit`),
   approveOutline: (id: number, version: number) => post<OutlineDetail>(`${t(id)}/outlines/${version}/approve`),
   section: (id: number, sectionID: number) => get<SectionDetail>(`${t(id)}/sections/${sectionID}`),
-  dispatchSection: (id: number, sectionID: number, req: { base_rev_no?: number; instruction?: string }) =>
-    post<SectionClaim>(`${t(id)}/sections/${sectionID}/dispatch`, req),
+  dispatchSection: (id: number, sectionID: number, req: { base_rev_no?: number; instruction?: string }, requestKey: string = crypto.randomUUID()) =>
+    json<SectionWriteJob>('POST', `${t(id)}/sections/${sectionID}/dispatch`, req, { 'Idempotency-Key': requestKey }),
+  sectionJobs: (id: number) => get<SectionWriteJob[]>(`${t(id)}/section-jobs`),
+  cancelSectionJob: (id: number, jobId: number) => post(`${t(id)}/section-jobs/${jobId}/cancel`),
   saveRevision: (id: number, sectionID: number, req: SaveRevisionReq) => post<SaveRevisionResult>(`${t(id)}/sections/${sectionID}/revisions`, req),
   approveRevision: (id: number, sectionID: number, revNo: number) =>
     post<ProposalSection>(`${t(id)}/sections/${sectionID}/revisions/${revNo}/approve`),

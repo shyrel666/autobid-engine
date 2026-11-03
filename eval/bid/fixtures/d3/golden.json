@@ -1,0 +1,74 @@
+{
+  "_status": "frozen",
+  "fixture_version": 1,
+  "tender_no": "DEMO-2026-SMART-PARK-D3-001",
+  "bid_deadline": "2026-12-05T09:00:00+08:00",
+  "company": "演示智联科技有限公司（虚构）",
+  "evidence": {
+    "qualification": 3,
+    "performance": 5,
+    "personnel": 1,
+    "product": 2,
+    "originals": 21
+  },
+  "requirements": {
+    "veto_items": 11,
+    "scoring_items": 3,
+    "objective_items": 1,
+    "mandatory_clauses": 1,
+    "non_scoring_required": 11,
+    "superseded": 0
+  },
+  "admissibility": {
+    "admissible": 5,
+    "inadmissible": 0,
+    "manual": 0,
+    "items": 7
+  },
+  "objective_scores": {
+    "类似项目业绩": 20
+  },
+  "commitments": {
+    "duration_days": 90,
+    "warranty_years": 3,
+    "sla_response_hours": 2,
+    "sla_onsite_hours": 4,
+    "sla_repair_hours": 24,
+    "availability_pct": 99.9,
+    "team_size": 12
+  },
+  "writing_metrics": {
+    "ungrounded_claim_count": 0,
+    "fact_binding_rate": 1.0,
+    "commitment_binding_rate": 1.0,
+    "min_specificity_ratio": 0.20,
+    "max_kb_similarity": 0.55,
+    "max_boilerplate_similarity": 0.45
+  },
+  "expected_blockers_before": [],
+  "expected_blockers_after": [],
+  "export_ready_after": true,
+  "originals": {
+    "perf1_accept": "3de24afd9eaed4eaf902064c9d9a60d1e404f981d79fe71e4c27a4eaa1db1476",
+    "perf1_amount": "f25f08ab0e3341789ae03f85bfdd330870b2e08a86b415657b4935bbef1f26c8",
+    "perf1_contract": "cbcc77db4434315cd3290b24bb2fbbbcc6a1fcd130bc4db737ba00df148d903b",
+    "perf1_seal": "da757f47986281e5741b2b24ec9fcb423ced4585434d482630dfa1289b5c02a2",
+    "perf2_accept": "ebaae55c35905eb76573c83447db7d09cde045aa818af2603b1d315d6f4bf43d",
+    "perf2_amount": "d645a0defcbb6d271e34fbae2dfd45496848932987e1ba3fb693e034fd26ea35",
+    "perf2_contract": "b9408cb6cba1b1beeadbe061e90d73fa146819fe940a5a5c9ae02be53eef6874",
+    "perf2_seal": "1ded7e16427ade5beb5caa82113f4f85cab541c6bd5b27a29b91c0adc150c52c",
+    "perf_noacc_contract": "b9675e7b8be25ee041adca872e1e6d5c6cc59148bca3578570873e0b73b38315",
+    "perf_old_accept": "e9c117f3c76750deef6503c0f45ff503437afad34cc6e42a80f5c54e924f842f",
+    "perf_old_contract": "0f1f04f55a69a953f104cf46e0105a115b3acd5a92de44556ca1a4be25715b17",
+    "perf_sub_accept": "a43fb195d9e078bbb066f6474ffbe85f7fd32a3b1b16905331d9c5616600e725",
+    "perf_sub_contract": "766ee9bba7a3345d25175606a0355305c3b4aebbc92a00e7aa898551a6c25676",
+    "person_cert": "e48a6b343b883e7507c62262bed78304e2c7d15d76e17cd91574e3ca3734fe0e",
+    "person_ss": "9d1a1b88c5152f6f1e40cb7a2bab25bc55678b72b36ee794486d77bf2d847945",
+    "product_bad": "c30e760fcc1d074287bddc7aacc0978254b250cc8494244f0ca3ab1642a10fe1",
+    "product_ok": "7387f3dddb7284e3669db8d841fc9d4e1e7b02f2d52b8fb9c330c2b494d16572",
+    "qual_critical": "bce692d9d59c71b4a78b19edc0495ec143031b83617835d469efdb077fb25349",
+    "qual_expired": "d131d442d40adc8e39eeee7a35eef2c3fcc7ef3f7f583aeb3786616d35f9dea0",
+    "qual_valid": "767733d7accc26157960140d20cfa511459ff17b7ed4174d927d663f34c4e300",
+    "qual_valid_validity": "7270e800e09a084261dcf6a156cae36db3b91b9b7af4c288cc97b7ef5a1ae708"
+  }
+}

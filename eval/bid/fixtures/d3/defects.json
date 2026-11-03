@@ -1,0 +1,15 @@
+{
+  "fixture_version": 1,
+  "defects": [
+    {"defect": "未通过粉队评审即领用或保存章节正文", "gate": "D3-G01", "expected": "ErrStoryboardMissing / ErrStoryboardNotApproved", "description": "D3 启用后，未提交或未批准故事板时拒绝领用与写回，且 ExportReadiness 报告 storyboard_missing / storyboard_unapproved。"},
+    {"defect": "故事板未完整覆盖章节已映射要求或缺少做法/收益/论点", "gate": "D3-G02", "expected": "ErrStoryboardInvalid", "description": "故事板遗漏章节映射要求或缺少我方做法/买方收益时提交被拒。"},
+    {"defect": "粉队评审自审自批（作者与评审人相同）", "gate": "D3-G03", "expected": "ErrPinkSelfApproval", "description": "故事板作者或提交人尝试自批时返回 ErrPinkSelfApproval，独立粉队评审人方可批准。"},
+    {"defect": "章节正文包含未绑定证据的投标人事实断言", "gate": "D3-G04", "expected": "ErrUngroundedClaim", "description": "涉及资质证书、认证、业绩或人员社保的事实句未绑定 [EVID:...] 时拒绝成为当前主版本。"},
+    {"defect": "已绑定 [EVID:...] 但捏造或篡改证书编号/合同金额", "gate": "D3-G05", "expected": "ErrUngroundedClaim", "description": "句子虽带 [EVID:...]，但证书编号或合同金额与真实证据不一致时拒绝保存。"},
+    {"defect": "承诺句未绑定 [COMMIT:...] 或承诺数值与台账不一致", "gate": "D3-G06", "expected": "ErrUngroundedClaim / ErrCommitmentMismatch", "description": "未绑定承诺台账或正文承诺值与已确认台账冲突时拒绝保存。"},
+    {"defect": "受控引用标记指向不可采证据或未确认承诺台账", "gate": "D3-G07", "expected": "ErrEvidenceInadmissible / ErrCommitmentUnconfirmed", "description": "[[EVID:...]] 指向 inadmissible 证据或 [[COMMIT:...]] 指向 draft 台账时确定性渲染与保存均被拒绝。"},
+    {"defect": "章节正文充斥通用八股套话或缺乏招标特定要素", "gate": "D3-G08", "expected": "ErrWritingVerifyFailed", "description": "boilerplate_similarity_max 超阈值或 specificity_ratio 低于下限时拒绝保存。"},
+    {"defect": "红队定稿自写自批（修订作者与定稿批准人相同）", "gate": "D3-G09", "expected": "ErrRedSelfApproval", "description": "修订创建人尝试自批定稿时返回 ErrRedSelfApproval，独立红队评审人方可批准。"},
+    {"defect": "上游承诺台账或可采证据变更级联失效故事板与写作核验", "gate": "D3-G10", "expected": "storyboard_stale + writing_verification_stale + Ready=false", "description": "上游变更触发故事板与写作核验 stale 并阻断导出；重新确认、粉队重批、重新渲染写回与红队批准后恢复 Ready=true。"}
+  ]
+}

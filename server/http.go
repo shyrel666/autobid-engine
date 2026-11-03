@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/autobid/autobid-engine/agent"
@@ -56,14 +57,16 @@ type APIConfig struct {
 }
 
 type API struct {
-	runCtx context.Context // 任务运行时的父 Context（服务生命周期）
-	m      *Manager
-	e      *Engine
-	llm    *LLMService
-	ic     *intercept.Interceptor
-	hub    *Hub
-	pg     *db.DB
-	cfg    APIConfig
+	sectionJobPumps sync.Map
+	sectionJobSlots chan struct{}
+	runCtx          context.Context // 任务运行时的父 Context（服务生命周期）
+	m               *Manager
+	e               *Engine
+	llm             *LLMService
+	ic              *intercept.Interceptor
+	hub             *Hub
+	pg              *db.DB
+	cfg             APIConfig
 }
 
 func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *intercept.Interceptor, hub *Hub, cfg APIConfig) *API {
@@ -79,11 +82,13 @@ func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *
 	if cfg.Evidence == nil {
 		cfg.Evidence = evidence.FromEnv()
 	}
-	return &API{runCtx: runCtx, m: m, e: e, llm: svc, ic: ic, hub: hub, pg: m.DB(), cfg: cfg}
+	return &API{runCtx: runCtx, m: m, e: e, llm: svc, ic: ic, hub: hub, pg: m.DB(), cfg: cfg, sectionJobSlots: make(chan struct{}, 4)}
 }
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/tasks/{id}/section-jobs", a.withTask(a.listSectionJobs))
+	mux.HandleFunc("POST /api/tasks/{id}/section-jobs/{jobID}/cancel", a.withTask(a.cancelSectionJob))
 	mux.HandleFunc("POST /api/tasks/{id}/files", a.withTask(a.uploadProcessingFile))
 	mux.HandleFunc("GET /api/tasks/{id}/materials", a.withTask(a.listTaskMaterials))
 	mux.HandleFunc("POST /api/tasks/{id}/materials", a.withTask(a.saveTaskMaterial))
@@ -166,6 +171,8 @@ func (a *API) Handler() http.Handler {
 	// Phase 6B：章节图表（server/charts.go）与锁定版本导出（server/export.go）
 	a.registerChartRoutes(mux)
 	a.registerExportRoutes(mux)
+	// D3：章节故事板（Pink Team 评审）、受控引用渲染与句子级写作核验（server/d3.go）
+	a.registerD3Routes(mux)
 
 	// LLM 配置与配额链
 	mux.HandleFunc("GET /api/llm/profiles", a.listProfiles)

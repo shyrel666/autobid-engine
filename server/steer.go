@@ -38,6 +38,11 @@ func (h *steerHooks) PostToolUse(ctx context.Context, name string, input, result
 }
 
 func (h *steerHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []string, string) {
+	if h.drain != nil {
+		if msg, ok := h.drain(); ok {
+			return false, []string{"操作员补充指令：" + msg}, ""
+		}
+	}
 	if h.inner != nil {
 		prevent, blocking, msg := h.inner.Stop(ctx, messages)
 		if prevent || len(blocking) > 0 {

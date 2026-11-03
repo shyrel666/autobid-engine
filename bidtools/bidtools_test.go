@@ -318,7 +318,9 @@ func TestSkillsUnlockDeferredTools(t *testing.T) {
 func TestResidentToolsAreReadOnly(t *testing.T) {
 	kit := New(nil, 1, nil, nil)
 	for _, tl := range append(kit.ResidentTools(), kit.DeferredTools()...) {
-		if tl.Name() == ToolRequirementBindEvidence || tl.Name() == ToolSectionWriteDraft || tl.Name() == ToolComplianceVerify || tl.Name() == ToolFulltextConsistent || tl.Name() == ToolChartGenerate {
+		if tl.Name() == ToolRequirementBindEvidence || tl.Name() == ToolSectionWriteDraft ||
+			tl.Name() == ToolSectionUpsertStoryboard || tl.Name() == ToolSectionVerifyWriting ||
+			tl.Name() == ToolComplianceVerify || tl.Name() == ToolFulltextConsistent || tl.Name() == ToolChartGenerate {
 			if tl.IsReadOnly(nil) {
 				t.Fatalf("%s writes proposal-domain records and must not be read-only", tl.Name())
 			}

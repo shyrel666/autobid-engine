@@ -238,6 +238,7 @@ func (s *ExplorationStore) ActiveDigestsWithMembers(ctx context.Context) ([]*Dig
 // ConsumeHint 把 active Hint 置为 consumed；已消费或不存在时返回 false。
 func (s *ExplorationStore) ConsumeHint(ctx context.Context, id int64) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE exploration_nodes SET state = 'consumed', content_version = content_version + 1
-		WHERE id = $1 AND exploration_id = $2 AND kind = 'hint' AND state = 'active'`, id, s.expID)
+		WHERE id = $1 AND exploration_id = $2 AND kind = 'hint' AND state = 'active'
+		AND NOT EXISTS(SELECT 1 FROM intent_inputs i WHERE i.hint_id=$1 AND i.state IN ('pending','delivered'))`, id, s.expID)
 	return affectedOne(res, err)
 }

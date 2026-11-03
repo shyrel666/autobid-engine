@@ -141,6 +141,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if saveErr != nil && emit != nil {
 		emit(db.Activity{Worker: name, Kind: "error", NodeID: &nodeID, Summary: "保存会话失败", Detail: saveErr.Error()})
 	}
+	if saveErr != nil {
+		return harness.ReasonModelError, set.Writes(), fmt.Errorf("persist worker transcript: %w", saveErr)
+	}
 	return term.Reason, set.Writes(), terminalErr(term)
 }
 

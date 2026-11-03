@@ -17,6 +17,7 @@ import { EvidenceDetailDrawer, EvidencePicker, EvidenceStateRow } from '../evide
 import { sectionTone } from '../outline/OutlinePage'
 import { useTaskWorkspace, useTick } from '../../task-workspace/TaskWorkspaceProvider'
 import RevisionCompare from './RevisionCompare'
+import SectionJobs from './SectionJobs'
 import { draftKey, draftState, isDirty, loadDraft, newDraft, rebase, saveDraft, toggleEvidence } from './drafts'
 import type { Draft } from './drafts'
 
@@ -80,6 +81,7 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
   const [choice, setChoice] = useState<ChoiceReq | null>(null)
   const [aiOpen, setAIOpen] = useState(false)
   const [instruction, setInstruction] = useState('')
+  const pendingDispatch = useRef<{ input: string; key: string } | null>(null)
   const [evidenceView, setEvidenceView] = useState<{ run: number; id: number }>()
   const [panelDrawer, setPanelDrawer] = useState(false)
 
@@ -181,10 +183,21 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold" title={`${s.section_code} ${s.title}`}>{s.section_code} {s.title}</h2>
         <Badge dot tone={sectionTone(s.status)}>{sectionStatusLabel[s.status] ?? s.status}</Badge>
         {s.writing && <Badge dot tone="purple">AI 撰写中</Badge>}
+        {d.storyboard && (
+          <Badge dot tone={d.storyboard.status === 'pink_approved' ? 'green' : d.storyboard.status === 'pending_pink_review' ? 'purple' : d.storyboard.status === 'stale' || d.storyboard.status === 'pink_rejected' ? 'red' : 'amber'}>
+            粉队：{d.storyboard.status === 'pink_approved' ? '已批准' : d.storyboard.status === 'pending_pink_review' ? '待评审' : d.storyboard.status === 'pink_rejected' ? '已退回' : d.storyboard.status === 'stale' ? '已失效' : '草稿'}
+          </Badge>
+        )}
+        {d.writing_verification && (
+          <Badge dot tone={d.writing_verification.verdict === 'stale' ? 'amber' : d.writing_verification.verdict === 'passed' ? 'green' : 'red'}>
+            写作核验：{d.writing_verification.verdict === 'stale' ? '已失效' : d.writing_verification.verdict === 'passed' ? '通过' : `未通过（无据断言 ${d.writing_verification.metrics.ungrounded_claim_count}）`}
+          </Badge>
+        )}
         {layout !== 'three' && <Button size="sm" icon={<PanelRight className="size-3.5" />} onClick={() => setPanelDrawer(true)}>写作依据</Button>}
         <Button size="sm" variant="primary" loading={saving} disabled={!dirty || !d.writable}
           title={!d.writable ? d.blocked_reason : !dirty ? '没有未保存的修改' : ''} onClick={() => void save()}>保存</Button>
       </div>
+      <SectionJobs taskId={taskId} sectionId={sectionId} onChange={() => void det.reload()} />
       {(state === 'behind' || conflict || saveError || d.warnings.length > 0 || (d.blocked_reason && !d.writable)) && (
         <div className="space-y-2 border-b border-line p-3">
           {d.blocked_reason && !d.writable && <Notice>{d.blocked_reason}</Notice>}
@@ -279,6 +292,56 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
                   {dep.section_code} {dep.title} · 修订 {dep.current_rev_no}</a>
                 {dep.summary_note && <p className="ml-5 text-muted">{dep.summary_note}</p>}
               </li>))}</ul>
+          </section>
+        )}
+        {d.storyboard && (
+          <section className="rounded-[10px] border border-line bg-soft p-3 text-xs space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold">D3 章节故事板 v{d.storyboard.version}</span>
+              <Badge tone={d.storyboard.status === 'pink_approved' ? 'green' : d.storyboard.status === 'pending_pink_review' ? 'purple' : d.storyboard.status === 'stale' || d.storyboard.status === 'pink_rejected' ? 'red' : 'amber'}>
+                {d.storyboard.status}
+              </Badge>
+            </div>
+            <p className="font-medium text-fg">核心论点：{d.storyboard.theme_sentence}</p>
+            {d.storyboard.stale_reason && <p className="text-danger">失效原因：{d.storyboard.stale_reason}</p>}
+            {d.storyboard.scoring_points.length > 0 && (
+              <ul className="list-disc pl-4 space-y-1 text-muted">
+                {d.storyboard.scoring_points.map((sp, i) => (
+                  <li key={i}><span className="font-medium text-fg">{sp.requirement_code || `#${sp.requirement_id}`}</span>：{sp.our_approach} → {sp.buyer_benefit}</li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-wrap gap-1 pt-1">
+              {(d.storyboard.status === 'draft' || d.storyboard.status === 'pink_rejected' || d.storyboard.status === 'stale') && (
+                <Button size="sm" loading={busy === 'sb_submit'} onClick={() => void act('sb_submit', '提交粉队评审', () => api.submitSectionStoryboard(taskId, sectionId), '已提交粉队评审', ['sections'])}>提交粉队评审</Button>
+              )}
+              {d.storyboard.status === 'pending_pink_review' && (
+                <Button size="sm" variant="primary" loading={busy === 'sb_approve'} onClick={() => void act('sb_approve', '批准故事板', () => api.approveSectionStoryboard(taskId, sectionId, '粉队评审通过'), '故事板已通过粉队评审', ['sections'])}>粉队批准</Button>
+              )}
+            </div>
+          </section>
+        )}
+        {d.writing_verification && (
+          <section className="rounded-[10px] border border-line bg-soft p-3 text-xs space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold">D3 句子级写作核验（E级指标 · 修订 {d.writing_verification.rev_no}）</span>
+              <Badge tone={d.writing_verification.verdict === 'stale' ? 'amber' : d.writing_verification.verdict === 'passed' ? 'green' : 'red'}>
+                {d.writing_verification.verdict === 'stale' ? '已失效' : d.writing_verification.verdict === 'passed' ? '通过' : '未通过'}
+              </Badge>
+            </div>
+            <div className="grid grid-cols-2 gap-1 text-muted">
+              <span>无证据断言数：{d.writing_verification.metrics.ungrounded_claim_count}</span>
+              <span>事实绑定率：{Math.round(d.writing_verification.metrics.fact_binding_rate * 100)}%</span>
+              <span>承诺绑定率：{Math.round(d.writing_verification.metrics.commitment_binding_rate * 100)}%</span>
+              <span>针对性占比：{Math.round(d.writing_verification.metrics.specificity_ratio * 100)}%</span>
+              <span>知识库最大相似度：{Math.round(d.writing_verification.metrics.kb_similarity_max * 100)}%</span>
+              <span>套话最大相似度：{Math.round(d.writing_verification.metrics.boilerplate_similarity_max * 100)}%</span>
+            </div>
+            {d.writing_verification.reasons && d.writing_verification.reasons.length > 0 && (
+              <ul className="list-disc pl-4 text-danger">
+                {d.writing_verification.reasons.map((r, idx) => <li key={idx}>{r.message}</li>)}
+              </ul>
+            )}
           </section>
         )}
         <h3 className="text-xs font-medium text-muted">绑定要求（{d.requirements.length}）</h3>
@@ -398,13 +461,19 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
           <Button variant="primary" icon={<Sparkles className="size-4" />} loading={busy === 'dispatch'} disabled={!!dispatchDisabled}
             onClick={async () => {
               setAIOpen(false)
-              await act('dispatch', '派发 AI 撰写', () => api.dispatchSection(taskId, sectionId, { base_rev_no: s.current_rev_no, instruction }),
+              const input = JSON.stringify([taskId, sectionId, s.current_rev_no, instruction])
+              if (pendingDispatch.current?.input !== input) pendingDispatch.current = { input, key: crypto.randomUUID() }
+              await act('dispatch', '派发 AI 撰写', async () => {
+                const job = await api.dispatchSection(taskId, sectionId, { base_rev_no: s.current_rev_no, instruction }, pendingDispatch.current!.key)
+                pendingDispatch.current = null
+                setInstruction('')
+                return job
+              },
                 '已派发 AI 撰写；正文写回后才会显示，结果以服务器返回为准', ['sections'])
-              setInstruction('')
             }}>派发</Button></>}>
         <div className="space-y-3">
           <Field label="重写指令（可选）"><Input autoFocus value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="如：补充运维响应时限，压缩到 1500 字" /></Field>
-          <p className="text-xs text-muted">派发时快照修订 {s.current_rev_no} 与大纲 v{s.outline_version}；期间若有人保存新版本或大纲变更，AI 稿只会成为候选稿，不覆盖主稿。会调用模型并产生费用；模型不可用时返回错误，不会自动重试。</p>
+          <p className="text-xs text-muted">派发时记录修订 {s.current_rev_no} 与大纲 v{s.outline_version}；期间若有人保存新版本或大纲变更，AI 稿只会成为候选稿，不覆盖主稿。任务可在服务重启后恢复，最多执行 3 次；调用模型会产生费用。生成后仍须人工评审。</p>
         </div>
       </Modal>
     </>

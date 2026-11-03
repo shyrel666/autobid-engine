@@ -121,9 +121,6 @@ func NewEngine(m *Manager, resolve Resolver, cfg Config) *Engine {
 		work:       map[int64]*workExecution{},
 		steerBox:   map[int64][]string{},
 	}
-	if m != nil {
-		m.passthroughHint = e.RouteHintToRunningWork
-	}
 	return e
 }
 
@@ -664,8 +661,9 @@ func (e *Engine) drainSteer(intentID int64) (string, bool) {
 	return q[0], true
 }
 
-// RouteHintToRunningWork 将带 anchors 的人工补充信息（Hint）直通投递给锚定相同要素的在途 Worker（事件直通 Passthrough）。
-// 返回成功命中并排入 steerBox 的在途 intentID 列表；为空表示无匹配的在途 Worker。
+// RouteHintToRunningWork is a transient notification helper retained for callers
+// that explicitly want best-effort steering. Manager.AddHint uses the durable
+// database inbox instead; this helper must never acknowledge a Hint.
 func (e *Engine) RouteHintToRunningWork(t *Task, hintID int64, text string, anchors []int64) []int64 {
 	if t == nil || len(anchors) == 0 {
 		return nil
@@ -773,6 +771,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	}
 
 	workCtx, workCancel := context.WithCancelCause(e.interceptCtx(ectx, t, intent.ID, name))
+	workCtx = db.WithExecutionScope(workCtx, db.NodeMandate(intent))
+	workCtx = db.WithIntentExecution(workCtx, intent.ID, epoch)
 	e.registerWork(intent.ID, workCancel, t.ID, intent.Anchors)
 	// Patch ④：执行期间周期续租；租约丢失立即以 AbortLeaseLost 取消本次执行。
 	go t.Store.KeepIntentLease(workCtx, intent.ID, name, epoch, e.cfg.LeaseTTL, func(error) {
@@ -793,8 +793,18 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		emit,
 	)
 	hooks := &steerHooks{
-		inner:  watchdog,
-		drain:  func() (string, bool) { return e.drainSteer(iid) },
+		inner: watchdog,
+		drain: func() (string, bool) {
+			msg, ok, deliveryErr := t.Store.TakeIntentInput(workCtx, iid, epoch)
+			if deliveryErr != nil {
+				workCancel(fmt.Errorf("read durable input: %w", deliveryErr))
+				return "", false
+			}
+			if ok {
+				return msg, true
+			}
+			return e.drainSteer(iid)
+		},
 		nudges: &atomic.Int64{}, // 建在重试循环外，跨 model_error 重试共享
 		limit:  e.emptyTurnNudgeLimit(),
 		label:  label,
@@ -824,6 +834,18 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		reason, _, err = runOnce()
 	}
 
+	// Only a persisted, successful turn may acknowledge operator input.
+	if err == nil && reason == harness.ReasonCompleted && workCtx.Err() == nil {
+		if mandate := db.NodeMandate(intent); mandate != nil && mandate.RequireWriteback && !watchdog.HasWriteback() {
+			err = errors.New("intent completion rejected: required writeback missing")
+		}
+		if err == nil {
+			err = e.m.pg.CheckIntentDeliverables(workCtx, t.ID, intent)
+		}
+		if err == nil {
+			err = t.Store.AcknowledgeIntentInputs(workCtx, iid, epoch)
+		}
+	}
 	// 关键时序：先读取取消原因与 killed，再 detachWork（它会以 AbortWorkFinished 取消 workCtx）。
 	workCause := context.Cause(workCtx)
 	killed := workCtx.Err() != nil && ectx.Err() == nil
@@ -880,10 +902,18 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	case reason == harness.ReasonMaxTurns || reason == harness.ReasonTimeout:
 		_ = e.transitionIntent(ctx, t, iid, epoch, from, db.StateIntentExhausted)
 		t.NotifyDone(iid)
-	// [10] 正常完成（即使零写入）-> done。
+	// [10] A message arriving after the last hook needs a new turn.
 	default:
-		_ = e.transitionIntent(ctx, t, iid, epoch, from, db.StateIntentDone)
+		c, cancel := dbCtx(ctx)
+		completionErr := t.Store.CompleteIntentOrContinue(c, iid, epoch)
+		cancel()
+		if completionErr != nil {
+			e.emit(t, db.Activity{Worker: name, Kind: "error", NodeID: &iid, Summary: "工作完成状态未提交", Detail: completionErr.Error()})
+		}
 		t.NotifyDone(iid)
+	}
+	if node, readErr := t.Store.GetNode(ctx, iid); readErr == nil && node != nil && node.State != db.StateIntentRunning && node.State != db.StateIntentOpen && node.State != db.StateIntentPaused {
+		_ = t.Store.ReturnIntentInputs(ctx, iid)
 	}
 }
 

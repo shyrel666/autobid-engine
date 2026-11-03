@@ -49,6 +49,12 @@ func (d *DB) SetTaskPaused(ctx context.Context, id int64, paused bool) error {
 		if err == nil && paused {
 			_, err = tx.ExecContext(ctx, `UPDATE fixed_file_jobs SET status='cancelled',error='项目已暂停',lease_token=lease_token+1,lease_until=NULL,updated_by='task-pause',updated_at=now() WHERE task_id=$1 AND status IN ('queued','running')`, id)
 		}
+		if err == nil && paused {
+			// Persist a pause fence even if resume happens before the next heartbeat.
+			// Keep the token for release on reclaim; status prevents the old attempt
+			// from writing and the original deadline/attempt budget is unchanged.
+			_, err = tx.ExecContext(ctx, `UPDATE section_write_jobs SET status='queued',lease_until=NULL,error='项目已暂停，等待恢复',updated_by='task-pause',updated_at=now() WHERE task_id=$1 AND status='running'`, id)
+		}
 		return err
 	})
 }

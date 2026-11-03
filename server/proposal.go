@@ -22,6 +22,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/http"
@@ -46,6 +47,15 @@ const sectionWriteTimeout = 10 * time.Minute
 type llmSectionWriter struct{ s *LLMService }
 
 func (w *llmSectionWriter) WriteSection(ctx context.Context, t *Task, sc *bidtools.SectionContext, instruction string) (*bidtools.SectionDraft, error) {
+	reqIDs := make([]int64, 0, len(sc.Requirements))
+	for _, r := range sc.Requirements {
+		reqIDs = append(reqIDs, r.ID)
+	}
+	mandate := &db.IntentMandate{RestrictObjects: true, AllowedSectionIDs: []int64{sc.SectionID}, AllowedRequirementIDs: reqIDs, MaxToolCalls: 24}
+	ctx = db.WithExecutionScope(ctx, mandate)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	watchdog := newWatchdogHooks(t.Hooks, 0, "section-writer", mandate, WatchdogConfig{}, nil, cancel, nil)
 	rt := &taskLLMRuntime{s: w.s, task: t, agentKey: agent.AgentWorker}
 	kit := bidtools.New(w.s.pg, t.ID, t.Assets, t.Store).WithRetrieval(w.s.cfg.Retrieval)
 	sys := "你是技术标书章节撰写人。若上下文中缺少招标原文细节或需要检索/核验企业知识库与资质证据（kb_search_* / kb_verify_evidence / requirement_bind_evidence），" +
@@ -56,7 +66,7 @@ func (w *llmSectionWriter) WriteSection(ctx context.Context, t *Task, sc *bidtoo
 		Provider:     rt,
 		SystemPrompt: sys,
 		Tools:        kit.SectionWriterTools(),
-		Hooks:        t.Hooks,
+		Hooks:        watchdog,
 		NonStreaming: true,
 		MaxTurns:     6,
 		Settlement: &harness.Settlement{
@@ -150,6 +160,15 @@ func proposalFail(w http.ResponseWriter, err error) {
 		{db.ErrCommitmentUnconfirmed, http.StatusUnprocessableEntity, "commitment_unconfirmed"},
 		{db.ErrCommitmentMismatch, http.StatusUnprocessableEntity, "commitment_mismatch"},
 		{db.ErrQuoteInconsistent, http.StatusUnprocessableEntity, "quote_inconsistent"},
+		{db.ErrStoryboardMissing, http.StatusUnprocessableEntity, "storyboard_missing"},
+		{db.ErrStoryboardNotApproved, http.StatusUnprocessableEntity, "storyboard_not_approved"},
+		{db.ErrStoryboardStale, http.StatusConflict, "storyboard_stale"},
+		{db.ErrStoryboardState, http.StatusConflict, "storyboard_state"},
+		{db.ErrStoryboardInvalid, http.StatusBadRequest, "storyboard_invalid"},
+		{db.ErrPinkSelfApproval, http.StatusUnprocessableEntity, "pink_self_approval"},
+		{db.ErrRedSelfApproval, http.StatusUnprocessableEntity, "red_self_approval"},
+		{db.ErrUngroundedClaim, http.StatusUnprocessableEntity, "ungrounded_claim"},
+		{db.ErrWritingVerificationFailed, http.StatusUnprocessableEntity, "writing_verification_failed"},
 	}
 	for _, c := range codes {
 		if errors.Is(err, c.err) {
@@ -562,75 +581,24 @@ func (a *API) dispatchSection(w http.ResponseWriter, r *http.Request, t *Task) {
 		}
 	}
 	actor := operator(r)
-	claim, err := a.pg.ClaimSectionWrite(r.Context(), db.DefaultTenant, t.ID, id, actor, db.SectionLeaseTTL)
+	if a.sectionWriter() == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no LLM profile is configured for section writing", "code": "llm_unavailable"})
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		var b [16]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			proposalFail(w, err)
+			return
+		}
+		key = fmt.Sprintf("%x", b)
+	}
+	job, err := a.pg.EnqueueSectionWrite(r.Context(), db.DefaultTenant, t.ID, id, key, req.Instruction, actor, req.BaseRevNo)
 	if err != nil {
 		proposalFail(w, err)
 		return
 	}
-	if req.BaseRevNo != nil && *req.BaseRevNo != claim.BaseRevNo {
-		_ = a.pg.ReleaseSectionClaim(r.Context(), db.DefaultTenant, id, claim.LeaseToken)
-		proposalFail(w, fmt.Errorf("%w: requested base_rev_no %d, current is %d", db.ErrRevisionConflict, *req.BaseRevNo, claim.BaseRevNo))
-		return
-	}
-	writer := a.sectionWriter()
-	if writer == nil {
-		_ = a.pg.ReleaseSectionClaim(r.Context(), db.DefaultTenant, id, claim.LeaseToken)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no LLM profile is configured for section writing", "code": "llm_unavailable"})
-		return
-	}
-	go a.runSectionWrite(t, claim, writer, req.Instruction, actor)
-	writeJSON(w, http.StatusAccepted, claim)
-}
-
-func (a *API) runSectionWrite(t *Task, claim *db.SectionClaim, writer SectionWriter, instruction, actor string) {
-	ctx, cancel := context.WithTimeout(a.runCtx, sectionWriteTimeout)
-	defer cancel()
-	emit := func(kind, summary, detail string) {
-		a.hub.Publish(db.Activity{TaskID: t.ID, Worker: "section-writer", Kind: kind, Summary: summary, Detail: detail, At: time.Now()})
-	}
-	release := func(reason error) {
-		_ = a.pg.ReleaseSectionClaim(context.WithoutCancel(ctx), db.DefaultTenant, claim.SectionID, claim.LeaseToken)
-		emit("error", fmt.Sprintf("章节 %s 撰写失败", claim.SectionCode), reason.Error())
-	}
-	// 写作期间按 TTL/3 续期租约；续期失败（大纲被取代或租约被接管）不中断撰写，结果由写回门禁裁决。
-	go func() {
-		tick := time.NewTicker(db.SectionLeaseTTL / 3)
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-				_ = a.pg.RenewSectionLease(ctx, db.DefaultTenant, claim.SectionID, claim.LeaseToken, db.SectionLeaseTTL)
-			}
-		}
-	}()
-	emit("state", fmt.Sprintf("开始撰写章节 %s（基于大纲 v%d、rev %d）", claim.SectionCode, claim.BasedOnOutlineVersion, claim.BaseRevNo), "")
-	sc, err := bidtools.BuildSectionContext(ctx, a.pg, db.DefaultTenant, t.ID, claim.SectionID)
-	if err != nil {
-		release(err)
-		return
-	}
-	draft, err := writer.WriteSection(ctx, t, sc, instruction)
-	if err != nil {
-		release(err)
-		return
-	}
-	source := db.RevAIInitial
-	if claim.BaseRevNo > 0 {
-		source = db.RevAIRewrite
-	}
-	res, err := a.pg.SaveSectionRevision(context.WithoutCancel(ctx), db.DefaultTenant, "ai:"+actor, db.SaveRevisionInput{TaskID: t.ID,
-		SectionID: claim.SectionID, BaseRevNo: claim.BaseRevNo, BasedOnOutlineVersion: claim.BasedOnOutlineVersion, Source: source,
-		ContentMD: draft.ContentMD, SummaryNote: draft.SummaryNote, DiffSummary: draft.DiffSummary, EvidenceIDs: draft.EvidenceIDs,
-		AdmissibilityItemIDs: draft.AdmissibilityItemIDs, CommitmentIDs: draft.CommitmentIDs, Gaps: draft.Gaps, LeaseToken: claim.LeaseToken})
-	if err != nil {
-		release(err)
-		return
-	}
-	if res.Outcome == db.SaveApplied {
-		emit("state", fmt.Sprintf("章节 %s 已写回 rev %d，待审核", claim.SectionCode, res.Revision.RevNo), "")
-	} else {
-		emit("state", fmt.Sprintf("章节 %s 的 AI 稿已归档为候选稿 rev %d（%s），未覆盖当前版本", claim.SectionCode, res.Revision.RevNo, res.Outcome), res.Reason)
-	}
+	a.wakeSectionJobs(t.ID)
+	writeJSON(w, http.StatusAccepted, job)
 }

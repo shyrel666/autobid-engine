@@ -1024,10 +1024,15 @@ export interface SectionDetail {
   section: ProposalSection; outline: ProposalOutline; approved_version: number; writable: boolean; blocked_reason?: string
   requirements: RequirementItem[]; dependencies: DependencyState[]; current_revision?: SectionRevision
   revisions: SectionRevision[]; evidence: EvidenceState[]; warnings: string[]
+  storyboard?: SectionStoryboard; writing_verification?: SectionWritingVerification
 }
 export interface SectionClaim {
   task_id: number; section_id: number; section_code: string; lease_token: number; lease_until: string
   base_rev_no: number; based_on_outline_version: number
+}
+export interface SectionWriteJob extends SectionClaim {
+  job_id: number; request_key: string; instruction: string; status: string; attempts: number
+  max_attempts: number; deadline_at: string; error?: string; result_rev_no?: number; created_by: string
 }
 export interface SaveRevisionResult {
   outcome: 'applied' | 'stale_outline' | 'conflict_candidate'; revision: SectionRevision; section: ProposalSection; reason?: string
@@ -1230,4 +1235,88 @@ export interface ObjectiveScoreRun {
   id: number; task_id: number; requirement_item_id: number; requirement_code: string; requirement_title: string
   admissibility_run_id?: number; rule_version: string; status: 'computed' | 'manual'
   score: number; max_score: number; evidence_ids: number[]; gaps: string[]; computed_at: string
+}
+
+
+// ---------------------------------------------------------------------------
+// D3：故事板（Pink Team 粉队评审）、受控引用渲染与句子级写作核验 E 级指标
+// ---------------------------------------------------------------------------
+
+export type StoryboardStatus = 'draft' | 'pending_pink_review' | 'pink_approved' | 'pink_rejected' | 'stale' | 'superseded'
+
+export interface StoryboardScoringPoint {
+  requirement_id: number; requirement_code: string; our_approach: string; buyer_benefit: string; evidence_refs: string[]
+}
+
+export interface StoryboardChartPlan {
+  chart_type: string; title: string; purpose?: string
+}
+
+export interface SectionStoryboard {
+  id: number; tenant_id: string; task_id: number; section_id: number; section_code: string; section_title: string
+  outline_version: number; version: number; theme_sentence: string
+  scoring_points: StoryboardScoringPoint[]; admissibility_item_ids: number[]; evidence_ids: number[]; commitment_ids: number[]
+  chart_plans: StoryboardChartPlan[]; status: StoryboardStatus; stale_reason?: string; review_note?: string
+  created_by: string; submitted_by?: string; submitted_at?: string; approved_by?: string; approved_at?: string
+  created_at: string; updated_at: string
+}
+
+export interface UpsertStoryboardReq {
+  theme_sentence: string
+  scoring_points: StoryboardScoringPoint[]
+  admissibility_item_ids?: number[]
+  evidence_ids?: number[]
+  commitment_ids?: number[]
+  chart_plans?: StoryboardChartPlan[]
+}
+
+export interface GroundedDraftRenderResult {
+  rendered_md: string
+  evidence_ids: number[]
+  admissibility_item_ids: number[]
+  commitment_ids: number[]
+}
+
+export type SentenceClaimClass = 'bidder_fact' | 'commitment' | 'tender_restatement' | 'general_narrative'
+
+export interface SentenceClaim {
+  index: number; text: string; kind: SentenceClaimClass; grounded: boolean
+  admissibility_item_ids?: number[]; retrieval_evidence_ids?: number[]; commitment_ids?: number[]
+  extracted_metrics?: string[]; extracted_entities?: string[]; reasons?: string[]
+}
+
+export interface WritingVerificationReason {
+  code: string; sentence_index?: number; message: string
+}
+
+export interface WritingVerificationMetrics {
+  total_sentences: number
+  bidder_fact_sentences: number
+  grounded_fact_sentences: number
+  ungrounded_fact_sentences: number
+  commitment_sentences: number
+  grounded_commitment_sentences: number
+  ungrounded_commitment_sentences: number
+  tender_restatement_sentences: number
+  general_narrative_sentences: number
+  ungrounded_claim_count: number
+  fact_binding_rate: number
+  commitment_binding_rate: number
+  tender_fact_hits: number
+  tender_fact_total: number
+  specificity_ratio: number
+  kb_similarity_max: number
+  boilerplate_similarity_max: number
+  matched_tender_terms?: string[]
+  missing_tender_terms?: string[]
+}
+
+export interface SectionWritingVerification {
+  id: number; tenant_id: string; task_id: number; section_id: number; section_code?: string; section_title?: string
+  section_rev_id: number; rev_no: number; storyboard_id?: number
+  rule_version: string; verdict: 'passed' | 'failed' | 'stale' | 'superseded'; stale_reason?: string
+  ungrounded_claim_count: number; fact_binding_rate: number; commitment_binding_rate: number
+  specificity_ratio: number; kb_similarity_max: number; boilerplate_similarity_max: number
+  claims: SentenceClaim[]; metrics: WritingVerificationMetrics; reasons: WritingVerificationReason[]
+  created_by: string; updated_by: string; approved_by?: string; created_at: string; updated_at: string
 }

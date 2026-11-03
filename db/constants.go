@@ -121,6 +121,8 @@ func IsTerminalIntentState(state string) bool {
 // IntentMandate 定义 Planner 赋予单个 Intent 的硬性执行边界（Mandate）。
 // 存储在 exploration_nodes.payload.mandate 中，由 Worker PreToolUse / Stop 门禁与 Watchdog 强制执行。
 type IntentMandate struct {
+	RestrictObjects       bool     `json:"restrict_objects,omitempty"` // empty allowed lists deny access when true
+	RequiredSectionIDs    []int64  `json:"required_section_ids,omitempty"`
 	AllowedSectionIDs     []int64  `json:"allowed_section_ids,omitempty"`
 	AllowedRequirementIDs []int64  `json:"allowed_requirement_ids,omitempty"`
 	TargetWordsMin        int      `json:"target_words_min,omitempty"`
@@ -136,6 +138,8 @@ func (m *IntentMandate) IsEmpty() bool {
 		return true
 	}
 	return len(m.AllowedSectionIDs) == 0 &&
+		!m.RestrictObjects &&
+		len(m.RequiredSectionIDs) == 0 &&
 		len(m.AllowedRequirementIDs) == 0 &&
 		m.TargetWordsMin <= 0 &&
 		m.TargetWordsMax <= 0 &&

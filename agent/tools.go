@@ -21,17 +21,17 @@ const (
 
 // 图工具名。
 const (
-	ToolGraphOverview = "graph_overview"
-	ToolNodeDetail    = "node_detail"
-	ToolListAssets    = "list_assets"
-	ToolAddIntent     = "add_intent"
-	ToolProveGoal     = "prove_goal"
-	ToolKillWork      = "kill_work"
-	ToolSteerWork     = "steer_work"
-	ToolInsertAssets  = "insert_assets"
-	ToolLinkAssets    = "link_assets"
-	ToolRecordFact    = "record_fact"
-	ToolReportFinding = "report_finding"
+	ToolGraphOverview     = "graph_overview"
+	ToolNodeDetail        = "node_detail"
+	ToolListAssets        = "list_assets"
+	ToolAddIntent         = "add_intent"
+	ToolProveGoal         = "prove_goal"
+	ToolKillWork          = "kill_work"
+	ToolSteerWork         = "steer_work"
+	ToolInsertAssets      = "insert_assets"
+	ToolLinkAssets        = "link_assets"
+	ToolRecordFact        = "record_fact"
+	ToolReportFinding     = "report_finding"
 	ToolCompactNodes      = "compact_nodes"
 	ToolConsumeHint       = "consume_hint"
 	ToolAddGoal           = "add_goal"
@@ -291,6 +291,8 @@ func (s *ToolSet) addIntentTool() tool.CoreTool {
 			"parents":   ids("fact/finding ids this intent is derived from"),
 			"anchors":   ids("asset ids this intent concerns"),
 			"mandate": obj(map[string]any{
+				"restrict_objects":        map[string]any{"type": "boolean", "description": "when true, empty allowed ID lists deny all section/requirement access"},
+				"required_section_ids":    ids("sections that must have a new valid revision before this intent may finish; declare this for chapter-writing work"),
 				"allowed_section_ids":     ids("proposal section ids the worker is allowed to write"),
 				"allowed_requirement_ids": ids("requirement ids the worker is allowed to bind evidence to"),
 				"target_words_min":        integer("minimum section draft character/word count"),
@@ -317,6 +319,17 @@ func (s *ToolSet) addIntentTool() tool.CoreTool {
 		}
 		if req.Mandate != nil && req.Mandate.TargetWordsMin > 0 && req.Mandate.TargetWordsMax > 0 && req.Mandate.TargetWordsMin > req.Mandate.TargetWordsMax {
 			return tool.Errorf("mandate.target_words_min cannot exceed target_words_max"), nil
+		}
+		if req.Mandate != nil {
+			scopeCtx := db.WithExecutionScope(ctx, req.Mandate)
+			for _, id := range req.Mandate.RequiredSectionIDs {
+				if id <= 0 {
+					return tool.Errorf("required_section_ids must be positive"), nil
+				}
+				if err := db.CheckSectionScope(scopeCtx, id); err != nil {
+					return tool.Errorf("required output outside allowed scope: %v", err), nil
+				}
+			}
 		}
 		payload := map[string]any{"summary": req.Summary, "rationale": req.Rationale}
 		if !req.Mandate.IsEmpty() {

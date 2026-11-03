@@ -78,37 +78,41 @@ func Skills() []tool.Skill {
 		},
 		{
 			Name:        SkillProposalWriting,
-			Description: "技术标章节写作：在已批准大纲下读取章节写作上下文（要求原文、前置章节摘要、证据有效性），绑定已核验支撑证据或缺口说明，撰写或重写章节草稿并经数据库门禁写回，按需生成章节图表。",
-			Tools:       []string{ToolSectionReadContext, ToolRequirementBindEvidence, ToolSectionWriteDraft, ToolChartGenerate},
+			Description: "技术标章节写作：在已批准大纲下读取章节写作上下文（要求原文、前置章节摘要、证据有效性），编制章节故事板（D3 粉队评审对象），对受控引用标记执行确定性展开，撰写或重写章节草稿并经数据库门禁写回，按需生成章节图表。",
+			Tools:       []string{ToolSectionReadContext, ToolRequirementBindEvidence, ToolSectionUpsertStoryboard, ToolSectionRenderGrounded, ToolSectionWriteDraft, ToolChartGenerate},
 			Body: `# 技术标章节写作
 
 1. 先 SearchExtraTools("select:section_read_context") 取 Schema，调用 section_read_context（section_id 或已批准大纲中的 section_code）。
    writable=false 时停止写作并 record_fact 说明 blocked_reason（大纲未批准 / 已被取代 / 前置章节尚无有效稿），不得绕过。
 2. 逐条对照 requirements：★/▲ 条款逐条明确响应；评分项按评分点组织内容；source_excerpt 是招标原文，引用时保持一致。
-3. 事实性内容只能来自 usable_evidence（verified + supports），并把引用的证据 id 写入 evidence_ids；unusable_evidence 与没有证据的指标、
+3. 事实性内容只能来自 usable_evidence（verified + supports）与 admissible 企业证据，并把引用的证据 id 写入 evidence_ids / admissibility_item_ids；unusable_evidence 与没有证据的指标、
    资质、业绩只能写成待确认事项并列入 gaps，严禁改写成已证实承诺。需要补证据时先用 knowledge-reuse 技能检索与 kb_verify_evidence 核验，
    再通过 SearchExtraTools("select:requirement_bind_evidence") 调用 requirement_bind_evidence 将 verified + supports 的 evidence_ids 或 evidence_gap 绑定到对应 requirement_item。
-4. 与 dependencies 中前置章节的 summary_note 保持术语与承诺一致；在 summary_note 中写 3~6 句衔接摘要供后续章节读取。
-5. SearchExtraTools("select:section_write_draft") 后调用 section_write_draft，base_rev_no 与 based_on_outline_version 必须原样使用
+4. D3 故事板与受控引用渲染：动笔前可先 SearchExtraTools("select:section_upsert_storyboard") 调用 section_upsert_storyboard 创建或更新章节故事板（含 theme_sentence、scoring_points、白名单证据与承诺 ID），交由粉队评审；
+   草稿中的投标人事实与承诺应使用 [[EVID:<id_or_code>]]、[[KB:<evidence_id>]]、[[COMMIT:<code_or_id>]] 标记，并可先通过 SearchExtraTools("select:section_render_grounded_draft") 调用 section_render_grounded_draft 预览确定性展开结果。
+5. 与 dependencies 中前置章节的 summary_note 保持术语与承诺一致；在 summary_note 中写 3~6 句衔接摘要供后续章节读取。
+6. SearchExtraTools("select:section_write_draft") 后调用 section_write_draft，base_rev_no 与 based_on_outline_version 必须原样使用
    section_read_context 的返回值（派发时给了 lease_token 也一并传入）。
-6. outcome 为 stale_outline（大纲已在你写作期间被修改）或 conflict_candidate（他人已保存新版本）时，草稿只是候选稿，没有覆盖当前版本：
+7. outcome 为 stale_outline（大纲已在你写作期间被修改）或 conflict_candidate（他人已保存新版本）时，草稿只是候选稿，没有覆盖当前版本：
    不要换个版本号强行重试，重新读取上下文并报告结果，由人工决定是否采用。
-7. 需要图表时（总体架构、实施进度、项目组织、设备选型），在章节草稿写回成功后 SearchExtraTools("select:chart_generate")，
+8. 需要图表时（总体架构、实施进度、项目组织、设备选型），在章节草稿写回成功后 SearchExtraTools("select:chart_generate")，
    按结构化 spec 调用 chart_generate（不要自己写 Mermaid；设备型号、数量等必须来自 usable_evidence）。图表绑定章节当前修订，
    章节再次修订后旧图表自动失效、不进入导出，需要重新生成。render_status 为 unrendered 表示服务器没有 mermaid-cli，导出时会插入源码占位框。`,
 		},
 		{
 			Name:        SkillProposalReview,
-			Description: "技术标正文审查：逐条核验要求在章节当前修订中的实质响应（响应矩阵），并做全文关键承诺一致性与 ★/▲ 漏项核验。",
-			Tools:       []string{ToolComplianceVerify, ToolFulltextConsistent},
+			Description: "技术标正文审查：逐条核验要求在章节当前修订中的实质响应（响应矩阵），执行 D3 句子级证据绑定与写作核验，并做全文关键承诺一致性与 ★/▲ 漏项核验。",
+			Tools:       []string{ToolComplianceVerify, ToolFulltextConsistent, ToolSectionVerifyWriting},
 			Body: `# 技术标正文审查
 
 1. 先 SearchExtraTools("select:compliance_verify") 取 Schema，调用 compliance_verify（可按 section_code 限定单章）。
    它只核验已批准大纲下各章节的当前有效修订；verified 要求正文有实质应答，只挂章节名、只有 citation 或复述要求都不算。
-2. failed / pending 行说明正文缺少实质应答或数值不满足门槛：用 proposal-writing 技能修改对应章节，而不是改写核验结论。
-3. SearchExtraTools("select:fulltext_consistency_check") 后调用 fulltext_consistency_check，比对总工期、质保期、SLA、团队人数、
+2. 对单章执行 D3 句子级落证与针对性审查时，先 SearchExtraTools("select:section_verify_writing") 再调用 section_verify_writing（section_id 或 section_code），
+   核查 ungrounded_claim_count、fact_binding_rate、commitment_binding_rate、specificity_ratio 与 boilerplate_similarity_max。
+3. failed / pending 行说明正文缺少实质应答、存在未绑定事实/承诺或数值不满足门槛：用 proposal-writing 技能修改对应章节，而不是改写核验结论。
+4. SearchExtraTools("select:fulltext_consistency_check") 后调用 fulltext_consistency_check，比对总工期、质保期、SLA、团队人数、
    核心软硬件型号与数量是否前后一致，并列出没有通过核验的 ★/▲ 条款。
-4. 对每条 contradiction 与 omission 用 record_fact 记录（写明双方章节、rev_no 与原文片段）并提示人工处理；
+5. 对每条 contradiction 与 omission 用 record_fact 记录（写明双方章节、rev_no 与原文片段）并提示人工处理；
    规则抽取的召回率与准确率未经评测，「无结论」不等于全文一致，不得据此宣称可以导出。`,
 		},
 	}

@@ -70,10 +70,10 @@ const performanceCols = `id, tenant_id, code, project_name, buyer, contract_no, 
 
 func scanPerformance(r rowScanner) (*CompanyPerformance, error) {
 	var (
-		p                  CompanyPerformance
-		contract, accept   sql.NullString
-		attrs              []byte
-		del                sql.NullTime
+		p                CompanyPerformance
+		contract, accept sql.NullString
+		attrs            []byte
+		del              sql.NullTime
 	)
 	if err := r.Scan(&p.ID, &p.TenantID, &p.Code, &p.ProjectName, &p.Buyer, &p.ContractNo, &contract, &accept, &p.Amount, &p.Currency,
 		&p.SubjectName, &p.SubjectType, &p.IsSubsidiary, &p.Scope, &attrs, &del, &p.CreatedBy, &p.UpdatedBy, &p.ApprovedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
@@ -163,7 +163,7 @@ func (d *DB) UpsertCompanyPerformance(ctx context.Context, p *CompanyPerformance
 		string(attrs), p.CreatedBy)
 	var (
 		out     CompanyPerformance
-		c, a   sql.NullString
+		c, a    sql.NullString
 		raw     []byte
 		del     sql.NullTime
 		created bool
@@ -372,6 +372,9 @@ type RequirementEvidenceBinding struct {
 
 // BindRequirementEvidence 幂等绑定一条企业证据；证据必须属于同一租户且未软删除。
 func (d *DB) BindRequirementEvidence(ctx context.Context, tenant string, taskID, requirementID int64, domain string, evidenceID int64, actor string) (*RequirementEvidenceBinding, error) {
+	if err := CheckRequirementScope(ctx, requirementID); err != nil {
+		return nil, err
+	}
 	tenant = tenantOr(tenant)
 	if domain != EvidenceDomainCredential && domain != EvidenceDomainPerformance {
 		return nil, fmt.Errorf("db: invalid evidence_domain %q", domain)

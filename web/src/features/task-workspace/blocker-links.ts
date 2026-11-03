@@ -29,6 +29,13 @@ export function blockerLink(taskId: number, b: ExportBlocker): BlockerLink | nul
     case 'veto_failed':
       return { href: taskUrl(taskId, 'requirements', { query: { filter: 'veto', requirement: req } }), label: '去核对否决项' }
     case 'section_not_approved':
+    case 'storyboard_missing':
+    case 'storyboard_unapproved':
+    case 'storyboard_stale':
+    case 'ungrounded_claim':
+    case 'writing_verification_stale':
+    case 'writing_verification_failed':
+    case 'section_self_approved':
       return sec
         ? { href: taskUrl(taskId, 'writing', { sectionId: sec }), label: '去定稿章节' }
         : { href: taskUrl(taskId, 'writing'), label: '去章节列表' }

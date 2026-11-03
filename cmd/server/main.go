@@ -228,6 +228,7 @@ func run(logger *slog.Logger) error {
 	}
 	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
 		Retrieval: retriever, Export: exporter, ExportRunner: runner, FileStore: fileStore, FileRunner: fileRunner})
+	go api.RunSectionJobs(engineCtx)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),

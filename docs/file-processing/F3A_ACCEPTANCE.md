@@ -2,7 +2,7 @@
 
 日期：2026-10-31。范围：ZIP 子文件页面导入、已有文档重新解析预览与人工采用、独立数据库升级恢复演练。
 
-**功能已实现，专项验收通过；全量 E 收口暂未勾选。** 全量竞态测试仅两个既有 LibreOffice 导出用例因本机 Python 启动返回 `0xc0000135` 失败，其余包通过。没有跳过这两个用例或修改导出代码掩盖错误。
+**2026-11-01 已收口为 `[x] E`。** 原安装 LibreOffice 的两个真实导出专项及真实 PostgreSQL 全量竞态复验通过，`go vet`、前端单测与构建通过；此前浏览器与升级恢复验收仍按下文记录。详见[本次复验及可选跳过项](../LIBREOFFICE_VALIDATION.md)。下文保留 2026-10-31 的验收快照与失败排查历史。
 
 ## 1. 页面行为
 
@@ -49,7 +49,7 @@
 
 浏览器结果与截图在 `data/file-processing-browser/`；摘要留存于 [`eval/file-processing/reports/f3a-browser.json`](../../eval/file-processing/reports/f3a-browser.json)。
 
-继续排查记录：将同一 LibreOffice 安装包中的 Python 解释器与 `python313.dll` 放入隔离目录后，解释器可启动且 `import uno` 成功，但真实导出仍报 `Binary URP bridge disposed during call`。完整安装目录的独立副本也复现该错误。因此未把“解释器能启动”当成“导出修复”；未改动系统安装、永久环境变量或导出实现。该环境问题仍是完整 E 收口项。清理诊断副本的操作被自动审批拒绝（工具仅返回 `blocked by policy`），`data/office-runtime-probe/` 和 `data/libreoffice-validation/` 因此保留，后者约 703 MiB；均由 `/data/` 忽略规则排除在 Git 外。
+历史排查记录（2026-10-31）：将同一 LibreOffice 安装包中的 Python 解释器与 `python313.dll` 放入隔离目录后，解释器可启动且 `import uno` 成功，但真实导出仍报 `Binary URP bridge disposed during call`。完整安装目录的独立副本也复现该错误。因此未把“解释器能启动”当成“导出修复”；未改动系统安装、永久环境变量或导出实现。该环境问题当时阻塞完整 E 收口，现已通过上方复验。清理诊断副本的操作被自动审批拒绝（工具仅返回 `blocked by policy`），`data/office-runtime-probe/` 和 `data/libreoffice-validation/` 因此保留，后者约 703 MiB；均由 `/data/` 忽略规则排除在 Git 外。
 
 ## 4. 独立升级与恢复演练
 

@@ -45,6 +45,15 @@ const (
 	BlockQuoteUnconfirmed          = "quote_unconfirmed"
 	BlockQuoteInconsistent         = "quote_inconsistent"
 	BlockQuoteOverCeiling          = "quote_over_ceiling"
+
+	// D3 持久化阻断：只在任务已启用 D3（存在故事板或写作核验记录）时生效，不改变 M1/D2 基线行为。
+	BlockStoryboardMissing         = "storyboard_missing"
+	BlockStoryboardUnapproved      = "storyboard_unapproved"
+	BlockStoryboardStale           = "storyboard_stale"
+	BlockUngroundedClaim           = "ungrounded_claim"
+	BlockWritingVerificationStale  = "writing_verification_stale"
+	BlockWritingVerificationFailed = "writing_verification_failed"
+	BlockSectionSelfApproved       = "section_self_approved"
 )
 
 // ExportBlocker 是一条阻止导出的原因。
@@ -322,6 +331,9 @@ func exportReadinessTx(ctx context.Context, q queryer, tenant string, taskID int
 	if err := d2ReadinessTx(ctx, q, tenant, taskID, outlineID, r); err != nil {
 		return nil, err
 	}
+	if err := d3ReadinessTx(ctx, q, tenant, taskID, outlineID, r); err != nil {
+		return nil, err
+	}
 	r.Ready = len(r.Blockers) == 0
 	return r, nil
 }
@@ -554,4 +566,79 @@ func taskHasD2ActivityQ(ctx context.Context, q queryer, tenant string, taskID in
 		OR EXISTS(SELECT 1 FROM commitment_ledger WHERE tenant_id=$1 AND task_id=$2)
 		OR EXISTS(SELECT 1 FROM bid_quotes WHERE tenant_id=$1 AND task_id=$2)`, tenant, taskID).Scan(&active)
 	return active, err
+}
+
+// d3ReadinessTx 汇总 D3 故事板粉队评审与句子级写作核验持久化阻断（仅在任务已启用 D3 时生效）。
+func d3ReadinessTx(ctx context.Context, q queryer, tenant string, taskID, outlineID int64, r *ExportReadiness) error {
+	active, err := taskHasD3ActivityQ(ctx, q, tenant, taskID)
+	if err != nil || !active {
+		return err
+	}
+	rows, err := q.QueryContext(ctx, `SELECT s.id, s.section_code, s.title, s.current_rev_no,
+			sb.status, COALESCE(sb.stale_reason,''),
+			rv.id, COALESCE(rv.created_by,''), COALESCE(rv.approved_by,''),
+			wv.verdict, COALESCE(wv.stale_reason,''), COALESCE(wv.ungrounded_claim_count, 0)
+		FROM proposal_sections s
+		LEFT JOIN section_storyboards sb
+		  ON sb.tenant_id = s.tenant_id AND sb.section_id = s.id AND sb.status <> 'superseded'
+		LEFT JOIN section_revisions rv
+		  ON rv.tenant_id = s.tenant_id AND rv.section_id = s.id AND rv.rev_no = s.current_rev_no
+		LEFT JOIN section_writing_verifications wv
+		  ON wv.tenant_id = s.tenant_id AND wv.section_rev_id = rv.id
+		WHERE s.tenant_id = $1 AND s.outline_id = $2
+		ORDER BY s.seq`, tenant, outlineID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			secID          int64
+			secCode, title string
+			curRevNo       int
+			sbStatus       sql.NullString
+			sbStale        string
+			revID          sql.NullInt64
+			revCreatedBy   string
+			revApprovedBy  string
+			wvVerdict      sql.NullString
+			wvStale        string
+			ungrounded     int
+		)
+		if err := rows.Scan(&secID, &secCode, &title, &curRevNo, &sbStatus, &sbStale, &revID, &revCreatedBy, &revApprovedBy, &wvVerdict, &wvStale, &ungrounded); err != nil {
+			return err
+		}
+		switch {
+		case !sbStatus.Valid:
+			r.block(ExportBlocker{Kind: BlockStoryboardMissing, SectionID: secID, SectionCode: secCode,
+				Message: fmt.Sprintf("章节 %s %s 尚未创建 D3 故事板", secCode, title)})
+		case sbStatus.String == StoryboardStale:
+			r.block(ExportBlocker{Kind: BlockStoryboardStale, SectionID: secID, SectionCode: secCode,
+				Message: fmt.Sprintf("章节 %s %s 的故事板已失效（%s），需更新并重新通过粉队评审", secCode, title, sbStale)})
+		case sbStatus.String != StoryboardPinkApproved:
+			r.block(ExportBlocker{Kind: BlockStoryboardUnapproved, SectionID: secID, SectionCode: secCode,
+				Message: fmt.Sprintf("章节 %s %s 的故事板状态为 %s，尚未通过粉队评审", secCode, title, sbStatus.String)})
+		}
+		if curRevNo > 0 && revID.Valid {
+			if revApprovedBy != "" && revApprovedBy == revCreatedBy {
+				r.block(ExportBlocker{Kind: BlockSectionSelfApproved, SectionID: secID, SectionCode: secCode,
+					Message: fmt.Sprintf("章节 %s %s 的红队审批人与作者相同（%s），违反职责分离", secCode, title, revApprovedBy)})
+			}
+			switch {
+			case !wvVerdict.Valid:
+				r.block(ExportBlocker{Kind: BlockWritingVerificationFailed, SectionID: secID, SectionCode: secCode,
+					Message: fmt.Sprintf("章节 %s %s 当前修订 rev %d 尚未完成 D3 写作核验", secCode, title, curRevNo)})
+			case wvVerdict.String == compliance.WritingVerdictStale:
+				r.block(ExportBlocker{Kind: BlockWritingVerificationStale, SectionID: secID, SectionCode: secCode,
+					Message: fmt.Sprintf("章节 %s %s 的写作核验已失效（%s），需重新核验", secCode, title, wvStale)})
+			case ungrounded > 0:
+				r.block(ExportBlocker{Kind: BlockUngroundedClaim, SectionID: secID, SectionCode: secCode,
+					Message: fmt.Sprintf("章节 %s %s 存在 %d 条未绑定有效证据或承诺台账的断言", secCode, title, ungrounded)})
+			case wvVerdict.String != compliance.WritingVerdictPassed:
+				r.block(ExportBlocker{Kind: BlockWritingVerificationFailed, SectionID: secID, SectionCode: secCode,
+					Message: fmt.Sprintf("章节 %s %s 的 D3 写作核验未通过", secCode, title)})
+			}
+		}
+	}
+	return rows.Err()
 }

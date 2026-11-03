@@ -23,6 +23,9 @@ const (
 	ToolSectionReadContext      = "section_read_context"
 	ToolRequirementBindEvidence = "requirement_bind_evidence"
 	ToolSectionWriteDraft       = "section_write_draft"
+	ToolSectionUpsertStoryboard = "section_upsert_storyboard"
+	ToolSectionRenderGrounded   = "section_render_grounded_draft"
+	ToolSectionVerifyWriting    = "section_verify_writing"
 
 	maxContextExcerpt        = 600
 	maxContextBody           = 6000
@@ -93,18 +96,18 @@ type ContextAdmissibility struct {
 
 // ContextCommitment 是承诺台账的可引用状态（D2）。
 type ContextCommitment struct {
-	ID           int64   `json:"id"`
-	Code         string  `json:"code"`
-	Metric       string  `json:"metric"`
-	MetricLabel  string  `json:"metric_label"`
-	Unit         string  `json:"unit"`
-	CommittedRaw string  `json:"committed_raw"`
-	Rendered     string  `json:"rendered"`
-	ThresholdCmp string  `json:"threshold_cmp"`
-	ThresholdRaw string  `json:"tender_threshold_raw"`
-	Status       string  `json:"status"`
-	Usable       bool    `json:"usable"`
-	Owner        string  `json:"owner,omitempty"`
+	ID           int64  `json:"id"`
+	Code         string `json:"code"`
+	Metric       string `json:"metric"`
+	MetricLabel  string `json:"metric_label"`
+	Unit         string `json:"unit"`
+	CommittedRaw string `json:"committed_raw"`
+	Rendered     string `json:"rendered"`
+	ThresholdCmp string `json:"threshold_cmp"`
+	ThresholdRaw string `json:"tender_threshold_raw"`
+	Status       string `json:"status"`
+	Usable       bool   `json:"usable"`
+	Owner        string `json:"owner,omitempty"`
 }
 
 // SpilledEvidenceBrief 是同属本任务但未直接绑定到本章节的可用证据微摘要（Spill 溢出索引）。
@@ -124,30 +127,32 @@ type SpilledTextMeta struct {
 
 // SectionContext 是章节写作上下文。BaseRevNo / BasedOnOutlineVersion 必须原样用于写回。
 type SectionContext struct {
-	TaskID                int64                  `json:"task_id"`
-	SectionID             int64                  `json:"section_id"`
-	Code                  string                 `json:"section_code"`
-	Title                 string                 `json:"title"`
-	Level                 int                    `json:"level"`
-	WritingGuide          string                 `json:"writing_guide"`
-	TargetWords           int                    `json:"target_words"`
-	OutlineVersion        int                    `json:"outline_version"`
-	Writable              bool                   `json:"writable"`
-	BlockedReason         string                 `json:"blocked_reason,omitempty"`
-	BaseRevNo             int                    `json:"base_rev_no"`
-	BasedOnOutlineVersion int                    `json:"based_on_outline_version"`
-	Requirements          []ContextRequirement   `json:"requirements"`
-	Dependencies          []db.DependencyState   `json:"dependencies"`
-	Current               *ContextRevision       `json:"current_revision,omitempty"`
-	CurrentRevisionSpill  *SpilledTextMeta       `json:"current_revision_spill,omitempty"`
-	PreviousVersion       *ContextRevision       `json:"previous_outline_version_text,omitempty"`
-	Admissibility         []ContextAdmissibility `json:"admissibility"`
-	Commitments           []ContextCommitment    `json:"commitments"`
-	UsableEvidence        []ContextEvidence      `json:"usable_evidence"`
-	SpilledEvidence       []SpilledEvidenceBrief `json:"spilled_evidence,omitempty"`
-	UnusableEvidence      []ContextEvidence      `json:"unusable_evidence"`
-	Gaps                  []string               `json:"gaps"`
-	Rules                 []string               `json:"rules"`
+	TaskID                int64                          `json:"task_id"`
+	SectionID             int64                          `json:"section_id"`
+	Code                  string                         `json:"section_code"`
+	Title                 string                         `json:"title"`
+	Level                 int                            `json:"level"`
+	WritingGuide          string                         `json:"writing_guide"`
+	TargetWords           int                            `json:"target_words"`
+	OutlineVersion        int                            `json:"outline_version"`
+	Writable              bool                           `json:"writable"`
+	BlockedReason         string                         `json:"blocked_reason,omitempty"`
+	BaseRevNo             int                            `json:"base_rev_no"`
+	BasedOnOutlineVersion int                            `json:"based_on_outline_version"`
+	Requirements          []ContextRequirement           `json:"requirements"`
+	Dependencies          []db.DependencyState           `json:"dependencies"`
+	Current               *ContextRevision               `json:"current_revision,omitempty"`
+	CurrentRevisionSpill  *SpilledTextMeta               `json:"current_revision_spill,omitempty"`
+	PreviousVersion       *ContextRevision               `json:"previous_outline_version_text,omitempty"`
+	Storyboard            *db.SectionStoryboard          `json:"storyboard,omitempty"`
+	WritingVerification   *db.SectionWritingVerification `json:"writing_verification,omitempty"`
+	Admissibility         []ContextAdmissibility         `json:"admissibility"`
+	Commitments           []ContextCommitment            `json:"commitments"`
+	UsableEvidence        []ContextEvidence              `json:"usable_evidence"`
+	SpilledEvidence       []SpilledEvidenceBrief         `json:"spilled_evidence,omitempty"`
+	UnusableEvidence      []ContextEvidence              `json:"unusable_evidence"`
+	Gaps                  []string                       `json:"gaps"`
+	Rules                 []string                       `json:"rules"`
 }
 
 var sectionRules = []string{
@@ -156,6 +161,7 @@ var sectionRules = []string{
 	"没有任何证据的指标、资质、业绩与案例不得编造；写明缺口并提示人工补充。",
 	"企业证据只能在 admissibility[].items 中 verdict=admissible 时引用，并在 admissibility_item_ids 中填写明细 id；manual / inadmissible 不得当作通过。",
 	"工期、质保、SLA、可用性、团队人数等承诺只能引用 commitments 中 usable=true 的台账 id，并原样写入 rendered 值；不得另写第二个数值。",
+	"D3 引用受控生成：企业资质、证书、业绩、合同、人员与社保等客观事实句须使用 [[EVID:<admissibility_item_id>]] 引用 token 或句末附带 [EVID:<admissibility_item_id>] 标记；关键承诺句须使用 [[COMMIT:<code_or_id>]] 引用 token 或句末附带 [COMMIT:<id>] 标记。",
 	"★/▲ 实质性条款必须逐条明确响应，不得遗漏或模糊表述。",
 	"与前置章节 summary_note 中的术语、架构名称和关键承诺保持一致。",
 	"summary_note 写 3~6 句衔接摘要（术语、关键结论、承诺边界），供后续依赖章节读取。",
@@ -191,8 +197,12 @@ func BuildSectionContext(ctx context.Context, pg *db.DB, tenant string, taskID, 
 	sc := &SectionContext{TaskID: taskID, SectionID: s.ID, Code: s.Code, Title: s.Title, Level: s.Level, WritingGuide: s.WritingGuide,
 		TargetWords: s.TargetWords, OutlineVersion: s.OutlineVersion, Writable: det.Writable && s.DepsReady, BlockedReason: det.BlockedReason,
 		BaseRevNo: s.CurrentRevNo, Requirements: []ContextRequirement{}, Dependencies: det.Dependencies,
-		Current: contextRevision(det.Current), UsableEvidence: []ContextEvidence{}, SpilledEvidence: []SpilledEvidenceBrief{},
+		Current: contextRevision(det.Current), Storyboard: det.Storyboard, WritingVerification: det.WritingVerification,
+		UsableEvidence: []ContextEvidence{}, SpilledEvidence: []SpilledEvidenceBrief{},
 		UnusableEvidence: []ContextEvidence{}, Gaps: []string{}, Rules: sectionRules}
+	if det.Storyboard != nil && det.Storyboard.Status != db.StoryboardPinkApproved {
+		sc.Gaps = append(sc.Gaps, fmt.Sprintf("章节故事板状态为 %s（尚未通过粉队评审 pink_approved）", det.Storyboard.Status))
+	}
 	if det.Current != nil {
 		if totalRunes := utf8.RuneCountInString(det.Current.ContentMD); totalRunes > maxContextBody {
 			sc.CurrentRevisionSpill = &SpilledTextMeta{
@@ -478,12 +488,16 @@ func ParseSectionDraft(text string, sc *SectionContext) (*SectionDraft, error) {
 
 func (k *Kit) resolveSection(ctx context.Context, id int64, code string) (int64, error) {
 	if id > 0 {
-		return id, nil
+		return id, db.CheckSectionScope(ctx, id)
 	}
 	if strings.TrimSpace(code) == "" {
 		return 0, errors.New("section_id or section_code is required")
 	}
-	return k.pg.SectionByCode(ctx, k.tenant, k.taskID, strings.TrimSpace(code))
+	id, err := k.pg.SectionByCode(ctx, k.tenant, k.taskID, strings.TrimSpace(code))
+	if err != nil {
+		return 0, err
+	}
+	return id, db.CheckSectionScope(ctx, id)
 }
 
 func proposalErr(err error) (tool.Result, error) {
@@ -534,8 +548,8 @@ func (k *Kit) sectionWriteDraftTool() tool.CoreTool {
 				"description": "实际引用的当前 admissible 可采性明细 ID（来自 section_read_context.admissibility）"},
 			"commitment_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"},
 				"description": "实际引用的已确认承诺台账 ID（来自 section_read_context.commitments 中 usable=true）"},
-			"gaps":         map[string]any{"type": "array", "items": gap, "description": "正文中未能证实、需显式披露的证据缺口列表"},
-			"lease_token":  integer("章节写作派发租约令牌（可选）"),
+			"gaps":        map[string]any{"type": "array", "items": gap, "description": "正文中未能证实、需显式披露的证据缺口列表"},
+			"lease_token": integer("章节写作派发租约令牌（可选）"),
 		}, "section_id", "base_rev_no", "based_on_outline_version", "content_md", "summary_note")}
 	return tool.New(spec, func(ctx context.Context, in json.RawMessage, _ *tool.ToolContext) (tool.Result, error) {
 		req, err := decode[struct {
@@ -649,6 +663,127 @@ func (k *Kit) requirementBindEvidenceTool() tool.CoreTool {
 	})
 }
 
+func (k *Kit) sectionUpsertStoryboardTool() tool.CoreTool {
+	spItem := obj(map[string]any{
+		"requirement_code": str("关联的招标要求编号（如 REQ-01）"),
+		"scoring_point":    str("得分点/评审要素摘要"),
+		"our_approach":     str("我方技术/实施做法"),
+		"buyer_benefit":    str("对采购人的明确收益与量化保障"),
+		"evidence_refs":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "支撑证据或台账编号列表"},
+	}, "requirement_code", "our_approach", "buyer_benefit")
+	chartItem := obj(map[string]any{
+		"title":       str("图表标题"),
+		"chart_type":  str("图表类型（architecture | flowchart | topology | table | gantt）"),
+		"purpose":     str("图表论证目的"),
+		"data_source": str("数据或参数来源"),
+	}, "title", "chart_type", "purpose")
+	spec := tool.Spec{
+		Name:        ToolSectionUpsertStoryboard,
+		Description: "创建或更新技术标章节故事板（D3 Pink Team 粉队评审对象）：包含章节核心论点句（theme_sentence）、覆盖全部映射要求的得分点策划（scoring_points）、引用的可采性证据明细（admissibility_item_ids）、知识库证据（evidence_ids）、已确认承诺台账（commitment_ids）与图表规划（chart_plans）。",
+		Schema: obj(map[string]any{
+			"section_id":             integer("技术标章节 ID（与 section_code 二选一）"),
+			"section_code":           str("章节编号（与 section_id 二选一）"),
+			"theme_sentence":         str("章节核心论点句（不少于 12 个有效字符）"),
+			"scoring_points":         map[string]any{"type": "array", "items": spItem, "description": "覆盖本章全部关联要求的得分点策划"},
+			"admissibility_item_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本章拟引用的 admissible 可采性明细 ID"},
+			"evidence_ids":           map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本章拟引用的 verified 知识库证据 ID"},
+			"commitment_ids":         map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本章拟引用的已确认承诺台账 ID"},
+			"chart_plans":            map[string]any{"type": "array", "items": chartItem, "description": "本章图表规划列表"},
+		}, "theme_sentence"),
+	}
+	return tool.New(spec, func(ctx context.Context, in json.RawMessage, _ *tool.ToolContext) (tool.Result, error) {
+		req, err := decode[struct {
+			SectionID int64  `json:"section_id"`
+			Code      string `json:"section_code"`
+			db.UpsertStoryboardInput
+		}](in)
+		if err != nil {
+			return tool.Errorf("invalid input: %v", err), nil
+		}
+		secID, err := k.resolveSection(ctx, req.SectionID, req.Code)
+		if err != nil {
+			return proposalErr(err)
+		}
+		up := req.UpsertStoryboardInput
+		up.TaskID, up.SectionID = k.taskID, secID
+		sb, err := k.pg.UpsertStoryboard(ctx, k.tenant, "worker", up)
+		if err != nil {
+			return proposalErr(err)
+		}
+		return tool.JSON(sb), nil
+	})
+}
+
+func (k *Kit) sectionRenderGroundedDraftTool() tool.CoreTool {
+	spec := tool.Spec{
+		Name:        ToolSectionRenderGrounded,
+		Description: "对含 [[EVID:<id_or_code>]]、[[KB:<evidence_id>]]、[[COMMIT:<code_or_id>]] 引用标记的章节草稿模板执行确定性渲染，从已核验企业证据与已确认承诺台账生成受控事实与承诺文本。",
+		Schema: obj(map[string]any{
+			"section_id":   integer("技术标章节 ID（与 section_code 二选一）"),
+			"section_code": str("章节编号（与 section_id 二选一）"),
+			"template_md":  str("含结构化引用 token 的 Markdown 草稿模板"),
+		}),
+	}
+	return readTool(spec, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
+		req, err := decode[struct {
+			SectionID  int64  `json:"section_id"`
+			Code       string `json:"section_code"`
+			TemplateMD string `json:"template_md"`
+		}](in)
+		if err != nil {
+			return tool.Errorf("invalid input: %v", err), nil
+		}
+		if strings.TrimSpace(req.TemplateMD) == "" {
+			return tool.Errorf("template_md is required"), nil
+		}
+		secID, err := k.resolveSection(ctx, req.SectionID, req.Code)
+		if err != nil {
+			return proposalErr(err)
+		}
+		res, err := k.pg.RenderSectionGroundedDraft(ctx, k.tenant, k.taskID, secID, req.TemplateMD)
+		if err != nil {
+			return proposalErr(err)
+		}
+		return tool.JSON(res), nil
+	})
+}
+
+func (k *Kit) sectionVerifyWritingTool() tool.CoreTool {
+	spec := tool.Spec{
+		Name:        ToolSectionVerifyWriting,
+		Description: "对章节当前主版本执行 D3 句子级证据绑定与写作核验，计算未绑定断言数、事实句绑定率、承诺句绑定率、招标专属事实占比及知识库/套话模板相似度并持久化。",
+		Schema: obj(map[string]any{
+			"section_id":   integer("技术标章节 ID（与 section_code 二选一）"),
+			"section_code": str("章节编号（与 section_id 二选一）"),
+		}),
+	}
+	return tool.New(spec, func(ctx context.Context, in json.RawMessage, _ *tool.ToolContext) (tool.Result, error) {
+		req, err := decode[struct {
+			SectionID int64  `json:"section_id"`
+			Code      string `json:"section_code"`
+		}](in)
+		if err != nil {
+			return tool.Errorf("invalid input: %v", err), nil
+		}
+		secID, err := k.resolveSection(ctx, req.SectionID, req.Code)
+		if err != nil {
+			return proposalErr(err)
+		}
+		wv, err := k.pg.EvaluateSectionWritingVerification(ctx, k.tenant, k.taskID, secID, "worker")
+		if err != nil {
+			return proposalErr(err)
+		}
+		return tool.JSON(wv), nil
+	})
+}
+
 func (k *Kit) proposalTools() []tool.CoreTool {
-	return []tool.CoreTool{k.sectionReadContextTool(), k.requirementBindEvidenceTool(), k.sectionWriteDraftTool()}
+	return []tool.CoreTool{
+		k.sectionReadContextTool(),
+		k.requirementBindEvidenceTool(),
+		k.sectionWriteDraftTool(),
+		k.sectionUpsertStoryboardTool(),
+		k.sectionRenderGroundedDraftTool(),
+		k.sectionVerifyWritingTool(),
+	}
 }

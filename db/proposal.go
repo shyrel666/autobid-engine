@@ -1231,6 +1231,9 @@ func (d *DB) transitionOutline(ctx context.Context, tenant string, taskID int64,
 // sectionGateTx 依「大纲 -> 章节」顺序加锁并返回章节、其大纲状态与当前批准大纲。
 // 章节所属大纲仍在 draft / pending_approval 时返回 ErrOutlineNotApproved。
 func sectionGateTx(ctx context.Context, tx *sql.Tx, tenant string, taskID, sectionID int64) (*ProposalSection, string, *ProposalOutline, error) {
+	if err := CheckSectionScope(ctx, sectionID); err != nil {
+		return nil, "", nil, err
+	}
 	var outlineStatus string
 	err := tx.QueryRowContext(ctx, `SELECT o.status FROM proposal_sections s JOIN proposal_outlines o ON o.id = s.outline_id
 		WHERE s.tenant_id = $1 AND s.task_id = $2 AND s.id = $3`, tenant, taskID, sectionID).Scan(&outlineStatus)
@@ -1303,6 +1306,9 @@ func (d *DB) ClaimSectionWrite(ctx context.Context, tenant string, taskID, secti
 		}
 		if s.Writing {
 			return fmt.Errorf("%w: lease held until %s", ErrSectionBusy, s.LeaseUntil.Format(time.RFC3339))
+		}
+		if err := d3CheckSectionWriteGateTx(ctx, tx, tenant, taskID, s.ID); err != nil {
+			return err
 		}
 		claim = &SectionClaim{TaskID: taskID, SectionID: s.ID, SectionCode: s.Code, BasedOnOutlineVersion: approved.Version}
 		return tx.QueryRowContext(ctx, `UPDATE proposal_sections SET lease_token = lease_token + 1,
@@ -1397,6 +1403,9 @@ func sectionByIDTx(ctx context.Context, q queryer, tenant string, id int64) (*Pr
 
 // SaveSectionRevision 是写回时二次门禁（见文件头不变量 2）。
 func (d *DB) SaveSectionRevision(ctx context.Context, tenant, actor string, in SaveRevisionInput) (*SaveRevisionResult, error) {
+	if err := CheckSectionScope(ctx, in.SectionID); err != nil {
+		return nil, err
+	}
 	tenant = tenantOr(tenant)
 	switch in.Source {
 	case RevAIInitial, RevAIRewrite, RevHumanEdit:
@@ -1414,12 +1423,19 @@ func (d *DB) SaveSectionRevision(ctx context.Context, tenant, actor string, in S
 	in.AdmissibilityItemIDs = uniqueIDs(in.AdmissibilityItemIDs)
 	var out *SaveRevisionResult
 	err := d.InTx(ctx, func(tx *sql.Tx) error {
+		if err := lockIntentProducerTx(ctx, tx, in.TaskID); err != nil {
+			return err
+		}
 		s, outlineStatus, approved, err := sectionGateTx(ctx, tx, tenant, in.TaskID, in.SectionID)
 		if err != nil {
 			return err
 		}
 		if outlineStatus == OutlineDraft || outlineStatus == OutlinePending {
 			return fmt.Errorf("%w: outline v%d is %s", ErrOutlineNotApproved, s.OutlineVersion, outlineStatus)
+		}
+		sb, d3Res, err := d3PrepareAndVerifySaveRevisionTx(ctx, tx, tenant, s, &in)
+		if err != nil {
+			return err
 		}
 		if _, err := validateCommitmentRefsTx(ctx, tx, tenant, in.TaskID, in.CommitmentIDs, in.ContentMD); err != nil {
 			return err
@@ -1490,6 +1506,14 @@ func (d *DB) SaveSectionRevision(ctx context.Context, tenant, actor string, in S
 		if err != nil {
 			return err
 		}
+		if d3Res != nil {
+			if _, err := persistWritingVerificationTx(ctx, tx, tenant, s, rev.ID, rev.RevNo, sb, *d3Res, actor); err != nil {
+				return err
+			}
+		}
+		if err := recordIntentOutputTx(ctx, tx, tenant, rev, actor); err != nil {
+			return err
+		}
 		lease := "lease_until"
 		if releaseLease || isAIRevision(in.Source) {
 			lease = "NULL"
@@ -1530,6 +1554,9 @@ func (d *DB) ApproveSectionRevision(ctx context.Context, tenant string, taskID, 
 		}
 		if rev.Status != RevDraft && rev.Status != RevReviewing && rev.Status != RevApproved {
 			return fmt.Errorf("%w: revision status is %s", ErrEvidenceInvalid, rev.Status)
+		}
+		if err := d3CheckApproveSectionRevisionTx(ctx, tx, tenant, s, rev, actor); err != nil {
+			return err
 		}
 		if _, err := validateCommitmentRefsTx(ctx, tx, tenant, taskID, rev.CommitmentIDs, rev.ContentMD); err != nil {
 			return err
@@ -1665,21 +1692,26 @@ type DependencyState struct {
 }
 
 type SectionDetail struct {
-	Section         *ProposalSection   `json:"section"`
-	Outline         *ProposalOutline   `json:"outline"`
-	ApprovedVersion int                `json:"approved_version"`
-	Writable        bool               `json:"writable"`
-	BlockedReason   string             `json:"blocked_reason,omitempty"`
-	Requirements    []*RequirementItem `json:"requirements"`
-	Dependencies    []DependencyState  `json:"dependencies"`
-	Current         *SectionRevision   `json:"current_revision,omitempty"`
-	Revisions       []*SectionRevision `json:"revisions"`
-	Evidence        []EvidenceState    `json:"evidence"`
-	Warnings        []string           `json:"warnings"`
+	Section             *ProposalSection            `json:"section"`
+	Outline             *ProposalOutline            `json:"outline"`
+	ApprovedVersion     int                         `json:"approved_version"`
+	Writable            bool                        `json:"writable"`
+	BlockedReason       string                      `json:"blocked_reason,omitempty"`
+	Requirements        []*RequirementItem          `json:"requirements"`
+	Dependencies        []DependencyState           `json:"dependencies"`
+	Current             *SectionRevision            `json:"current_revision,omitempty"`
+	Revisions           []*SectionRevision          `json:"revisions"`
+	Evidence            []EvidenceState             `json:"evidence"`
+	Warnings            []string                    `json:"warnings"`
+	Storyboard          *SectionStoryboard          `json:"storyboard,omitempty"`
+	WritingVerification *SectionWritingVerification `json:"writing_verification,omitempty"`
 }
 
 // GetSection 返回章节详情、前置依赖就绪状态、全部修订历史与当前修订证据的实时状态（单一快照读取）。
 func (d *DB) GetSection(ctx context.Context, tenant string, taskID, sectionID int64) (*SectionDetail, error) {
+	if err := CheckSectionScope(ctx, sectionID); err != nil {
+		return nil, err
+	}
 	var det *SectionDetail
 	err := d.readSnapshot(ctx, func(tx *sql.Tx) error {
 		var err error
@@ -1786,6 +1818,13 @@ func getSectionTx(ctx context.Context, q queryer, tenant string, taskID, section
 				det.Warnings = append(det.Warnings, fmt.Sprintf("证据 %d 未核验（%s/%s），不得写成已证实承诺", e.ID, e.Status, e.Relation))
 			}
 		}
+		if wv, err := scanWritingVerification(q.QueryRowContext(ctx, `SELECT `+writingVerifCols+writingVerifJoin+
+			`WHERE wv.tenant_id = $1 AND wv.section_rev_id = $2`, tenant, det.Current.ID)); err == nil {
+			det.WritingVerification = wv
+		}
+	}
+	if sb, err := currentStoryboardTx(ctx, q, tenant, taskID, s.ID, false); err == nil {
+		det.Storyboard = sb
 	}
 	return det, nil
 }

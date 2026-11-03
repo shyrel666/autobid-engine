@@ -60,7 +60,6 @@ func isWatchdogWritebackTool(name string) bool {
 		agent.ToolRecordFact,
 		agent.ToolReportFinding,
 		agent.ToolAddGoal,
-		agent.ToolConsumeHint,
 		"requirement_bind_evidence",
 		"section_write_draft",
 		"chart_generate",
@@ -213,7 +212,11 @@ func (w *watchdogHooks) PostToolUse(ctx context.Context, name string, input, res
 		w.consecutiveErrs++
 	} else {
 		w.consecutiveErrs = 0
-		if isWatchdogWritebackTool(targetName) {
+		var outcome struct {
+			Outcome string `json:"outcome"`
+		}
+		_ = json.Unmarshal(result, &outcome)
+		if isWatchdogWritebackTool(targetName) && (outcome.Outcome == "" || outcome.Outcome == db.SaveApplied) {
 			w.hasWriteback = true
 		}
 	}
@@ -257,6 +260,12 @@ func (w *watchdogHooks) PostToolUse(ctx context.Context, name string, input, res
 		msg := fmt.Sprintf("【Watchdog 自动纠偏】你已累计调用 %d 次只读工具但尚未产生任何写回（record_fact / report_finding / insert_assets / section_write_draft）。请立即停止发散检索，收敛并将已核实结论写回系统！", total)
 		w.reportAndSteer("检测到长回合零写回空转，已注入收敛指令", msg)
 	}
+}
+
+func (w *watchdogHooks) HasWriteback() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.hasWriteback
 }
 
 func (w *watchdogHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []string, string) {

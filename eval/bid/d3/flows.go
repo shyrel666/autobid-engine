@@ -820,7 +820,7 @@ func (a *app) exportDOCX(ctx context.Context, f *flow, jobID int64) {
 		r.fail("S15", "export.copy", "copied", err, "")
 		return
 	}
-	if art, err := artifactOf("export_docx", dst, "D3 主链路导出的技术标 DOCX（未启用 LibreOffice）"); err == nil {
+	if art, err := artifactOf("export_docx", dst, "D3 主链路导出的技术标 DOCX（未启用 文档引擎）"); err == nil {
 		r.artifacts = append(r.artifacts, art)
 	}
 	parsed, perr := ingest.Parse(ctx, ingest.File{Name: "main-export.docx", MIME: demoDOCXMIME, Data: data}, ingest.ParseOptions{})

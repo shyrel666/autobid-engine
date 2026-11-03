@@ -145,7 +145,7 @@ func TestExportJobLeaseFencing(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 可重试失败回到队列；再次领取令牌递增，旧令牌的完成被拒绝。
-	if err := f.d.FailExportJob(ctx, a.ID, a.LeaseToken, "soffice crashed", true); err != nil {
+	if err := f.d.FailExportJob(ctx, a.ID, a.LeaseToken, "document engine crashed", true); err != nil {
 		t.Fatal(err)
 	}
 	b, err := f.d.ClaimExportJob(ctx, "worker-b", time.Minute, f.task.ID)
@@ -165,7 +165,7 @@ func TestExportJobLeaseFencing(t *testing.T) {
 	// 不可重试失败直接 failed；用尽次数的过期任务被置为 failed。
 	jobs, _, _ = f.export(t, ExportPDF)
 	c, _ := f.d.ClaimExportJob(ctx, "w", time.Minute, f.task.ID)
-	if err := f.d.FailExportJob(ctx, c.ID, c.LeaseToken, "LibreOffice 不可用", false); err != nil {
+	if err := f.d.FailExportJob(ctx, c.ID, c.LeaseToken, "文档引擎不可用", false); err != nil {
 		t.Fatal(err)
 	}
 	if j, _ := f.d.GetExportJob(ctx, DefaultTenant, f.task.ID, c.ID); j.Status != ExportFailed || j.FinishedAt == nil {
@@ -177,7 +177,7 @@ func TestExportJobLeaseFencing(t *testing.T) {
 	if x, _ := f.d.ClaimExportJob(ctx, "w", time.Minute, f.task.ID); x != nil {
 		t.Fatalf("exhausted job claimed: %+v", x)
 	}
-	if j, _ := f.d.GetExportJob(ctx, DefaultTenant, f.task.ID, c.ID); j.Status != ExportFailed || !strings.Contains(j.Error, "LibreOffice") {
+	if j, _ := f.d.GetExportJob(ctx, DefaultTenant, f.task.ID, c.ID); j.Status != ExportFailed || !strings.Contains(j.Error, "文档引擎") {
 		t.Fatalf("exhausted job = %s %q", j.Status, j.Error)
 	}
 	_ = jobs

@@ -385,7 +385,7 @@ func deferredItems() []Deferred {
 		{ID: "evidence_binding", Status: "blocked", Reason: "虚拟企业 JSON 仅在 M1 生成、未导入知识库、未绑定证据，不能宣称证据链路已覆盖"},
 		{ID: "D2.commitment", Status: "blocked", Reason: "承诺低于评分阈值、报价不一致、报价与商务文件冲突、型号错误与参数低于阈值、承诺台账：依赖 D2/D3，M1 未实现"},
 		{ID: "D3.writing", Status: "blocked", Reason: "真实大模型写作质量与句子级事实核验：M1 使用确定性替身写作，只验流程"},
-		{ID: "6B.pdf", Status: "blocked", Reason: "PDF 导出与 LibreOffice 目录页码刷新：M1 只导出 DOCX，目录未刷新仅记警告"},
+		{ID: "6B.pdf", Status: "blocked", Reason: "PDF 导出与 文档引擎 目录页码刷新：M1 只导出 DOCX，目录未刷新仅记警告"},
 		{ID: "V.accuracy", Status: "blocked", Reason: "真实项目/企业的准确率与召回率：无真实材料与人工标注，不能做 V 级"},
 		{ID: "4.4.multi_agent", Status: "blocked", Reason: "多 Agent 检索与写作：无稳定收益证据前保持关闭"},
 		{ID: "API.UI", Status: "blocked", Reason: "HTTP REST 路由、SSE 与浏览器端到端操作：本执行器直接调用 Go 业务接口，API/UI 需另行验收"},

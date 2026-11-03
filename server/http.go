@@ -45,7 +45,7 @@ type APIConfig struct {
 	SectionWriter SectionWriter
 	// ComplianceVerifier 是响应矩阵核验器；为 nil 时使用确定性 compliance.RuleVerifier（LLM 核验未接入生产）。
 	ComplianceVerifier compliance.Verifier
-	// Export 是图表渲染与导出服务（导出目录、mmdc、LibreOffice）；为 nil 时以系统临时目录下的 autobid-exports 探测创建。
+	// Export 是图表渲染与导出服务（导出目录、mmdc、文档引擎）；为 nil 时使用系统临时目录下的 autobid-exports，不探测外部程序。
 	Export *export.Service
 	// Evidence 是 D2 企业证据原件存储（AUTOBID_EVIDENCE_DIR，默认 data/evidence）。
 	Evidence *evidence.Store
@@ -77,7 +77,7 @@ func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *
 		cfg.Retrieval = retrieval.New(m.DB(), nil, nil)
 	}
 	if cfg.Export == nil {
-		cfg.Export = export.NewServiceFromEnv(m.DB(), filepath.Join(os.TempDir(), "autobid-exports"), nil)
+		cfg.Export = export.NewService(m.DB(), filepath.Join(os.TempDir(), "autobid-exports"), "未配置导出服务：没有探测文档引擎与 mmdc")
 	}
 	if cfg.Evidence == nil {
 		cfg.Evidence = evidence.FromEnv()

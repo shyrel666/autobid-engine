@@ -40,7 +40,7 @@
 
 - 不导入知识库、不绑定证据；虚构企业 JSON 不属于 M1 通过条件，报告固定写 `evidence_binding = BLOCKED`。
 - 不调用真实大模型；替身写作只验证流程，不代表写作质量。
-- 不覆盖 HTTP / SSE / UI、PDF 导出、LibreOffice 目录页码刷新、报价与承诺台账核验、多 Agent。
+- 不覆盖 HTTP / SSE / UI、PDF 导出、文档引擎 目录页码刷新、报价与承诺台账核验、多 Agent。
 - 数据库连接串只从 `AUTOBID_TEST_DATABASE_URL` 读取，不写入报告或夹具。
 
 ## 复现

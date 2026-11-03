@@ -46,7 +46,7 @@ func TestOrderPPr(t *testing.T) {
 	}
 }
 
-// 生成的 docx（未经 LibreOffice）：标题、偏离表行数、横向分节与占位 TOC 能被 ingest 回读。
+// 生成的 docx（未经文档引擎刷新）：标题、偏离表行数、横向分节与占位 TOC 能被 ingest 回读。
 func TestBuildDocxStructure(t *testing.T) {
 	tpl, err := DefaultTemplate()
 	if err != nil {

@@ -48,18 +48,19 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 
 ### 1.3 基座的既有边界（仍然有效）
 
-- [ ] E **执行可靠性深化 R1 / 门禁边界 R2**（2026-11-01 进行中）：章节持久化队列、幂等派发、有界并发、租约恢复/取消/暂停围栏、Hint 持久化投递与确认、意图交付物归属校验及章节/要求对象范围检查已落地，详见 [`docs/RELIABILITY_PLAN.md`](docs/RELIABILITY_PLAN.md)。本次真实 PostgreSQL 全量竞态有 310 条测试/子测试通过，但两个真实 LibreOffice 导出测试失败，故尚未勾选 E。R2 显式质量策略与可信身份、R3/R4 仍未完成；不改变 D0~D5 的 V/P 状态。
+- [ ] E **执行可靠性深化 R1 / 门禁边界 R2**（2026-11-01 进行中）：章节持久化队列、幂等派发、有界并发、租约恢复/取消/暂停围栏、Hint 持久化投递与确认、意图交付物归属校验及章节/要求对象范围检查已落地，详见 [`docs/RELIABILITY_PLAN.md`](docs/RELIABILITY_PLAN.md)。本次真实 PostgreSQL 全量竞态有 310 条测试/子测试通过，当时两个真实导出测试因原导出引擎的本机运行环境故障失败；2026-11-03 改用 WPS 文档引擎后全量竞态 315 条通过、0 失败，R1 已达 E（见可靠性计划复验）。本项因 R2 显式质量策略与可信身份未完成仍不勾选，R3/R4 也未完成；不改变 D0~D5 的 V/P 状态。
+- [ ] E **导出文档引擎替换为 WPS / Word**（2026-11-03 实施）：原导出引擎及其代码、配置、文档与本地诊断文件已全部移除；`export/office.go` 定义文档引擎接口与启动自检，`office_windows.go` + `office_com.ps1` 经 COM 自动化刷新目录、另存 DOCX、导出 PDF，`AUTOBID_OFFICE_ENGINE=auto` 时 WPS 优先、Word 备选；同时校准回读自检（行尾空格、行末压缩标点不算越界）并修正 ★/▲ 字体回退。开发机（Windows 11 + 本机 WPS / Word）实测通过，真实 PostgreSQL 全量竞态 315 条通过、0 失败，两个真实导出用例在 WPS 下通过；目标环境 Windows Server、商业授权与并发尚未验收，详见 [`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) 6.1 / 12.5。
 
 - [x] E **ARTEX 推演与长文上下文增强**（2026-11-01）：按 [`docs/ARTEX架构技术标系统解析.md`](docs/ARTEX架构技术标系统解析.md) 与 [`docs/implementation_plan.md`](docs/implementation_plan.md) 落地三大运行期机制，验收见 [`docs/walkthrough.md`](docs/walkthrough.md)：① Goals 目标分解器（`db/rfp_goals.go` `BootstrapRFPGoals` 串联要求拆解、`assets` 同步、四大图谱 Goal 根节点 `G-VETO/G-DEVIATION/G-SCORING/G-OUTLINE` 幂等初始化与 `v1 draft` 大纲生成）；② Intent `Mandate` 硬件门禁、确定性 `Watchdog` 跑偏纠偏/熔断（`server/watchdog.go`）与 `AddHint` 锚点事件直通；③ 章节上下文 `UsableEvidence/SpilledEvidence` 分离、`read_chunk` 分页预算与 `prepareContext` 两级 `ToolResult` Spill + 工具回合边界压缩（消除连续工具调用 `413` 崩溃）。不改变 D0~D5 外部验证（V/P）状态。
 
-- [x] E **模型设置复刻**（2026-11-01 收口）：[`实施与验证记录`](docs/MODEL_SETTINGS_PLAN.md) 的 M1 存储/API、M2 调用层、M3 页面已完成；模型相关竞态测试与浏览器 5/5 通过。M4 已在真实 PostgreSQL 下通过全量竞态复验，原先阻塞的两个 LibreOffice 导出测试均实际通过；[复验结果与可选跳过项](docs/LIBREOFFICE_VALIDATION.md)。不改变 D0~D5 业务验收状态。
+- [x] E **模型设置复刻**（2026-11-01 收口）：[`实施与验证记录`](docs/MODEL_SETTINGS_PLAN.md) 的 M1 存储/API、M2 调用层、M3 页面已完成；模型相关竞态测试与浏览器 5/5 通过。M4 已在真实 PostgreSQL 下通过全量竞态复验，原先阻塞的两个真实导出测试均实际通过。不改变 D0~D5 业务验收状态。
 
 - [ ] E **复杂文件处理与受限脚本执行**（2026-10-31 启动）：按 [`docs/file-processing/PLAN.md`](docs/file-processing/PLAN.md) 分阶段实施，跟踪进度见 [`docs/file-processing/PROGRESS.md`](docs/file-processing/PROGRESS.md)。
   - [x] E F0 基线与样本（2026-10-31）：样本/人工期望/契约/限额/导入基线与容器探测完成；证据见 [`eval/file-processing/`](eval/file-processing/)。
   - [x] E F1 原件与固定处理（2026-10-31）：原件留存与哈希校验、XLSX/CSV/TSV/ZIP 固定解析、表格行窗口与单元格溯源、`AdoptTenderParseRevision`、`source_epoch` 确认/导出门禁；验收见 [`F1_ACCEPTANCE.md`](docs/file-processing/F1_ACCEPTANCE.md)。
   - [ ] F2 执行服务：启动关口未通过（无 Linux 容器后端、无真实复杂样本），未建 F2 表、未注册脚本工具。
-  - [x] E F3a 固定解析闭环（2026-11-01 收口）：ZIP 页面导入、修订预览/采用、事务与幂等、浏览器 3/3、独立旧库升级恢复演练已完成；真实 PostgreSQL 全量竞态及两个 LibreOffice 导出用例复验通过；[复验记录](docs/LIBREOFFICE_VALIDATION.md)。见 [`F3A_ACCEPTANCE.md`](docs/file-processing/F3A_ACCEPTANCE.md)。
-  - [x] E F3a+ 固定处理增强（2026-11-01 收口）：必需材料清单/导出事务门禁、流式原件上传、持久化固定解析队列与租约恢复/取消/重试、浏览器 4/4 与独立升级恢复演练已完成；真实 PostgreSQL 全量竞态及 LibreOffice 真实导出复验通过；[复验记录](docs/LIBREOFFICE_VALIDATION.md)。见 [`F3A_PLUS_ACCEPTANCE.md`](docs/file-processing/F3A_PLUS_ACCEPTANCE.md)。不依赖或启用 F2。
+  - [x] E F3a 固定解析闭环（2026-11-01 收口）：ZIP 页面导入、修订预览/采用、事务与幂等、浏览器 3/3、独立旧库升级恢复演练已完成；真实 PostgreSQL 全量竞态及两个真实导出用例复验通过。见 [`F3A_ACCEPTANCE.md`](docs/file-processing/F3A_ACCEPTANCE.md)。
+  - [x] E F3a+ 固定处理增强（2026-11-01 收口）：必需材料清单/导出事务门禁、流式原件上传、持久化固定解析队列与租约恢复/取消/重试、浏览器 4/4 与独立升级恢复演练已完成；真实 PostgreSQL 全量竞态及真实导出复验通过。见 [`F3A_PLUS_ACCEPTANCE.md`](docs/file-processing/F3A_PLUS_ACCEPTANCE.md)。不依赖或启用 F2。
   - [ ] F3b / F4：脚本业务闭环与外部验证未开始。本条目不改变 D0~D5 状态。
 
 - `ExplorationStore.Frontier` 不检查前置依赖；依赖门禁只存在于 Phase 5 的状态机中。
@@ -221,7 +222,7 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 ### D4 成稿与提交（深化 6A 一致性与 6B 导出）
 
 - **落点**：
-  - 《评分索引表》：评分项 → 章节 → 页码，使用书签加 `PAGEREF` 域，经 LibreOffice 刷新后用现有的回读自检核对。偏离表逐条附证明材料页码；证明材料附件按索引编排并加书签。
+  - 《评分索引表》：评分项 → 章节 → 页码，使用书签加 `PAGEREF` 域，经文档引擎（WPS / Word）刷新后用现有的回读自检核对。偏离表逐条附证明材料页码；证明材料附件按索引编排并加书签。
   - 全文件一致性：技术标、商务响应、承诺函、人员表和偏离表都与承诺台账比对，取代"章节之间互相比较数值"的做法。
   - 防雷同：去掉固定的 `dc:creator` 等元数据，每家企业使用自己的模板；正文与平台通用模板、提示语料的相似度超过 D0 阈值时，要求改写。跨企业的指纹比对属于平台级控制，Phase 7 之后再评估；即使实施，也只能使用不可逆指纹，提示中不得透露其他企业的存在或内容。
   - 白手套清单：系统能检查的项目（页码、目录、索引、附件齐全、元数据）作为导出门禁；系统之外的项目（电子签章、平台上传）记录人工确认。在目标交易平台的制作工具中导入、签章和检查的结果，也要记录在案。

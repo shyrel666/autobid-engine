@@ -2,7 +2,7 @@ package server
 
 // Phase 6B 导出 HTTP 集成测试（需要 AUTOBID_TEST_DATABASE_URL）：导出门禁明细（422）、创建导出（201）、任务列表与详情、
 // 下载（未就绪 409、成功 200、跨任务 404），以及模板上传 / 默认模板下载 / 引用中删除 409。
-// LibreOffice 在此不启用（DOCX 路径，目录标注未刷新）；目录页码与 PDF 版式验收在 export 包。
+// 文档引擎在此不启用（DOCX 路径，目录标注未刷新）；目录页码与 PDF 版式验收在 export 包。
 
 import (
 	"archive/zip"
@@ -27,7 +27,7 @@ func newExportAPI(t *testing.T, taskID int64) (*apiClient, *export.Service, *exp
 	ctx, cancel := context.WithCancel(context.Background())
 	m := NewManager(pg)
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil }, Config{Workers: 1})
-	svc := &export.Service{DB: pg, Store: &export.Store{Root: t.TempDir()}, Renderer: pngRenderer{}, OfficeReason: "测试：不启用 LibreOffice"}
+	svc := &export.Service{DB: pg, Store: &export.Store{Root: t.TempDir()}, Renderer: pngRenderer{}, OfficeReason: "测试：不启用文档引擎"}
 	runner := &export.Runner{Service: svc, Owner: "http-test", Lease: time.Minute, TaskID: taskID}
 	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Token: testToken, Export: svc, ExportRunner: runner})
 	srv := httptest.NewServer(api.Handler())

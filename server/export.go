@@ -67,7 +67,7 @@ func (a *API) dependencyWarnings() []db.ExportWarning {
 	var out []db.ExportWarning
 	if !st.Office {
 		out = append(out, db.ExportWarning{Kind: "office_unavailable",
-			Message: "LibreOffice 不可用：PDF 导出任务将失败；DOCX 可以导出，但目录页码未刷新（" + st.OfficeReason + "）"})
+			Message: "文档引擎（WPS / Word）不可用：PDF 导出任务将失败；DOCX 可以导出，但目录页码未刷新（" + st.OfficeReason + "）"})
 	}
 	if !st.Renderer {
 		out = append(out, db.ExportWarning{Kind: "renderer_unavailable", Message: "mermaid-cli（mmdc）不可用：Mermaid 图表无法渲染，导出时插入源码占位框"})

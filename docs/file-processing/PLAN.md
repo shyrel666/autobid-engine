@@ -28,7 +28,7 @@
 | `server/knowledge.go`：`readMultipartFile`、`uploadDocument` | 请求上限 64 MiB；整文件读入内存，然后同步解析。`withTask` 不替换 `*http.Request`，net/http 结束请求时会自动清理 multipart 临时文件 | 保留旧接口；新入口改为流式落盘并边写边算哈希，增加异步处理入口；若新入口包装或替换 Request，需自行 `MultipartForm.RemoveAll()` |
 | `ingest/store.go`：`Ingest`；`db/documents.go` | 保存文件名、MIME、原字节哈希、解析文本/分块；此链路没有持久保存上传文件字节 | 先建设任务原件存储；不能拿哈希冒充可重新解析的原件 |
 | `evidence/store.go` | D2 企业证据已有内容寻址原件存储及读取哈希校验 | 借鉴原子写入和校验做法；不得把招标文件塞入企业证据表 |
-| `ingest/ocr.go`、`export/render.go`、`export/office.go` | 已调用 Tesseract、mmdc、LibreOffice/Python；用途及参数由后端控制 | 固定工具可继续复用；不把现有 Python 导出脚本视为任意代码执行器 |
+| `ingest/ocr.go`、`export/render.go`、`export/office.go` | 已调用 Tesseract、mmdc、WPS / Word（COM 自动化）；用途及参数由后端控制 | 固定工具可继续复用；不把现有文档引擎脚本视为任意代码执行器 |
 | `export/proc.go`、`export/proc_windows.go` | 有超时、进程树清理、Windows 隐藏窗口 | 这些只管理进程生命周期，不提供文件、网络、凭据或资源隔离 |
 | `export/runner.go`、`db/exports.go` | 导出任务有队列、租约、递增围栏令牌、心跳和恢复 | 借鉴设计，新建处理任务表；不能复用 `export_jobs` 存任意脚本任务 |
 | `agent/worker.go`、`server/task_llm.go`、`bidtools/bidtools.go` | Worker 由业务工具与延迟工具装配；有 Skill 解锁，无通用 Bash | 经 `Kit.WithProcessing` 注入服务；新增领域 Skill 和延迟工具 |
@@ -296,11 +296,11 @@ F3a 已将 `Ingest` 拆为事务外 `PrepareTender` 与事务内 `PersistTender`
 
 本阶段固定解析随 HTTP 请求同步执行，不创建异步 Runner；以 `file_processing_records` 保存请求指纹、候选、预览、失败或采用结果。解析在事务外进行，正式入库和结果提交保持原子性；失去响应可用同请求键重试，已生成候选可刷新后继续核对。固定处理的流式上传、异步作业和必需材料门禁现拆至 F3a+；F3b 仅承接依赖 F2 的脚本/Agent 工具与脚本业务闭环。F2 启动关口保持不变。
 
-F3a 专项、浏览器与恢复演练通过；2026-11-01 真实 PostgreSQL 全量竞态及两个 LibreOffice 导出用例复验通过，F3a 已收口为 E，详见[复验记录](../LIBREOFFICE_VALIDATION.md)。不代表完整 F3/F4 或 V/P 完成。
+F3a 专项、浏览器与恢复演练通过；2026-11-01 真实 PostgreSQL 全量竞态及两个真实导出用例复验通过，F3a 已收口为 E。不代表完整 F3/F4 或 V/P 完成。
 
 ### 9.2 F3a+ 固定处理增强（2026-10-31 开始）
 
-实施顺序：LibreOffice 真实导出收口 → 必需材料清单/门禁 → 流式原件上传 → 持久化固定解析作业与恢复。此阶段不依赖 F2，不接受用户脚本，不注册任意代码执行工具。
+实施顺序：真实导出收口 → 必需材料清单/门禁 → 流式原件上传 → 持久化固定解析作业与恢复。此阶段不依赖 F2，不接受用户脚本，不注册任意代码执行工具。
 
 - 必需材料清单可在上传前登记，绑定同任务原件；只有原件可用且正式导入后才算完成。取消必需标记须留操作人和说明。未上传、未导入、候选待采用或来源失效均阻断；非必需失败不一律阻断。创建导出快照与清单变更采用同一串行化边界并保存门禁快照。
 - 新 `POST /files` 流式落盘与 SHA-256，原件成功登记后才返回；保留旧同步上传兼容。解析阶段仍有界读入内存，单文件/ZIP 限额与 worker 并发限制继续生效，不宣称全链路流式解析。

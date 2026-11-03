@@ -732,7 +732,7 @@ func (a *app) exportDOCX(ctx context.Context, f *flow, taskID, jobID int64) {
 		r.fail("main.export_readback", "export.copy", "copied", err, "")
 		return
 	}
-	if art, err := artifactOf("export_docx", dst, "主链路导出的技术标 DOCX（M1 未启用 LibreOffice）"); err == nil {
+	if art, err := artifactOf("export_docx", dst, "主链路导出的技术标 DOCX（M1 未启用 文档引擎）"); err == nil {
 		r.artifacts = append(r.artifacts, art)
 	}
 

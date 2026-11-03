@@ -1,229 +1,158 @@
 package export
 
-// LibreOffice headless（soffice + UNO 脚本 office_refresh.py）：每次转换使用独立临时目录、独立的 -env:UserInstallation
-// profile 与私有管道，避免并发实例争用同一用户配置而互相阻塞或崩溃；有并发上限与超时（超时杀掉整个进程树），结束后清理临时目录。
+// 文档引擎：WPS 或 Word 打开生成的 DOCX，刷新全部目录直到页码稳定，再另存 DOCX / 导出 PDF，使成稿目录页码与
+// 用户在 WPS / Word 中看到的排版一致。按 AUTOBID_OFFICE_ENGINE 探测（auto 时 WPS 优先、Word 备选），
+// 每个候选先用内置小样本实际跑一遍刷新与回读自检，通过才启用。COM 自动化实现见 office_windows.go。
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"sync/atomic"
 	"time"
+
+	"github.com/autobid/autobid-engine/db"
 )
 
-//go:embed office_refresh.py
-var officeScript []byte
+var ErrOfficeUnavailable = errors.New("export: no document engine (WPS or Word) is available")
 
-var ErrOfficeUnavailable = errors.New("export: LibreOffice (soffice) is not available")
+// 文档引擎标识。
+const (
+	EngineWPS  = "wps"
+	EngineWord = "word"
+)
 
-// DefaultSofficeWindows 是 Windows 下最后尝试的 LibreOffice 安装位置。
-const DefaultSofficeWindows = `F:\LibreOffice\program\soffice.exe`
-
-// Office 是 LibreOffice headless 转换器。
-type Office struct {
-	Soffice string
-	Python  string
-	Version string
-	Timeout time.Duration
-	sem     chan struct{}
-	seq     atomic.Int64
+// Office 是导出所用的文档引擎。
+type Office interface {
+	Name() string    // EngineWPS / EngineWord
+	Version() string // 引擎自报的名称与版本
+	// Refresh 打开 inDocx，更新全部目录直到稳定，然后另存 outDocx 与 / 或 outPDF（为空表示不生成）。
+	Refresh(ctx context.Context, inDocx, outDocx, outPDF string) (*RefreshResult, error)
 }
 
-// OfficeOptions 配置并发与超时。
-type OfficeOptions struct {
-	Concurrency int
-	Timeout     time.Duration
-}
-
-// FindSoffice 依次查找 AUTOBID_SOFFICE_PATH、PATH 中的 soffice、Windows 默认安装路径。
-func FindSoffice() (string, error) {
-	if p := strings.TrimSpace(os.Getenv("AUTOBID_SOFFICE_PATH")); p != "" {
-		if st, err := os.Stat(p); err != nil || st.IsDir() {
-			return "", fmt.Errorf("%w: AUTOBID_SOFFICE_PATH=%s is not a file", ErrOfficeUnavailable, p)
-		}
-		return p, nil
-	}
-	for _, name := range []string{"soffice", "libreoffice"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p, nil
-		}
-	}
-	if runtime.GOOS == "windows" {
-		if st, err := os.Stat(DefaultSofficeWindows); err == nil && !st.IsDir() {
-			return DefaultSofficeWindows, nil
-		}
-	}
-	return "", fmt.Errorf("%w: AUTOBID_SOFFICE_PATH is not set, soffice is not on PATH and %s does not exist", ErrOfficeUnavailable, DefaultSofficeWindows)
-}
-
-// DetectOffice 定位 soffice 与可导入 uno 的 Python（LibreOffice 自带的 python 优先，可用 AUTOBID_SOFFICE_PYTHON 覆盖），
-// 并读取版本号。
-func DetectOffice(opt OfficeOptions) (*Office, error) {
-	soffice, err := FindSoffice()
-	if err != nil {
-		return nil, err
-	}
-	if abs, err := filepath.Abs(soffice); err == nil {
-		soffice = abs
-	}
-	dir := filepath.Dir(soffice)
-	py := strings.TrimSpace(os.Getenv("AUTOBID_SOFFICE_PYTHON"))
-	if py == "" {
-		for _, c := range []string{"python.exe", "python", "python3"} {
-			if st, err := os.Stat(filepath.Join(dir, c)); err == nil && !st.IsDir() {
-				py = filepath.Join(dir, c)
-				break
-			}
-		}
-	}
-	if py == "" {
-		if p, err := exec.LookPath("python3"); err == nil {
-			py = p
-		}
-	}
-	if py == "" {
-		return nil, fmt.Errorf("%w: no Python with the uno module next to %s (set AUTOBID_SOFFICE_PYTHON)", ErrOfficeUnavailable, soffice)
-	}
-	if opt.Concurrency <= 0 {
-		opt.Concurrency = 2
-	}
-	if opt.Timeout <= 0 {
-		opt.Timeout = 3 * time.Minute
-	}
-	o := &Office{Soffice: soffice, Python: py, Timeout: opt.Timeout, sem: make(chan struct{}, opt.Concurrency)}
-	o.Version = officeVersion(dir)
-	return o, nil
-}
-
-// officeVersion 从安装目录的 version.ini / versionrc 读取版本标识（不启动 soffice）。
-func officeVersion(dir string) string {
-	for _, name := range []string{"version.ini", "versionrc"} {
-		f, err := os.Open(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		var updateID, build string
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 64<<10), 1<<20)
-		for sc.Scan() {
-			line := sc.Text()
-			if v, ok := strings.CutPrefix(line, "UpdateID="); ok {
-				if i := strings.Index(v, "_"); i >= 0 {
-					v = v[i+1:]
-					if j := strings.Index(v, "_"); j >= 0 {
-						v = v[:j]
-					}
-				}
-				updateID = v
-			}
-			if v, ok := strings.CutPrefix(line, "buildid="); ok {
-				build = v
-			}
-		}
-		f.Close()
-		if updateID != "" || build != "" {
-			s := "LibreOffice " + updateID
-			if build != "" {
-				s += " (build " + build[:min(len(build), 12)] + ")"
-			}
-			return strings.TrimSpace(s)
-		}
-	}
-	return "LibreOffice (version unknown)"
-}
-
-// RefreshResult 是一次 UNO 刷新的结果。
+// RefreshResult 是一次刷新的结果。
 type RefreshResult struct {
 	Passes  int    `json:"passes"`
 	Indexes int    `json:"indexes"`
 	TOC     string `json:"toc"`
+	Version string `json:"version"`
 }
 
-// Refresh 在 LibreOffice 中打开 inDocx，更新全部索引直到稳定，然后另存 outDocx 与 / 或 outPDF（为空表示不生成）。
-func (o *Office) Refresh(ctx context.Context, inDocx, outDocx, outPDF string) (*RefreshResult, error) {
-	select {
-	case o.sem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	defer func() { <-o.sem }()
+// selfTestTimeout 是启动自检单次刷新的最短上限。
+const selfTestTimeout = 2 * time.Minute
 
-	dir, err := os.MkdirTemp("", "autobid-soffice-*")
+// officeEngine 是平台实现额外提供的配置入口。
+type officeEngine interface {
+	Office
+	setTimeout(time.Duration)
+}
+
+// OfficeOptions 选择引擎与单次刷新超时。
+type OfficeOptions struct {
+	Engine  string // auto（默认：WPS 优先，Word 备选）/ wps / word
+	Timeout time.Duration
+}
+
+func engineOrder(engine string) ([]string, error) {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "", "auto":
+		return []string{EngineWPS, EngineWord}, nil
+	case EngineWPS:
+		return []string{EngineWPS}, nil
+	case EngineWord:
+		return []string{EngineWord}, nil
+	}
+	return nil, fmt.Errorf("%w: unknown engine %q (want auto, wps or word)", ErrOfficeUnavailable, engine)
+}
+
+// DetectOffice 按顺序探测文档引擎，返回第一个通过自检的引擎；全部不可用时返回各候选的原因。
+func DetectOffice(ctx context.Context, opt OfficeOptions) (Office, error) {
+	order, err := engineOrder(opt.Engine)
 	if err != nil {
 		return nil, err
 	}
+	if opt.Timeout <= 0 {
+		opt.Timeout = 3 * time.Minute
+	}
+	var reasons []string
+	for _, name := range order {
+		// 自检用独立上限：作业超时配置得很短时（如故障演练），不应让引擎在启动时被判为不可用。
+		o, err := newOffice(name, max(opt.Timeout, selfTestTimeout))
+		if err == nil {
+			err = selfTestOffice(ctx, o)
+		}
+		if err == nil {
+			o.setTimeout(opt.Timeout)
+			return o, nil
+		}
+		reasons = append(reasons, name+": "+err.Error())
+	}
+	return nil, fmt.Errorf("%w: %s", ErrOfficeUnavailable, strings.Join(reasons, "; "))
+}
+
+// selfTestOffice 用内置模板生成两章小样本，刷新后回读：DOCX 目录域要有带页码的条目，PDF 目录页码要与标题所在页一致。
+func selfTestOffice(ctx context.Context, o Office) error {
+	tpl, err := DefaultTemplate()
+	if err != nil {
+		return err
+	}
+	in := BuildInput{
+		Doc: db.DocSnapshot{TaskName: "文档引擎自检", Sections: []db.SnapshotSection{
+			{SectionID: 1, Code: "1", Title: "自检章节一", Level: 1, Seq: 0, RevNo: 1, RevID: 1},
+			{SectionID: 2, Code: "2", Title: "自检章节二", Level: 1, Seq: 1, RevNo: 1, RevID: 2},
+		}},
+		Bodies: map[int64]string{1: "文档引擎自检正文。", 2: "文档引擎自检正文。"},
+		Bidder: "自检", Date: "2026年01月01日",
+	}
+	built, err := Build(tpl, in)
+	if err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "autobid-office-selftest-*")
+	if err != nil {
+		return err
+	}
 	defer removeAllRetry(dir)
-	script := filepath.Join(dir, "office_refresh.py")
-	if err := os.WriteFile(script, officeScript, 0o600); err != nil {
-		return nil, err
+	draft, outDocx, outPDF := filepath.Join(dir, "draft.docx"), filepath.Join(dir, "out.docx"), filepath.Join(dir, "out.pdf")
+	if err := os.WriteFile(draft, built.Data, 0o644); err != nil {
+		return err
 	}
-	profile := filepath.Join(dir, "profile")
-	pipe := fmt.Sprintf("autobid_%d_%d_%d", os.Getpid(), o.seq.Add(1), time.Now().UnixNano()%1e6)
-	ctx, cancel := context.WithTimeout(ctx, o.Timeout)
-	defer cancel()
-
-	so := exec.Command(o.Soffice, "-env:UserInstallation="+fileURL(profile), "--headless", "--invisible", "--nologo", "--norestore",
-		"--nodefault", "--nolockcheck", "--nofirststartwizard", "--accept=pipe,name="+pipe+";urp;")
-	so.Dir = dir
-	var soErr bytes.Buffer
-	so.Stdout, so.Stderr = &soErr, &soErr
-	prepareTree(so)
-	if err := so.Start(); err != nil {
-		return nil, fmt.Errorf("start soffice: %w", err)
+	if _, err := o.Refresh(ctx, draft, outDocx, outPDF); err != nil {
+		return err
 	}
-	soDone := make(chan error, 1)
-	go func() { soDone <- so.Wait() }()
-	defer func() {
-		select {
-		case <-soDone:
-		case <-time.After(15 * time.Second):
-			killTree(so)
-			<-soDone
-		}
-	}()
-
-	args := []string{script, "--pipe", pipe, "--in", inDocx, "--connect-timeout", fmt.Sprint(int(o.Timeout.Seconds()))}
-	if outDocx != "" {
-		args = append(args, "--out-docx", outDocx)
+	data, err := os.ReadFile(outDocx)
+	if err != nil {
+		return err
 	}
-	if outPDF != "" {
-		args = append(args, "--out-pdf", outPDF)
+	dr, err := CheckDOCX(ctx, data)
+	if err != nil {
+		return fmt.Errorf("self-test DOCX unreadable: %w", err)
 	}
-	stdout, stderr, runErr := runWithTimeout(ctx, o.Timeout, dir, o.Python, args...)
-	if runErr != nil || ctx.Err() != nil {
-		killTree(so)
+	if len(dr.TOC) < len(in.Doc.Sections) {
+		return fmt.Errorf("self-test DOCX has %d TOC entries, want at least %d", len(dr.TOC), len(in.Doc.Sections))
 	}
-	var res struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-		RefreshResult
-	}
-	line := lastJSONLine(stdout)
-	if line == "" || json.Unmarshal([]byte(line), &res) != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("LibreOffice refresh timed out after %s", o.Timeout)
-		}
-		return nil, fmt.Errorf("LibreOffice refresh failed: %v: %s %s", runErr, tail(stderr, 400), tail(soErr.String(), 200))
-	}
-	if !res.OK {
-		return nil, fmt.Errorf("LibreOffice refresh failed: %s: %s", res.Error, tail(stderr, 2000))
-	}
-	for _, p := range []string{outDocx, outPDF} {
-		if p == "" {
-			continue
-		}
-		if st, err := os.Stat(p); err != nil || st.Size() == 0 {
-			return nil, fmt.Errorf("LibreOffice did not write %s", filepath.Base(p))
+	for _, is := range dr.Issues {
+		if is.Kind == IssueTOCPlaceholder || is.Kind == IssueTOCEntryNoPage || is.Kind == IssueTOCFieldMissing {
+			return fmt.Errorf("self-test DOCX TOC was not refreshed: %s", is.Detail)
 		}
 	}
-	return &res.RefreshResult, nil
+	if data, err = os.ReadFile(outPDF); err != nil {
+		return err
+	}
+	pr, err := CheckPDF(data, tpl.Geometry)
+	if err != nil {
+		return fmt.Errorf("self-test PDF unreadable: %w", err)
+	}
+	if len(pr.TOC) < len(in.Doc.Sections) {
+		return fmt.Errorf("self-test PDF has %d TOC entries, want at least %d", len(pr.TOC), len(in.Doc.Sections))
+	}
+	for _, is := range pr.Issues {
+		switch is.Kind {
+		case IssueTOCMissing, IssueTOCPage, IssueHeadingMissing:
+			return fmt.Errorf("self-test PDF TOC check failed: %s", is.Detail)
+		}
+	}
+	return nil
 }

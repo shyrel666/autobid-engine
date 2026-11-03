@@ -11,8 +11,8 @@
 //	AUTOBID_EXPORT_DIR     图表渲染产物、上传模板与导出成稿目录，默认 data/exports（按租户 / 任务隔离，已加入 .gitignore）
 //	AUTOBID_FILE_PROCESSING_ENABLED 为 1/true 时启用招标原件留存（F1 固定处理）；默认关闭
 //	AUTOBID_FILEWORK_DIR   原件内容寻址存储目录，默认 data/filework（已加入 .gitignore）
-//	AUTOBID_SOFFICE_PATH   LibreOffice soffice 路径；未设置时依次查 PATH 与 F:\LibreOffice\program\soffice.exe
-//	AUTOBID_SOFFICE_CONCURRENCY / AUTOBID_SOFFICE_TIMEOUT_SECONDS  LibreOffice 并发上限（默认 2）与单次超时（默认 180）
+//	AUTOBID_OFFICE_ENGINE  导出文档引擎：auto（默认，WPS 优先、Word 备选）/ wps / word；启动时用小样本实际刷新自检
+//	AUTOBID_OFFICE_TIMEOUT_SECONDS  文档引擎单次刷新超时（默认 180）；同一引擎同一时间只处理一个文档
 //	AUTOBID_MMDC_PATH      mermaid-cli（mmdc）路径；未设置时查 PATH，均不可用时图表为 unrendered
 //	模型密钥优先使用 Profile 加密保存的 Key，否则按 api_key_env 读取环境变量。
 package main
@@ -116,7 +116,7 @@ func run(logger *slog.Logger) error {
 	if exportDir == "" {
 		exportDir = "data/exports"
 	}
-	// 启动时探测 LibreOffice 与 mermaid-cli 并记日志；不可用时 PDF 任务明确失败、DOCX 标注目录页码未刷新。
+	// 启动时探测文档引擎（WPS / Word，含自检）与 mermaid-cli 并记日志；不可用时 PDF 任务明确失败、DOCX 标注目录页码未刷新。
 	exporter := export.NewServiceFromEnv(pg, exportDir, logger)
 	svc := server.NewLLMService(pg, server.LLMServiceConfig{
 		MultiRetrieval: envBool("AUTOBID_RETRIEVAL_MULTI_AGENT"),
@@ -174,7 +174,7 @@ func run(logger *slog.Logger) error {
 	// 导出执行者：先回收租约已过期的 running 任务（上次进程中断），再轮询 queued 任务。
 	runner := &export.Runner{Service: exporter, Owner: fmt.Sprintf("%s/%d", hostname, os.Getpid()), Logger: logger,
 		Workers: envInt("AUTOBID_EXPORT_WORKERS", 2),
-		Lease:   time.Duration(envInt("AUTOBID_SOFFICE_TIMEOUT_SECONDS", 180)+60) * time.Second,
+		Lease:   export.OfficeTimeout() + 60*time.Second,
 		OnChange: func(j *db.ExportJob, summary string) {
 			hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "export", Kind: "state", At: time.Now(), Summary: summary})
 		}}

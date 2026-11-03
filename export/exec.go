@@ -1,6 +1,6 @@
 package export
 
-// 导出执行：套版模板登记与读取、生成 docx、经 LibreOffice 刷新目录 / 转 PDF、产物落盘与回读自检。
+// 导出执行：套版模板登记与读取、生成 docx、经文档引擎（WPS / Word）刷新目录 / 转 PDF、产物落盘与回读自检。
 
 import (
 	"context"
@@ -64,7 +64,7 @@ func (s *Service) loadTemplate(ctx context.Context, tenant string, job *db.Expor
 // 导出执行
 // ---------------------------------------------------------------------------
 
-// permanentError 表示重试无意义的失败（如 PDF 导出时 LibreOffice 不可用、快照数据损坏）。
+// permanentError 表示重试无意义的失败（如 PDF 导出时文档引擎不可用、快照数据损坏）。
 type permanentError struct{ error }
 
 func permanent(format string, args ...any) error { return permanentError{fmt.Errorf(format, args...)} }
@@ -83,7 +83,7 @@ func ArtifactName(job *db.ExportJob) string {
 	return fmt.Sprintf("%s_技术标_v%d_导出%d.%s", truncateRunes(name, 60), job.OutlineVersion, job.ID, job.Format)
 }
 
-// Execute 执行一次导出（调用方已持有租约）：生成 docx，必要时经 LibreOffice 刷新目录 / 转换 PDF，
+// Execute 执行一次导出（调用方已持有租约）：生成 docx，经文档引擎（WPS / Word）刷新目录、另存 docx 或导出 PDF，
 // 结果写到 <job>/t<token>/ 目录。返回产物与提示；不写数据库。
 func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob) (*db.ExportResult, error) {
 	if job.Format == db.ExportPDF && s.Office == nil {
@@ -91,7 +91,7 @@ func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob)
 		if reason == "" {
 			reason = ErrOfficeUnavailable.Error()
 		}
-		return nil, permanent("LibreOffice 不可用，无法生成 PDF：%s", reason)
+		return nil, permanent("文档引擎（WPS / Word）不可用，无法生成 PDF：%s", reason)
 	}
 	tpl, err := s.loadTemplate(ctx, tenant, job)
 	if err != nil {
@@ -150,7 +150,7 @@ func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob)
 	if s.Office == nil {
 		final = built.Data
 		res.Warnings = append(res.Warnings, db.ExportWarning{Kind: db.WarnTOCNotRefreshed,
-			Message: "目录页码未刷新：LibreOffice 不可用（" + s.OfficeReason + "），目录仅含占位文字，已设置 Word 打开时更新域"})
+			Message: "目录页码未刷新：文档引擎（WPS / Word）不可用（" + s.OfficeReason + "），目录仅含占位文字，已设置打开时更新域"})
 	} else {
 		draft := filepath.Join(work, "draft.docx")
 		if err := os.WriteFile(draft, built.Data, 0o644); err != nil {

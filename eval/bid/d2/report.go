@@ -197,7 +197,7 @@ func deferredItems() []Deferred {
 		{ID: "D4", Status: "BLOCKED", Reason: "评分索引表、页码引用、全文件一致性（商务/报价/承诺函/人员表/偏离表）与防雷同属于 D4。"},
 		{ID: "V", Status: "BLOCKED", Reason: "真实企业原件、官方登记核验、人工盲评、真实投标结果与准确率 / 召回率需要合作企业与原件，当前不具备。"},
 		{ID: "P", Status: "BLOCKED", Reason: "多租户 RBAC、预算、监控与生产试点属于 Phase 7 / P 级。"},
-		{ID: "PDF", Status: "BLOCKED", Reason: "PDF 导出与 LibreOffice 目录页码刷新未启用；D2 复用 M1 的 DOCX 导出边界。"},
+		{ID: "PDF", Status: "BLOCKED", Reason: "PDF 导出与 文档引擎 目录页码刷新未启用；D2 复用 M1 的 DOCX 导出边界。"},
 		{ID: "multi-agent", Status: "BLOCKED", Reason: "多 Agent 检索与写作在无稳定收益证据前保持关闭。"},
 		{ID: "quote-optimization", Status: "BLOCKED", Reason: "报价优化、竞争对手情报与投标日历明确不做。"},
 		{ID: "api-ui-e2e", Status: "BLOCKED", Reason: "D2 执行器只覆盖 Go 后端主链；API/UI 浏览器端到端验收另行执行。"},

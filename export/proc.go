@@ -1,26 +1,16 @@
 package export
 
-// 子进程工具：超时杀进程树、读取脚本输出、清理临时目录。
+// 子进程工具：超时杀进程树、截取输出、清理临时目录。
 
 import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
-
-func fileURL(p string) string {
-	p = filepath.ToSlash(p)
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	return (&url.URL{Scheme: "file", Path: p}).String()
-}
 
 // runWithTimeout 运行子进程；超时或 ctx 取消时杀掉整个进程树。
 func runWithTimeout(ctx context.Context, timeout time.Duration, dir, name string, args ...string) (string, string, error) {
@@ -44,16 +34,6 @@ func runWithTimeout(ctx context.Context, timeout time.Duration, dir, name string
 		<-done
 		return stdout.String(), stderr.String(), fmt.Errorf("killed after timeout: %w", ctx.Err())
 	}
-}
-
-func lastJSONLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if l := strings.TrimSpace(lines[i]); strings.HasPrefix(l, "{") {
-			return l
-		}
-	}
-	return ""
 }
 
 func tail(s string, n int) string {

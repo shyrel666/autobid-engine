@@ -8,7 +8,7 @@ package server
 //   POST   /api/tasks/{id}/charts/{chartID}/render        重新渲染（mmdc 可用后补渲染）
 //   POST   /api/tasks/{id}/charts/{chartID}/rebind        重新绑定到章节当前修订（人工确认图表仍适用）
 //   DELETE /api/tasks/{id}/charts/{chartID}
-//   GET    /api/export/status                             LibreOffice / mermaid-cli 可用性
+//   GET    /api/export/status                             文档引擎（WPS / Word）/ mermaid-cli 可用性
 // 状态码：规格错误 400；不存在 404；渲染期间源码被改 409；章节尚无修订 422。
 
 import (

@@ -1,5 +1,5 @@
 // Phase 6B：章节写作视图中的「章节图表」卡片，以及「⑥ 导出成稿」视图（门禁明细、格式与模板、发起导出、任务进度、历史与下载）。
-// 全部数据来自 server/export.go 的真实路由；门禁、快照固化与 LibreOffice / mmdc 调用都在后端。
+// 全部数据来自 server/export.go 的真实路由；门禁、快照固化与文档引擎（WPS / Word）/ mmdc 调用都在后端。
 
 import { useEffect, useState } from 'react'
 import {
@@ -291,7 +291,7 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
               : <BlockerList taskId={taskID} blockers={r.blockers} />}
             <Warnings list={warnings} />
             {p && <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
-              <span>LibreOffice：{p.status.office ? <span className="text-emerald-700">{p.status.office_version}</span> : <span className="text-red-600">不可用（PDF 将失败，DOCX 目录页码不刷新）</span>}</span>
+              <span>文档引擎：{p.status.office ? <span className="text-emerald-700">{p.status.office_version || p.status.office_engine}</span> : <span className="text-red-600">不可用（PDF 将失败，DOCX 目录页码不刷新）</span>}</span>
               <span>mermaid-cli：{p.status.renderer ? <span className="text-emerald-700">可用</span> : <span className="text-amber-700">不可用（图表为源码占位）</span>}</span>
               <span>纳入导出的图表 {p.charts} 张</span>
             </div>}
@@ -340,7 +340,7 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
           </ul>
         )}
         <p className="text-xs text-slate-400">模板中可使用 {'{{content}}'}（正文插入位置）、{'{{title}}'}、{'{{bidder}}'}、{'{{date}}'}、{'{{outline_version}}'} 占位符（须在同一文字段内）；
-          标题按样式名「heading 1~6」匹配。目录与页码由 LibreOffice 刷新，Word 打开时无需手动更新域。</p>
+          标题按样式名「heading 1~6」匹配。目录与页码由文档引擎（WPS / Word）刷新，打开时无需手动更新域。</p>
       </Card>
 
       <Card title="导出任务" subtitle={active ? '有排队或执行中的任务，每 2 秒刷新；全部结束后停止轮询' : '导出成功只表示产物已生成，不代表已签章或已被交易平台接收'}

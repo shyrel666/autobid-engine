@@ -13,7 +13,7 @@ func prepareTree(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 }
 
-// killTree 杀掉进程及其全部子进程（soffice.exe 会再启动 soffice.bin，只杀父进程不够）。
+// killTree 杀掉进程及其全部子进程（mmdc、PowerShell 会再启动子进程，只杀父进程不够）。
 func killTree(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return

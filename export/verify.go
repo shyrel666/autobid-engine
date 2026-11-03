@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/autobid/autobid-engine/ingest"
 )
@@ -72,6 +73,20 @@ func (a area) contains(b ingest.BBox, tol float64) bool {
 	return b.X0 >= a.x0-tol && b.X1 <= a.x1+tol && b.Y0 >= a.y0-tol && b.Y1 <= a.y1+tol
 }
 
+// closingPunct 是行末可压缩为半宽的全角收尾标点：WPS / Word 排版时它们的字形前进框会越过右边距最多半个字宽，
+// 墨迹仍在版芯内，不算越界。
+const closingPunct = "，。、；：？！）》」』】〕”’"
+
+// containsLine 判断文字行是否在区域内；行末为全角收尾标点时，右侧多容许半个字宽。
+func (a area) containsLine(l ingest.PDFLine, tol float64) bool {
+	right := tol
+	if r, _ := utf8.DecodeLastRuneInString(strings.TrimSpace(l.Text)); strings.ContainsRune(closingPunct, r) {
+		right += l.Size / 2
+	}
+	b := l.Box
+	return b.X0 >= a.x0-tol && b.X1 <= a.x1+right && b.Y0 >= a.y0-tol && b.Y1 <= a.y1+tol
+}
+
 func overlap(a, b ingest.BBox) (w, h float64) {
 	return math.Min(a.X1, b.X1) - math.Max(a.X0, b.X0), math.Min(a.Y1, b.Y1) - math.Max(a.Y0, b.Y0)
 }
@@ -111,7 +126,7 @@ func checkLayout(pages []ingest.PDFPageLayout, g Geometry) *PDFReport {
 				if cy > a.y1 {
 					band = area{x0: a.x0, x1: a.x1, y0: a.y1, y1: p.Box[3]}
 				}
-				if !band.contains(l.Box, tol) {
+				if !band.containsLine(l, tol) {
 					r.Issues = append(r.Issues, Issue{Page: p.Number, Kind: IssueOutOfBounds,
 						Detail: fmt.Sprintf("页眉页脚文字越界 %q [%.1f,%.1f,%.1f,%.1f]", l.Text, l.Box.X0, l.Box.Y0, l.Box.X1, l.Box.Y1)})
 				}
@@ -121,7 +136,7 @@ func checkLayout(pages []ingest.PDFPageLayout, g Geometry) *PDFReport {
 					}
 				}
 			default:
-				if !a.contains(l.Box, tol) {
+				if !a.containsLine(l, tol) {
 					r.Issues = append(r.Issues, Issue{Page: p.Number, Kind: IssueOutOfBounds,
 						Detail: fmt.Sprintf("正文文字越出版芯 %q [%.1f,%.1f,%.1f,%.1f]，版芯 [%.1f,%.1f,%.1f,%.1f]", l.Text, l.Box.X0, l.Box.Y0, l.Box.X1, l.Box.Y1, a.x0, a.y0, a.x1, a.y1)})
 				}

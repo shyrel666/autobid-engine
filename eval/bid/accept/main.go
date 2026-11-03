@@ -81,7 +81,7 @@ func run() int {
 		baseRunID: "E2E-" + time.Now().Format("20060102-150405"),
 	}
 	a.exportSvc = &export.Service{DB: pg, Store: &export.Store{Root: filepath.Join(absArtifacts, "export-store")}, Office: nil,
-		OfficeReason: "E2E 验收按设计不启用 LibreOffice：目录页码刷新与 PDF 导出为 BLOCKED，DOCX 导出设置 Word 打开时更新域"}
+		OfficeReason: "E2E 验收按设计不启用文档引擎（WPS / Word）：目录页码刷新与 PDF 导出为 BLOCKED，DOCX 导出设置打开时更新域"}
 
 	first := a.runRound(ctx, 1)
 	a.addFixtureArtifacts(first, *companyDir)

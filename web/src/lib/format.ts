@@ -171,7 +171,7 @@ export const exportStatusLabel: Record<string, string> = { queued: '排队中', 
 
 export const exportWarningLabel: Record<string, string> = {
   chart_unrendered: '图表未渲染', chart_failed: '图表渲染失败', chart_stale: '图表已过期', toc_not_refreshed: '目录页码未刷新',
-  chart_artifact_missing: '图表产物缺失', retried: '回收重试', self_check: '成稿自检', office_unavailable: 'LibreOffice 不可用',
+  chart_artifact_missing: '图表产物缺失', retried: '回收重试', self_check: '成稿自检', office_unavailable: '文档引擎不可用',
   renderer_unavailable: 'mmdc 不可用',
 }
 

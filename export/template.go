@@ -268,7 +268,7 @@ func round1(f float64) float64 { return float64(int(f*10+0.5)) / 10 }
 // 样式
 // ---------------------------------------------------------------------------
 
-// zeroInd 显式清零首行缩进：Word / LibreOffice 中 firstLineChars 优先于 firstLine，必须两者同时写 0，
+// zeroInd 显式清零首行缩进：Word 中 firstLineChars 优先于 firstLine，必须两者同时写 0，
 // 否则正文样式的「首行缩进 2 字符」会被表格、图片与题注继承，把图片推出版芯、把窄列表头挤成竖排。
 const zeroInd = `<w:ind w:firstLineChars="0" w:firstLine="0"/>`
 

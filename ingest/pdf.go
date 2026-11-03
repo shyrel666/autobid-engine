@@ -660,6 +660,7 @@ func (in *pdfInterp) rawImagePNG(st *pdfStream, data []byte) []byte {
 
 type layoutSeg struct {
 	x0, x1 float64
+	ink1   float64 // 最后一个非空白字形的右缘（不含行尾空格；导出版式自检用）
 	text   string
 }
 
@@ -744,6 +745,9 @@ func buildLayoutLines(out *pdfPageOut) []layoutLine {
 			}
 			cur.WriteString(g.text)
 			seg.x1 = g.x + g.w
+			if strings.TrimSpace(g.text) != "" {
+				seg.ink1 = seg.x1
+			}
 			prev = g
 		}
 		flush()
@@ -765,7 +769,7 @@ var reHeadingNo = regexp.MustCompile(`^(?:[★▲]?\d{1,3}(?:[.．]\d{1,3})*[.�
 // mergeHeadingSegs 把“编号 + 宽间距 + 标题”形式的两段行合并为一段，避免误判为表格行。
 func mergeHeadingSegs(segs []layoutSeg) []layoutSeg {
 	if len(segs) == 2 && reHeadingNo.MatchString(segs[0].text) {
-		return []layoutSeg{{x0: segs[0].x0, x1: segs[1].x1, text: segs[0].text + " " + segs[1].text}}
+		return []layoutSeg{{x0: segs[0].x0, x1: segs[1].x1, ink1: segs[1].ink1, text: segs[0].text + " " + segs[1].text}}
 	}
 	return segs
 }

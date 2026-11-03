@@ -5,12 +5,12 @@
 
 ## 实施顺序与验收
 
-- [ ] R1 执行可靠性：章节请求持久化、幂等派发、有界并发、租约恢复/取消、消息持久化投递、交付物完成条件。
+- [x] R1 执行可靠性（2026-11-03 E 收口，见文末复验）：章节请求持久化、幂等派发、有界并发、租约恢复/取消、消息持久化投递、交付物完成条件。
   - 真实 PostgreSQL 验证重启接管、重复请求、过期执行者写回拒绝、取消/暂停、消息重放与完成条件。
 - [ ] R2 门禁边界：显式版本化质量策略、工具对象范围、身份与审批边界。
   - 验证未启用旧模式与新严格模式、按编号访问与新工具的范围检查、身份不可由审计头提升。
 - [ ] R3 D4 成稿：评分索引与页码、附件与承诺一致性、元数据、平台人工检查记录。
-  - 使用真实 LibreOffice 回读；平台签章与外部业务验收不以合成样本替代。
+  - 使用真实文档引擎（WPS / Word）回读；平台签章与外部业务验收不以合成样本替代。
 - [ ] R4 测量驱动优化：章节上下文与分页、解析/检索/模型工作类型基线。
   - 按真实测量决定索引或模型替换；缺保留集时不宣称业务收益。
 
@@ -39,13 +39,29 @@ R1 核心实现已经落地，**全量 E 验收仍未通过**。R2 已补对象�
 | 检查 | 本次结果 |
 | --- | --- |
 | `go vet ./...` | 通过 |
-| 真实 PostgreSQL `go test -race -count=1 -json ./...` | 310 条测试/子测试通过，24 个测试包通过；两个真实 LibreOffice 导出用例失败，因此总退出码为 1 |
+| 真实 PostgreSQL `go test -race -count=1 -json ./...` | 310 条测试/子测试通过，24 个测试包通过；两个真实导出用例因原导出引擎的本机运行环境故障失败，因此总退出码为 1 |
 | 新增可靠性与范围用例 | 全部通过：并发领取、幂等键、重启接管、过期围栏、取消、快速暂停/恢复、原始期限/尝试预算、Hint 重放/并发确认/终止归还、交付物归属、模型忽略完成门禁、编号绕过范围 |
 | 前端 `npm --prefix web run build` | 通过；保留既有 bundle 大于 500 kB 提示 |
 | 前端 `npm --prefix web run test:unit` | 15/15 通过 |
 
-两个失败用例为 `TestExportEndToEndDOCXAndPDF`、`TestCustomTemplateLayout`。原安装的 `F:\LibreOffice\program\python.exe` 单独启动同样报 `0xc0000135`；主程序 `soffice.com --version` 能运行。把同一安装内的核心 Python 与 DLL 复制到 Git 忽略的本地诊断目录后，Python/UNO 可加载，但实际创建 UNO Desktop 仍报 `Binary URP bridge disposed during call`；已有 26.2.6 隔离副本也未解决。未更改导出实现、测试预期或系统安装，未把替换运行时算作导出通过。
+两个失败用例为 `TestExportEndToEndDOCXAndPDF`、`TestCustomTemplateLayout`，原因是原导出引擎在本机的运行环境故障；当时未更改导出实现或测试预期。2026-11-03 起导出改用 WPS / Word 文档引擎，原引擎及其诊断记录已移除，这两个用例需用新引擎重跑。
 
-这与此前 [`LIBREOFFICE_VALIDATION.md`](LIBREOFFICE_VALIDATION.md) 的通过记录不同，当前复现结果优先用于本次验收。四项可选跳过仍为真实模型调用、文件处理浏览器、模型设置浏览器、mmdc；数据库用例没有因缺少连接而跳过。
+四项可选跳过仍为真实模型调用、文件处理浏览器、模型设置浏览器、mmdc；数据库用例没有因缺少连接而跳过。
 
-本地原始证据位于 Git 忽略的 `data/reliability-checks/`：`race-final.jsonl`、`race-final.exit`、`summary.json`、`vet.log`、`web-build.log`、`web-tests.log`，以及两组隔离运行时导出诊断日志。下一步先恢复真实导出回归，再按 R2 → R3 → R4 继续；真实企业材料与外部评审仍待补齐。
+本地原始证据位于 Git 忽略的 `data/reliability-checks/`：`race-final.exit`、`summary.json`、`vet.log`、`web-build.log`、`web-tests.log`。完整测试日志 `race*.jsonl` 含原导出引擎的报错，已于 2026-11-03 删除，以下文复验日志为准。
+
+## 2026-11-03 复验（WPS 文档引擎）
+
+导出改用 WPS / Word 文档引擎后，在开发机（Windows 11、本机 WPS 12.1.0.29161、真实 PostgreSQL）重跑全量回归：
+
+| 检查 | 本次结果 |
+| --- | --- |
+| `go vet ./...` | 通过 |
+| 真实 PostgreSQL `go test -race -count=1 -json ./...` | 315 条测试/子测试通过，25 个测试包通过，0 失败，0 竞态报告；4 项可选跳过同上 |
+| 真实导出用例 | `TestExportEndToEndDOCXAndPDF`（24 页 PDF，目录与版式自检 0 问题）与 `TestCustomTemplateLayout` 均在 WPS 引擎下通过 |
+| 前端 `npm --prefix web run build` | 通过；保留既有 bundle 大于 500 kB 提示 |
+| 前端 `npm --prefix web run test:unit` | 15/15 通过 |
+
+R1 由此满足本文件的 E 标准并勾选。R2 显式质量策略与可信身份、R3、R4 仍未完成；目标环境 Windows Server 上的导出尚未验收。
+
+原始日志在 Git 忽略的 `data/office-engine-checks/`：`vet.log`、`race.jsonl`、`race.stderr`。下一步按 R2 → R3 → R4 继续；真实企业材料与外部评审仍待补齐。

@@ -1,8 +1,17 @@
 # Agent 工具 Skills 与开源运行组件实施计划
 
-编制日期：2026-11-02
+编制日期：2026-11-02；三轮核对：2026-11-03
 
-状态：二轮审查修订版。S0 文档核对完成，可启动首版工程实现，尚无新增能力的 E 级验收。部署实测、分域候选扩展与业务效果的不确定项见第 12 节。
+状态：五轮修订版（2026-11-03）。用户确认的决策如下，依据见 12.5 的本机对比验证：
+
+- 目标部署环境为 **Windows Server**；开发测试使用本机 Windows 11 与本机 WPS。
+- 导出只兼容 WPS 与 Word，WPS 优先。
+- 原导出引擎已从代码、配置、文档与本地文件中彻底移除。
+
+实施进度：
+
+- **已在代码中实施（2026-11-03，开发机验证）**：S1 中的文档引擎替换，见 6.1。
+- **尚未实施**：S1 其余部分（Windows 安装包、mmdc、健康 Tool/API 与目标机验收）以及 S2~S7。代码与 schema 中仍不存在本文其余拟新增的表、工具、路由与字段，也没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现；目标环境就绪前，按第 9 节先做不依赖目标环境的 S2 编码。部署实测、分域候选扩展与业务效果的不确定项见第 12 节。
 
 适用项目：AutoBid Engine。本文中的 Skill 指项目提供给 Agent 的业务技能（`bidtools.Skills()`），不是 Codex 桌面插件。
 
@@ -10,17 +19,31 @@
 
 将文档处理、知识检索、图表生成、标书合稿封装为 Agent 可按需调用的 Skills 与 Tools，并将所需开源程序、运行时、模型和字体纳入统一部署。
 
-用户侧目标：企业业务人员使用浏览器即可上传资料、查看处理结果、编辑章节和下载标书，无需逐项安装 Python、OCR、Mermaid-CLI、LibreOffice。服务器管理员仍需提供容器运行环境、存储及按部署方案需要的 GPU 驱动。“免安装”指业务用户免配置，不代表运行依赖消失。
+用户侧目标：企业业务人员使用浏览器即可上传资料、查看处理结果、编辑章节和下载标书，无需逐项安装 Python、OCR、Mermaid-CLI 或办公软件。
+
+服务器管理员仍需在 Windows 部署机上准备以下内容：
+
+- 带商业授权的 WPS 或 Word（优先 WPS）。
+- 本计划交付的运行组件包。
+- 存储空间。
+- 按部署方案需要的 GPU 驱动。
+
+“免安装”指业务用户免配置，不代表运行依赖消失。
 
 本计划交付：
 
 1. 四类技能的使用规则、工具契约、宿主授权及真实执行入口。
-2. 开源运行组件的版本固定、镜像构建、离线资源准备与功能自检。
+2. 开源运行组件与 WPS/Word 文档引擎的版本固定、Windows 安装包构建、离线资源准备与功能自检。
 3. 耗时作业提交、查询、取消、幂等恢复及 Agent 后续处理机制。
 4. 与既有解析采用、证据核验、章节修订、审批和导出快照的连接。
 5. 工程回归、故障演练、部署验收和业务评测记录。
 
-本计划不重建 Planner/Worker 框架，不引入 LangChain/Dify、独立向量数据库或通用脚本执行器，不开放 Agent 安装软件、执行任意 Shell、选择任意服务地址或访问宿主路径。原有 F2 脚本 Runner 仍受自身启动关口约束。Windows 单机离线安装包作为后续交付形态，首版以服务器部署为准。
+本计划不重建 Planner/Worker 框架，不引入 LangChain/Dify、独立向量数据库或通用脚本执行器，不开放 Agent 安装软件、执行任意 Shell、选择任意服务地址或访问宿主路径。原有 F2 脚本 Runner 仍受自身启动关口约束。
+
+**首版目标部署环境为 Windows Server**（2026-11-03 用户确认），开发测试使用本机 Windows 11 与本机 WPS：
+
+- 运行组件以 Windows 本地进程或本机 HTTP 服务交付，不依赖 Docker/WSL2。
+- 导出只使用 WPS / Word 文档引擎，不使用其他转换器。
 
 与既有计划的关系：
 
@@ -42,13 +65,15 @@
 | 检索 | `retrieval/providers.go`、版本化索引、核验与 knowledge-reuse 已有 | 健康探测、版本回显与可选模型部署，不重写协议 |
 | 图表 | `export.BuildChartSource` 支持 architecture/gantt/org/equipment_table；`export.Renderer.RenderPNG` 与 `export.MMDC`；proposal_charts 已有 source_hash、pending、修订绑定、产物路径/哈希 | 期望修订围栏、持久化渲染作业、幂等取消、结构化图表计划 |
 | 导出 | `db.CreateExportJobs` 冻结快照；**CompleteExportJob、FailExportJob、Heartbeat 已检查 lease_token + running**；export/runner.go 异步执行 | 全生命周期请求幂等、cancelled、严格最终稿策略与完成通知；复用已有围栏，没有 FinishExportJob 这个待修补接口 |
+| 导出引擎 | **2026-11-03 已实现**：`export.Service.Office` 是文档引擎接口（`export/office.go`，含按 `AUTOBID_OFFICE_ENGINE` 探测与启动自检），实现为 WPS/Word COM 自动化（`office_windows.go` + `office_com.ps1`）；`Execute` 在引擎为 nil 时 PDF 永久失败，DOCX 只写 updateFields 占位；`/api/export/status` 返回 `office_engine` / `office_version` | 作业结果记录引擎名与版本（需 `export_jobs` 新列）；Windows Server 运行方式、并发与商业版验收（S1） |
 | HTTP 章节 Writer | `server/proposal.go:llmSectionWriter.WriteSection` 已调用 harness.Run（最多 6 轮工具调用，再解析 JSON）；SectionWriterTools 包含证据绑定，非纯只读；`server/section_jobs.go:executeSectionJob` 调 FinishSectionWriteJob 原子保存修订/结果 | 增加图表计划，并在修订提交事务内登记渲染作业；不改回单次 LLM 调用 |
 | Intent | intent_completion.go 校验产物；intent_inputs.go 持久化 Hint；runIntent 正常回合校验后 ACK；终态触发器和函数尾部均退回 Hint | 持久化作业事件、原子回合收尾与等待恢复、Hint 等待态兼容 |
 
 真实边界：
 
 - 未直接内置 MinerU/PaddleOCR 或指定 BGE 模型；没有截图中四个同名工具包。模板上传继续接受 .docx。
-- LibreOffice 记录有先后：`data/libreoffice-repair-2026-11-01/go-test-race.jsonl` 当地时间约 02:26 通过；`data/reliability-checks/race-final.jsonl` 约 21:34 开始的回归再次失败两个真实导出用例。保留[最近失败](docs/RELIABILITY_PLAN.md)，[较早通过](docs/LIBREOFFICE_VALIDATION.md)不能覆盖它。本次未重跑，不判定根因；mmdc 真实渲染仍未验收。
+- 导出已改为 WPS/Word 文档引擎（12.5）；原导出引擎在本机的历史故障随其移除不再追查，真实导出回归以新引擎为准。
+- mmdc 真实渲染仍未验收。
 - 用户暂无企业历史投标、得分、证明材料原件和评审人员，V/P 继续待验证。
 
 ## 3. 目标架构与执行接线
@@ -68,7 +93,11 @@ flowchart TD
     N --> U
 ```
 
-Skill 描述步骤，Tool 调应用内业务服务，不经 HTTP 回环重复实现逻辑。内部 HTTP 适配器承载运行组件，保留本机 CLI 开发兼容；Go 单体与 PostgreSQL 不变，应用不挂载 Docker socket。
+Skill 描述步骤，Tool 调应用内业务服务，不经 HTTP 回环重复实现逻辑。
+
+- 运行组件在 Windows 上以本地进程或仅监听本机的 HTTP 服务承载。
+- WPS/Word 由受控子进程经 COM 自动化调用（见 6.1）。
+- Go 单体与 PostgreSQL 不变。
 
 ### 3.1 Worker 与 Planner
 
@@ -101,7 +130,7 @@ Skill 描述步骤，Tool 调应用内业务服务，不经 HTTP 回环重复实
 | 新增 proposal-export | proposal_export_check | formats 为非空去重 docx/pdf 子集，可选 template_id；返回 ready、批准大纲版本、blockers、warnings、依赖健康/检查时间。预检不承诺提交成功 |
 | 同上 | proposal_export_submit | formats/template_id/bidder_name（映射现有 Bidder）/expected_outline_version/request_key；项目名读取任务。返回请求组、各格式 job_ref、快照指纹和状态。最终稿强制 strict_runtime=true，模型无权关闭 |
 | 同上 | proposal_export_status/cancel | job_ref 或导出请求组；组取消逐项返回取消/已终态结果。返回快照状态、toc_refreshed、sha256、受鉴权下载路由 |
-| 公共只读 | tool_runtime_status | capability 可选 all/ocr/enhanced_pdf/mermaid/libreoffice/embedding/reranker；返回 unconfigured/starting/healthy/degraded/self_test_failed、版本、自检时间、脱敏原因 |
+| 公共只读 | tool_runtime_status | capability 可选 all/ocr/enhanced_pdf/mermaid/office/embedding/reranker；返回 unconfigured/starting/healthy/degraded/self_test_failed、版本、自检时间、脱敏原因；office 另返回当前引擎 wps/word |
 | 公共只读 | agent_job_status | job_ref 或当前宿主绑定 Intent 下分页列表；返回目标版本、状态、失败及下一步动作，不能借类型/ID 越权 |
 
 `job_ref={kind,id}` 首版 kind 为 **tender_parse/chart_render/proposal_export**，分别映射 fixed_file_jobs/chart_render_jobs/export_jobs；未来知识/证据解析使用不同 kind，不以裸数字 ID 混查。Tool 提交强制订阅当前 Intent，不开放模型 subscribe=false；HTTP 用户提交可无 Intent 订阅。
@@ -139,7 +168,7 @@ import 还需现有 ProcessInput 的 TenderNo/LotNo/Title/DocRole/PublishedAt �
 
 完成回调检查活租约、期限、未取消、source_hash 与修订；章节已前进则 superseded，不挂新修订。已完成历史作业仍 succeeded，查询另标 stale。兼容 chart_generate/render/rebind/delete 必须检查活跃异步作业，拒绝并发改写或先明确取消，不能绕过新围栏。
 
-**导出**：CreateExportJobs 快照事务比较实际批准大纲版本（现有 ExportPreflight 的版本在 Readiness 内，不存在 pref.OutlineVersion），重验正文、材料和图表门禁。最终稿必须真实刷新目录；所需 Mermaid 图有可读且哈希正确的 PNG，equipment_table 按 native 处理。已有合格 PNG 时不因 mmdc 临时离线拒绝导出。
+**导出**：CreateExportJobs 快照事务比较实际批准大纲版本（现有 ExportPreflight 的版本在 Readiness 内，不存在 pref.OutlineVersion），重验正文、材料和图表门禁。最终稿必须由 WPS/Word 引擎真实刷新目录，作业结果记录引擎名与版本；所需 Mermaid 图有可读且哈希正确的 PNG，equipment_table 按 native 处理。已有合格 PNG 时不因 mmdc 临时离线拒绝导出。
 
 严格策略写入不可变快照，执行时重验；服务在预检后故障不能静默生成未刷新最终稿。旧 HTTP 兼容产物明确 preview_only，不能凭 succeeded 声称最终交付。外部探测不在数据库长事务内执行。
 
@@ -164,6 +193,17 @@ import 还需现有 ProcessInput 的 TenderNo/LotNo/Title/DocRole/PublishedAt �
 多态 job 引用不能用普通 FK 验证：同事务检查作业租户/任务、目标权限、tasks.exploration_id = intent.exploration_id 以及当前活租约。禁止按模型自报 ID 插入订阅。未来新增 kind 必须先实现对应验证。
 
 迁移验证覆盖新库、旧库升级、再次执行、旧 CHECK 替换及历史查询；原稿错误 FK 与不完整索引已改为上述约束，不把未运行的 DDL 当验收。
+
+DDL 落地补充（三轮核对）：
+
+- **外键删除行为**：
+  - 现状：`export_jobs`、`fixed_file_jobs`、`proposal_charts` 对 `tasks` 都是 `ON DELETE CASCADE`，`proposal_charts` 还随章节修订级联删除。
+  - 新表对 `tasks` 及父对象一律用 `ON DELETE CASCADE`，涉及 `chart_render_jobs` → `proposal_charts`、`export_jobs` → `export_requests`、`agent_job_events` → `agent_job_subscriptions`。若改用 RESTRICT，删除任务或修订会被阻断。
+  - 删除图表的接口先按 4.3 拒绝活跃作业，已终态的作业随图表级联删除。
+- **旧库 CHECK 替换**：
+  - `export_jobs.status` 的 CHECK 是列内联约束，`CREATE TABLE IF NOT EXISTS` 不会更新旧库。
+  - 按 PostgreSQL 命名规则，约束名应为 `export_jobs_status_check`；实施时先用 `\d export_jobs` 确认。
+  - 写法参照 `schema.sql` 中的 `requirement_items_category_check`：先 `ALTER TABLE … DROP CONSTRAINT IF EXISTS`，再 `ADD CONSTRAINT`。其他需要扩展 CHECK 的旧表同样处理。
 
 ### 5.2 幂等、围栏与锁序
 
@@ -192,34 +232,103 @@ import 还需现有 ProcessInput 的 TenderNo/LotNo/Title/DocRole/PublishedAt �
 5. **消费与 ACK**：TakeAgentJobEvent 按 Intent/当前 epoch 领取；旧 epoch delivered 可重放，同 epoch 不重复注入。created_intent_epoch 仅审计，不能屏蔽接管后的订阅。事件 ID 写入结构化消息，调用或 transcript 保存失败不 ACK；只 ACK 本轮已送达且保存的消息。不得让 CheckIntentDeliverables 先以未 ACK 为由拒绝，再把 ACK 放到其后。
 6. **Hint 兼容**：触发器 return_terminal_intent_inputs 和 runIntent 尾部 ReturnIntentInputs 都豁免 blocked+waiting_job。触发器监听 state **及 blocked_reason**，等待态转普通 blocked 即使 state 未变也退回。已处理并保存的 Hint 按协议确认，未处理保留可重放；不能全量误消费。检查 Frontier/Claim/ResumePaused/通用 set_state/Reopen 入口，不能绕过等待门禁。等待期间新 Hint 要么持久化投递并唤醒，要么交回 Planner，不能无人消费。
 7. **完成判据**：宿主 Mandate 扩展必需作业引用/输出类型，只有必需作业成功且结果版本有效才满足；ACK 失败事件不代表工作成功。解析候选就绪、正确修订真实图表、严格导出快照分别校验；人工审批另行处理。RequireWriteback 对异步工作读取订阅关联产物，不能要求唤醒回合重复写工具，也不能凭 submit 结束。失败交由 Planner 重规划，不无限重试。
+8. **Planner 可见性**：
+   - 现状：
+     - `runIntent` 的失败、预算耗尽和默认完成分支都调用 `NotifyDone`，Planner 输入渲染为“意图 #N 已结束（state）”。
+     - 概览只携带 state/blocked_reason，Planner 提示词没有“等待”语义。
+     - `HasActiveIntent` 只统计 open/running。
+   - 要求：
+     - Intent 进入 blocked+waiting_job 时不发 `TriggerIntentDone`；如需提示，改发独立的等待触发。
+     - 概览与 Planner 提示词把这类 Intent 标为“等待后台作业，勿重复派发或 reopen”。
+     - 作业事件唤醒后完成真实收尾，才按原路径调用 `NotifyDone`。
 
 ## 6. 开源组件与统一部署
 
 | 组件 | 首版决策 | 验收重点 |
 | --- | --- | --- |
-| Mermaid-CLI | 纳入固定版本的渲染镜像，包含 Chromium 运行依赖和思源黑体/宋体中文字体 | 实际 PNG、中文标签、甘特图、超时与子进程清理 |
-| LibreOffice＋UNO | 优先将现有 `export/office_refresh.py` 转换流程放入固定 Linux 运行容器，通过内部 HTTP 适配器或容器进程调用，保留回读检查 | 能真实打开 DOCX、刷新目录、另存 DOCX、生成 PDF；仅检测程序存在或版本号不算通过 |
-| PaddleOCR | 提供内部 HTTP 服务适配器（实现 `ingest.OCRProvider` 接口），转换为 `ingest.OCRPage`/`OCRLine.BBox`；CPU 基础配置与 GPU 可选配置分开 | 中文扫描件、坐标和页码、数字/表格识别、错误与缺口保留 |
-| MinerU | 作为复杂 PDF 增强后端按需启用，版本与资源要求在 S5 确认 | 多栏、跨页表格、阅读顺序、原文定位；与现有解析器对比 |
+| WPS / Word 文档引擎 | **唯一导出引擎（2026-11-03 已实现）**：经 COM 自动化刷新目录、另存 DOCX、导出 PDF；WPS（`KWPS.Application`）优先，Word（`Word.Application`）备选，一套实现按 ProgID 切换，详见 6.1。生产须使用商业授权版本 | 真实刷新目录并生成 DOCX/PDF；交付 DOCX 换到另一软件中打开时目录页码零误差；进程可回收；仅检测到已注册不算通过 |
+| Mermaid-CLI | Windows 本地安装固定版本的 Node.js + `@mermaid-js/mermaid-cli`，使用指定的 Chrome/Chromium 可执行文件（puppeteer 配置），附带中文字体 | 实际 PNG、中文标签、甘特图、超时与子进程清理 |
+| PaddleOCR | Windows 本机 Python 服务，经仅监听本机的 HTTP 适配器实现 `ingest.OCRProvider`，转换为 `ingest.OCRPage`/`OCRLine.BBox`；CPU 基础配置与 GPU 可选配置分开 | 中文扫描件、坐标和页码、数字/表格识别、错误与缺口保留；Windows 安装与性能实测 |
+| MinerU | 作为复杂 PDF 增强后端按需启用；Windows 可行性、版本与资源要求在 S5 确认 | 多栏、跨页表格、阅读顺序、原文定位；与现有解析器对比 |
 | embedding/reranker | 延续已有 `retrieval/providers.go` 协议；可选本地模型部署包 | 索引一致性、故障降级、成本和业务检索评测 |
-| Gotenberg | 作为转换服务候选做小范围验证，不作为首版必需依赖 | 是否覆盖本项目刷新后 DOCX、PDF、目录和图表要求；只有 PDF 转换通过不能替代整个导出链路 |
 | python-docx/Pandoc | 首版不为更换工具名重写现有编译器 | 仅在明确模板能力缺口且回归收益成立时引入 |
 
-拟交付目录：`deploy/agent-tools/`，包含 Compose 配置、各运行镜像构建文件、环境变量样例、功能自检、备份恢复与升级说明。新文件名与目录均为计划产物，当前不表示已存在。
+拟交付目录：`deploy/windows/`。内容包括：
 
-S1 接线注意：Renderer 已是接口，远程实现复用 RenderPNG；OCR 复用 OCRProvider。`export.Service.Office` 当前是具体 `*Office`，远程转换需抽取转换接口并调整 Execute/Status 的调用，保留本机实现与测试；不能只增加 URL 配置便声称已接入。内部服务协议至少固定请求 ID、执行版本、输入内容/哈希、受限选项、超时、产物类型/哈希及结构化错误；Office 返回刷新后的 DOCX 和所需 PDF，不能只返回 PDF。文件大小/页数/像素和并发限额由部署配置与服务端共同强制执行。
+- 安装、升级与卸载脚本；
+- 组件版本清单与安装包 SHA-256；
+- 环境变量样例；
+- 功能自检；
+- 备份恢复与回退说明。
+
+新文件名与目录均为计划产物，当前不表示已存在。
+
+S1 接线注意：
+
+- **复用已有接口**：Renderer 已是接口，复用 RenderPNG；OCR 复用 OCRProvider。
+- **导出引擎**：已按 6.1 实现；S1 其余工作是 Windows Server 目标机验收与安装包。
+- **本机服务协议**：至少固定请求 ID、执行版本、输入内容/哈希、受限选项、超时、产物类型/哈希及结构化错误。
+- **限额**：文件大小、页数、像素和并发限额由部署配置与服务端共同强制执行。
+
+### 6.1 WPS / Word 文档引擎（2026-11-03 已实现）
+
+以下规格已落地到代码，开发机（Windows 11 + 本机 WPS / Word）验证结果见 12.5。
+
+- **接口**（`export/office.go`）：
+  - 文档引擎接口为 `Office`：`Name()`、`Version()`、`Refresh(ctx, inDocx, outDocx, outPDF) (*RefreshResult, error)`。
+  - `Service.Office` 即该接口；`Execute` 在引擎为 nil 时：PDF 永久失败，DOCX 只写“打开时更新域”占位（preview_only 语义）。
+  - API 回退路径 `export.NewService` 不探测任何外部程序，避免测试与未配置场景启动 WPS/Word。
+- **实现方式**（`export/office_windows.go` + `export/office_com.ps1`）：
+  - Go 用 `go:embed` 内嵌一个 Windows PowerShell 5.1 脚本，在 STA 子进程中通过 COM 执行，结果以 UTF-8 JSON 文件返回。
+  - 不引入 go-ole 等新依赖；COM 类是否注册经 `syscall` 读取注册表判断。
+  - 非 Windows 平台没有可用引擎（`office_other.go`）。
+- **调用步骤（已验证 WPS 与 Word 均支持）**：
+  1. `Documents.Open(path, false, false, false)`，同时设置 `Visible=false`、`DisplayAlerts=0`、`AutomationSecurity=3`（禁用宏）。
+  2. 循环执行 `TablesOfContents.Item(k).Update()` 与 `Repaginate()`，直到目录文字稳定（最多 5 轮，样本 2 轮稳定）。
+  3. `SaveAs2(path, 16)` 另存 DOCX。
+  4. `ExportAsFixedFormat(path, 17, …, CreateBookmarks=1)` 导出带标题书签的 PDF。
+  5. 依次执行 `Close(0)`、`Quit()`。
+- **注意 `Quit` 的写法**：PowerShell 调用 `Quit(0)` 会因参数需按引用传递而失败，进程随之残留。必须调用无参的 `Quit()`。
+- **引擎选择**：
+  - `AUTOBID_OFFICE_ENGINE=auto|wps|word`，默认 auto，依次尝试 WPS、Word。
+  - 启动时用内置两章小样本实际跑一遍“刷新目录 + DOCX + PDF + 回读自检”，通过才启用；自检单次上限至少 2 分钟，不受很短的作业超时影响（故障演练可把作业超时设为 1 秒）。
+  - 运行中引擎失败不自动换成另一个引擎来生成最终稿。
+  - 版本标签由引擎名加程序 Build 组成（如 `WPS 12.1.0.29161`）。WPS 的 `Application.Name` 会报成 “Microsoft Word”，不能直接用。
+  - **待补**：作业结果记录实际引擎与版本，需要 `export_jobs` 新列（并入 S4）。
+- **配置项**：
+  - `AUTOBID_OFFICE_TIMEOUT_SECONDS` 单次超时，默认 180，导出 Runner 租约随之为“超时 + 60 秒”。
+  - 同一引擎同一时间只处理一个文档（固定并发 1），提高并发须先完成多作业验证。
+- **进程管理**：
+  - WINWORD/wps 由 COM 启动，父进程是系统的 DCOM 服务而不是脚本，现有 `killTree` 管不到。
+  - 识别规则：COM 启动的进程命令行带 `/Automation -Embedding`，WPS 还会派生一个同样带 `/Automation` 的子进程。用户打开的文档与 WPS 常驻插件宿主进程不带这些参数。
+  - 脚本结束前，回收本次新增的自动化进程（最多等 15 秒，超时结束）。
+  - 脚本超时或异常退出时，Go 侧再结束本次开始后创建的自动化进程。
+  - 已有的用户或后台进程在验证中均未受影响。
+- **运行会话**：
+  - COM 自动化需要已加载用户配置的交互会话。首版在已登录的部署账户会话中运行服务（沿用 `start.bat` 或“登录时启动”的计划任务）。
+  - 作为 Windows 服务（Session 0）运行需另行验证 DCOM 身份配置，未验证前不支持。
+  - 微软对服务端无人值守 Office 自动化不提供支持，WPS 是否有同类限制须向供应商确认。
+- **随引擎一起修正（已完成）**：
+  - **自检误报**：
+    - Word 在恰好排满的行尾留一个越过右边距的空格字形；`ingest.ReadPDFLayout` 的行右缘改为止于最后一个可见字形（只影响导出自检用的版面读取，招标解析的列段边界不变）。
+    - `verify.go` 对以全角收尾标点结尾的行，右侧多容许半个字宽（行末标点压缩）。
+  - **★ 字体**：`docx.go` 对 ★☆▲△■□●○◆◇※ 所在的 run 写 `w:hint="eastAsia"`，Word/WPS 改用中文字体，不再回退到 Segoe UI Symbol / MS PGothic。
+- **已移除**：原导出引擎的代码、内嵌脚本、环境变量、测试依赖、界面文案、文档与本地诊断文件。`/api/export/status` 返回 `office_engine` 与 `office_version`，保留 `office` 布尔字段兼容。
 
 部署规则：
 
-- 版本使用已验证的固定版本和镜像 digest，不能发布为浮动 `latest`；记录程序、模型、字体版本和包校验和。
+- 版本使用已验证的固定版本和安装包 SHA-256，不能发布为浮动 `latest`；记录程序、WPS/Word、模型、字体版本和包校验和。
 - CPU 基础安装默认不启动所有重模型；增强解析/本地检索模型通过明确的部署 profile 启用。不能未经测量承诺单张 GPU 可同时承载所有服务。
 - 模型文件与字体提供预下载/离线导入流程，记录授权与第三方 notices；业务请求中不临时执行 pip/npm 安装或首次联网下载。
 - 内部服务不直接暴露给浏览器。主应用发送受管文件内容和受限参数，不把宿主路径或任意用户 URL 传给执行器。
-- 运行容器只获得所需暂存目录、资源限额和网络范围；程序调用有超时、并发上限与失败清理。
-- 新增远程解析/渲染/Office 配置时保留旧本机配置兼容；凭据由服务器管理，不写进 Skill、模型上下文或诊断响应。
+- 运行组件使用独立运行目录、专用 Windows 账户与仅本机监听端口，只获得所需暂存目录；程序调用有超时、并发上限与失败清理。
+- 新增解析/渲染配置时保留旧本机配置兼容；凭据由服务器管理，不写进 Skill、模型上下文或诊断响应。
 - 功能自检使用小型固定样本实际完成 OCR、PNG 和 DOCX/PDF 转换。配置存在但功能失败时，UI 与 Agent 都应看到不可用原因。
 
-本机（Windows 开发机）此前记录缺少可用 Linux 容器后端，S1 必须重新探测或在实际目标 Linux 服务器/WSL2 Docker 环境验收；写出 Dockerfile 不等于部署验证完成。
+目标部署环境为 Windows，S1 在一台干净的 Windows 目标机上验收：
+
+- 安装 WPS（商业授权）及可选的 Word 后，用交付的安装包完成组件安装与功能自检。
+- 只在开发机跑通或只写出安装脚本，不等于部署验证完成。
 
 ## 7. 身份、权限与人工操作
 
@@ -257,7 +366,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 
 | 同步阶段 | 前端工作与现有落点 | 页面验收 |
 | --- | --- | --- |
-| S1 运行能力 | `features/task-workspace/TaskHeader.tsx` 及解析/导出入口展示相关能力状态，必要时复用能力提示组件 | 依赖未配置、自检失败、检查中分别可见；显示影响和下一步，不泄漏宿主路径/密钥；已有有效图表时不因渲染器离线误禁导出 |
+| S1 运行能力 | `features/task-workspace/TaskHeader.tsx` 及解析/导出入口展示相关能力状态，必要时复用能力提示组件；导出页 `features/proposal/export/ExportParts.tsx` 已显示文档引擎（WPS/Word）版本（2026-11-03） | 依赖未配置、自检失败、检查中分别可见；显示影响和下一步，不泄漏宿主路径/密钥；已有有效图表时不因渲染器离线误禁导出 |
 | S2 作业等待 | `features/execution/ExecutionPage.tsx`、`features/task-workspace/TaskWorkspaceProvider.tsx`、`resources.ts` 接入等待原因与作业事件；按当前用户权限读取业务作业 | “等待后台处理”与执行失败分开；刷新/断线重连恢复状态；Agent 提交的作业同样可见，不只显示页面提交的作业 |
 | S3 图表 | `features/proposal/export/ExportParts.tsx` 的 ChartsCard 与 `features/proposal/writing/SectionWorkspace.tsx` 接入异步生成、取消、失败重试和修订标记 | 两条写作路径产图自动刷新；旧修订图不显示为当前图；取消后迟到响应不恢复成功；重试按新请求语义提交 |
 | S4 导出 | `features/proposal/export/ExportPage.tsx`、`ExportParts.tsx` 接入预检阻断、请求组、各格式状态、取消与下载 | 明确区分预览/最终稿；多格式部分失败逐项展示；提交响应丢失后同键重发不重复生成；权限不足/版本冲突有明确提示 |
@@ -283,7 +392,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均
 | 阶段 | 工作与落点 | 退出标准 |
 | --- | --- | --- |
 | S0 文档核对（已完成） | 校正接口、契约、事务与不确定项 | 第 2~5、12 节作为编码输入，不代替迁移实测 |
-| [ ] E S1 运行包与自检 | deploy/agent-tools；Mermaid/Office 适配器；健康 Tool/API | 干净目标环境真实 PNG、刷新 DOCX、PDF 回读通过；最近失败用例复验；固定版本/digest |
+| [ ] E S1 运行包、文档引擎与自检 | WPS/Word 文档引擎、自检校准与 ★ 字体（6.1，**已在代码中实施**）；deploy/windows；mmdc；健康 Tool/API | 干净 Windows Server 目标机上，WPS（及配置时的 Word）真实刷新目录，DOCX/PDF 回读通过，交付 DOCX 换软件打开目录页码零误差；mmdc 真实 PNG；超时后无残留进程且不误杀用户进程；固定版本/SHA-256 |
 | [ ] E S2 订阅与回合状态机 | schema、拟新增 db/agent_jobs.go、engine/watchdog/intent_completion/intent_inputs | 原子提交/等待、恢复扫描、ACK、Hint 保留、范围授权；故障注入无丢唤醒/重复应用；测试作业可验证框架，不代表真实工具交付 |
 | [ ] E S3 图表 Skill | chart_render_jobs、服务/Tool/HTTP、SectionDraft.Charts 与章节事务 | 两条写作路径生成真实图；修订+图表入队崩溃恢复；取消/旧修订/兼容入口不覆盖新图 |
 | [ ] E S4 合稿 Skill | export_requests、组幂等、严格策略、取消/暂停与完成事件 | 终态重发复用，同键异参拒绝，真实目录/图片/表格回读，无迟到发布；高影响入口符合 R2 |
@@ -295,7 +404,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均
 | [ ] V 外部验证 | 真实材料、保留集、专家 | 按 D0~D5/检索协议验收，目前缺材料 |
 | [ ] P 试点 | 受控真实企业/项目 | ROADMAP 发布门槛，不由 E 自动升级 |
 
-默认顺序：S1 → S2 → S3 → S4 → S5a → S6 → S7。S5b/c 是单独设计与验收的扩展，不以尚未冻结的分域 Schema 阻塞首版，未完成不声称三域全覆盖。S1 缺目标环境时可继续不依赖它的 S2 编码，但运行验收仍未通过。R2 与基础工程衔接，未完成不开放高影响入口。每阶段退出后重估工作量，不承诺固定周期或未经测量的 GPU 容量。
+默认顺序：S1 → S2 → S3 → S4 → S5a → S6 → S7。S5b/c 是单独设计与验收的扩展，不以尚未冻结的分域 Schema 阻塞首版，未完成不声称三域全覆盖。S1 的编码与开发机验证可以先做；干净 Windows 目标机或 WPS 商业授权未就绪时，S1 运行验收不通过，可继续做不依赖它的 S2 编码。R2 与基础工程衔接，未完成不开放高影响入口。每阶段退出后重估工作量，不承诺固定周期或未经测量的 GPU 容量。
 
 ## 10. 验证矩阵与测量口径
 
@@ -309,12 +418,14 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均
 | 通知竞态 | 先完成后订阅、重复通知、保存会话前崩溃和旧 Intent 已终止均有确定结果 |
 | 收尾竞态 | 用事务屏障分别复现完成先于挂起、挂起先于完成；提交与终态并发无锁反序；全部错误/耗尽回收路径均产生终态事件 |
 | 确认与 Hint | ACK 前后崩溃可恢复；旧 epoch 可重放；waiting_job 转普通 blocked（state 不变）正确退回 Hint；暂停恢复不误派发 |
+| Planner 可见性 | 等待中的 Intent 不被当作已结束或失败；Planner 不为它重复派发或 reopen，作业完成并唤醒后才汇报结果 |
 | 图表原子性 | 在修订与图表登记之间故障注入，两者一起回滚或提交；无规格、多个规格、冲突候选、原生设备表及旧接口并发分别验证 |
 | 幂等与最终稿 | 成功/失败/取消后同键重发及快照已变化时重发仍返回原请求；同键异参冲突；预检后 Office 故障不能降级成最终稿成功 |
 | 解析 | 文本 PDF、扫描 PDF、复杂表格、图片、DOCX/XLSX/ZIP 等按实际支持范围处理；缺页/缺坐标显式记录，不伪造 |
 | 资料域 | 招标来源不能被当企业证明材料；知识库引用不得跳过证据核验；原件改变触发相应失效 |
 | 图表 | 真实 Mermaid-CLI 绘制中文架构图/甘特图；检验 PNG、尺寸和修订绑定，不使用替身图片作为运行验收 |
-| 导出 | 真实 LibreOffice 执行目录更新、另存 DOCX/PDF；检查页码、图表、横向表格、中文字体、快照一致性 |
+| 导出 | 真实 WPS（及配置时的 Word）执行目录更新、另存 DOCX/PDF；交付 DOCX 在另一软件中不更新域直接打开，目录页码零误差；检查页码、图表、横向表格、中文字体嵌入、快照一致性；引擎不可用时最终稿被拒绝而非降级 |
+| 文档引擎进程 | 超时、崩溃、强制取消后不残留 WINWORD/wps 进程；同机已有的用户或后台 WPS/Word 进程不受影响；并发数超过配置值时排队 |
 | 检索 | 与既有服务结果/预算规则一致；模型变更后的新旧索引隔离、重建、回滚和降级均有记录 |
 | 部署与迁移 | 干净环境无需业务用户安装依赖；旧库升级、历史作业查询、备份恢复、旧版本回退不破坏已留存产物 |
 
@@ -322,11 +433,17 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均
 
 建议收集的测量项：解析每页耗时、表格/数字还原与来源定位正确率；图表成功率和排队时间；导出成功率、页码/版式问题；检索完整证据召回与每个正确任务成本；作业恢复时长、重复应用次数、P95、CPU/内存/显存峰值。质量门槛在看保留集结果之前冻结；这些是待测项目，不是本项目已有成绩。
 
-每份报告标明代码版本、镜像/模型/字体版本、配置、样本规模、测试环境、通过/失败/跳过原因，以及 E/V/P 等级。原始日志留在 Git 忽略的数据目录，仓库保存不含凭据和企业敏感原文的验收摘要。
+每份报告标明代码版本、安装包/WPS 或 Word/模型/字体版本、配置、样本规模、测试环境、通过/失败/跳过原因，以及 E/V/P 等级。原始日志留在 Git 忽略的数据目录，仓库保存不含凭据和企业敏感原文的验收摘要。
 
 ## 11. 启用、回滚与验收清单
 
 新增能力默认通过配置显式启用；缺失运行服务时不向 Agent 宣称可用。技能可见性不能代替执行时检查，关闭能力后应拒绝新提交，并按既定策略处理在途作业。
+
+导出引擎只有 WPS 与 Word 两个，两者都不可用时：
+
+- PDF 与严格最终稿提交返回 RUNTIME_UNAVAILABLE；
+- DOCX 只能以 preview_only 输出（写入“打开时更新域”）；
+- 不得回退到任何其他转换器。
 
 升级先部署版本化运行服务并做功能探测，再开放新提交。作业固定执行版本；回滚不篡改旧作业输入、已批准修订、证据来源或导出快照。禁用新解析器可继续使用原解析器处理其支持范围，不能把不支持的扫描件静默当空白文档成功导入。回退应用版本前须确认数据库兼容性，必要时停止新提交并完成/取消在途作业。
 
@@ -342,7 +459,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均
 - [ ] 所有工程失败和可选跳过可查，ROADMAP 只在对应验收通过后更新。
 - [ ] 真实业务效果与生产启用继续按 V/P 单独验收。
 
-## 12. 二轮审查结论与不确定项
+## 12. 审查结论与不确定项
 
 ### 12.1 已修正的实质问题
 
@@ -363,22 +480,96 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均
 
 | 不确定项 | 可确认范围 | 何时解决 / 未通过处理 |
 | --- | --- | --- |
-| 目标部署环境 | 本轮未重新探测 Linux/WSL2、CPU/GPU/存储与联网/离线条件 | S1 记录目标环境、功能自检；缺环境可继续纯工程开发，不通过运行验收 |
-| LibreOffice 故障根因 | 同日凌晨通过、晚间失败，不能据此认定容器化一定解决 | S1 固定环境复现并真实导出；失败保留阻断，不以版本检测替代 |
+| 目标部署环境 | 已确认为 Windows Server，开发测试用本机 Windows 11 与本机 WPS（2026-11-03）；Windows Server 具体版本、是否安装“桌面体验”、CPU/GPU/存储与联网/离线条件仍未提供 | S1 记录目标机版本与功能自检；缺干净目标机时可继续纯工程开发，不通过运行验收 |
+| WPS/Word 商业授权与服务端自动化条款 | 本机 Word 为家庭和学生版（非商业用途），WPS 为个人版，都只能用于测试；微软对服务端无人值守自动化不提供支持；WPS 企业版能否装在 Windows Server、服务器部署与自动化条款均未确认 | 采购前向供应商确认；未取得授权前 S1 不做生产验收 |
+| 文档引擎运行方式与并发 | 只验证了开发机已登录会话中的单作业串行执行；Windows Server 上的运行、Session 0 / Windows 服务、多作业并发、长时间运行稳定性均未验证 | S1 实测；未通过前固定为已登录会话、并发 1 |
 | OCR/复杂 PDF/模型效果与容量 | 有适配接口和候选后端，没有本项目质量/资源结论 | S5a/增强解析试验/S6 用代表样本实测、固定版本；无收益不启用可选后端 |
 | 知识/证据候选域 | 既有知识与原件表不等于已有统一候选协议 | S5b/c 先提交表/API/采用/失效设计并核对；首版拒绝这些 source_kind，不先占字段宣称冻结 |
 | 业务质量与生产权限 | 外部材料/评审暂无；审计头非可信身份，Phase 7 未完成 | R2/Phase 7 按范围验收，V/P 待真实材料；与工程进度分开 |
 
 结论：**首版可以开始工程实现；整套方案仍需分阶段实测，不能宣称全部能力可生产使用。** 本轮仅修订计划，未修改业务代码、安装组件、执行迁移或重跑工程测试；未把未知项写成已证实故障。
 
+### 12.4 三轮核对（2026-11-03）
+
+**已核对一致的现状描述**：对照提交 `b22a30c` 的代码复核第 2~5、8 节，以下各项与代码一致：
+
+- 6 个 Skill，以及 `Skill` → `SearchExtraTools` 的解锁链。
+- `PlannerConfig` 没有挂载业务工具。
+- HTTP Writer 设 `MaxTurns: 6`，工具集包含 `requirement_bind_evidence`。
+- `FinishSectionWriteJob` 在同一事务内保存修订。
+- `Complete/Fail/HeartbeatExportJob` 都校验 `lease_token` + running。
+- `ExportPreflight` 的大纲版本位于 `Readiness` 内。
+- `proposal_charts` 已有 `UNIQUE(tenant_id,task_id,id)`。
+- 触发器 `return_terminal_intent_inputs` 只监听 `state`。
+- 图表、导出、候选路由与文中描述一致，候选路由确实没有 reject。
+- 第 8.1 节列出的前端落点文件都存在。
+
+**本轮补充**：本轮只补了两处实施缺口，其余设计未改：
+
+- 5.3 新增第 8 条“Planner 可见性”，第 10 节对应增加一行验证。
+- 5.1 补充外键删除行为与旧库 CHECK 替换的写法。
+
+**仍需外部输入**：以下几项需要用户或环境提供，写代码替代不了：
+
+- **S1 运行验收**：（已由 12.5 更新）目标环境为 Windows Server，不需要 Linux/Docker；仍需一台干净的 Windows Server 目标机与 WPS 商业授权。
+- **S4 最终稿提交**：属于高影响入口，依赖 R2 的显式质量策略与可信身份，这两项都尚未实施。S4 可以先编码，但开放前须完成 R2。
+- **真实导出回归**：（已由 12.5 更新）真实导出用例已改为依赖 WPS/Word 引擎，R1 的 E 收口以新引擎的全量回归为准。
+
+### 12.5 导出引擎对比验证与决策（2026-11-03）
+
+**验证方法**：
+
+- **环境**：开发机 Windows 11，Word 2021（16.0.20527）、WPS 12.1.0.29161。
+- **样本**：用项目 `export.Build` 与默认模板生成一份虚构标书：三级标题 18 个，长中文段落含各种全角标点与中英混排，13 列横向宽表 2 页，3 张图，60 行偏离表，共 37 页。
+- **测法**：各引擎刷新目录并导出 DOCX/PDF，用项目 `CheckPDF`/`CheckDOCX` 打分，并做字形坐标检查与截图目视。再把每份交付 DOCX 不更新域，直接放到另一软件中打开导出，核对目录页码。
+- **脚本与产物**：均在会话临时目录，未进入仓库。
+
+**对比验证（一次性脚本）**：
+
+| 指标 | WPS | Word |
+|---|---|---|
+| 刷新目录 + DOCX + PDF | 成功，4.3 s（PDF 1.4 s） | 成功，10.7 s（PDF 6.5 s） |
+| 页数 / 版式 | 37 页，与 Word 逐行一致 | 37 页 |
+| 自身 PDF 目录页码 | 18/18 正确 | 18/18 正确 |
+| 交付 DOCX 在另一软件中打开 | Word 中 18/18 正确 | WPS 中 18/18 正确 |
+| 字体嵌入 | 全部嵌入 | 全部嵌入 |
+
+同一样本下，原导出引擎刷新的 DOCX 在 Word、WPS 中打开时，18 条目录页码各错 15 条；原引擎排版也比 WPS/Word 多 4 页（41 页）。这是移除它的直接原因。
+
+**落地实现复验（项目代码 `export.DetectOffice` + `Refresh` + 校准后的自检）**：
+
+- `auto` 选中 WPS：启动自检 3.2 s，刷新 4.3 s。
+- 强制 Word：启动自检 5.1 s，刷新 11.8 s。
+- 两份 PDF 的项目自检问题数均为 **0**（校准前 WPS 87 条、Word 156 条误报），18 条目录全部正确。
+- ★ 不再回退字体。
+- 结束后无自动化进程残留，已有的 WPS 常驻进程未受影响。
+
+**决策（用户确认）**：
+
+1. 彻底移除原导出引擎（代码、配置、文档与本地文件）。
+2. 文档引擎只兼容 WPS 与 Word，WPS 优先。
+3. 目标部署环境为 Windows Server；开发测试用本机 Windows 11 与本机 WPS。
+
+**未验证**：
+
+- 真实企业模板与更大文档；
+- 多作业并发；
+- Windows Server 上的安装与运行，以及作为 Windows 服务（Session 0）运行；
+- 长时间稳定性；
+- mmdc 真实图表插入后的版式；
+- WPS/Word 商业版与本机个人/家庭版的差异。
+
+这些均在 S1 验收。
+
 ## 13. 上游参考与版本核对入口
 
-以下用于实施时核对安装方式、接口和版本；不把上游宣传指标当成本项目结果。最终版本与镜像 digest 在各组件打包与真实依赖验收阶段冻结；链接仅作为后续核对入口，本轮未重新核对上游版本。
+以下用于实施时核对安装方式、接口和版本；不把上游宣传指标当成本项目结果。最终版本与安装包 SHA-256 在各组件打包与真实依赖验收阶段冻结；链接仅作为后续核对入口，本轮未重新核对上游版本。
 
 - [MinerU 官方仓库](https://github.com/opendatalab/MinerU)：增强文档解析及部署资料。
 - [PaddleOCR 官方仓库](https://github.com/PaddlePaddle/PaddleOCR)：OCR/文档处理及部署资料。
-- [Mermaid-CLI 官方说明](https://github.com/mermaid-js/mermaid-cli/blob/master/README.md)：CLI 与容器运行方式。
-- [Gotenberg 官方安装说明](https://gotenberg.dev/docs/getting-started/installation)：容器转换服务候选。
+- [Mermaid-CLI 官方说明](https://github.com/mermaid-js/mermaid-cli/blob/master/README.md)：CLI 安装与 puppeteer（指定 Chrome 可执行文件）配置。
+- WPS 二次开发（COM / JS API）文档与企业版授权条款：实施时向金山办公官方渠道核对，本轮未核对链接。
+- 微软“服务端 Office 自动化注意事项”（Considerations for server-side Automation of Office）：用于评估 Word 作备选引擎时的支持边界，实施时核对。
 - [python-docx 官方文档](https://python-docx.readthedocs.io/en/latest/)：仅作为未来生成库比较入口，首版继续使用现有编译器。
 
 本文交付的是实施计划。创建文档不会安装组件、改变现有开关、采用任何解析候选或启用自动导出。

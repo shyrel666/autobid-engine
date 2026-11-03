@@ -3,7 +3,7 @@
 //     Mermaid 经 mermaid-cli（mmdc）渲染为 PNG；mmdc 不可用时图表标记为 unrendered，导出时插入源码占位框；
 //   - 导出：套用 .docx 模板（内置默认模板或上传模板）自行生成 WordprocessingML（archive/zip + encoding/xml），
 //     包括多级标题、TOC 域、页眉页脚与页码、Markdown 正文、嵌入图表与《点对点应答及偏离表》，宽表格自适应 / 横向分节；
-//   - LibreOffice headless（UNO 脚本）刷新全部索引后另存 .docx 与 .pdf，使目录页码在成稿中已经是实际页码；
+//   - 文档引擎（WPS 优先、Word 备选，COM 自动化）刷新全部目录后另存 .docx 与 .pdf，使目录页码在成稿中已经是实际页码；
 //   - Runner 从 export_jobs 领取任务（围栏令牌 + 租约），产物按租户 / 任务隔离存放在导出目录。
 package export
 

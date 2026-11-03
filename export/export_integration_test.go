@@ -1,10 +1,10 @@
 package export
 
-// Phase 6B 验收（真实 PostgreSQL + LibreOffice）：
+// Phase 6B 验收（真实 PostgreSQL + 文档引擎 WPS / Word）：
 //   3. 导出的 .docx 与 .pdf 均能被 ingest 解析器回读，章节标题、偏离表行数与快照一致；
 //   4. PDF 目录每个条目的页码 = 正文中同名标题实际所在页；.docx 的 TOC 域缓存结果非空且不是占位文字；
 //   5. 13 列宽表、架构图、宽甘特图、长偏离表（45 行）：文字与图片不越出版芯、图片不重叠、无空白页；
-//   以及导出后再编辑章节不影响已有任务快照、LibreOffice 不可用时 PDF 明确失败 / DOCX 标注目录未刷新、
+//   以及导出后再编辑章节不影响已有任务快照、文档引擎不可用时 PDF 明确失败 / DOCX 标注目录未刷新、
 //   running 任务租约过期后被回收重试且产物只生成一次。
 // 依赖缺失时跳过并写明缺少的依赖；mmdc 不可用时图表渲染使用测试替身 PNG（stubRenderer），不代表 mmdc 已验证。
 
@@ -24,11 +24,11 @@ import (
 	"github.com/autobid/autobid-engine/ingest"
 )
 
-func requireOffice(t *testing.T) *Office {
+func requireOffice(t *testing.T) Office {
 	t.Helper()
-	o, err := DetectOffice(OfficeOptions{Concurrency: 2, Timeout: 3 * time.Minute})
+	o, err := DetectOffice(context.Background(), OfficeOptions{Engine: os.Getenv("AUTOBID_OFFICE_ENGINE"), Timeout: 3 * time.Minute})
 	if err != nil {
-		t.Skipf("依赖缺失：LibreOffice（soffice）不可用，无法验证目录页码刷新与 PDF 版式：%v", err)
+		t.Skipf("依赖缺失：文档引擎（WPS / Word）不可用，无法验证目录页码刷新与 PDF 版式：%v", err)
 	}
 	return o
 }
@@ -93,6 +93,7 @@ func TestExportEndToEndDOCXAndPDF(t *testing.T) {
 	spec := dbtest.DefaultSpec(40).WithWideTable("1.1", 13, 18)
 	p := dbtest.Ready(t, d, spec)
 	svc := &Service{DB: d, Store: &Store{Root: t.TempDir()}, Renderer: stubRenderer{}, Office: office}
+	t.Logf("document engine: %s (%s)", office.Name(), office.Version())
 
 	gen := func(code, typ, title, raw string) *db.ProposalChart {
 		t.Helper()
@@ -264,12 +265,12 @@ func bytesEqualFile(t *testing.T, s *Service, j *db.ExportJob, want []byte) bool
 	return string(got) == string(want)
 }
 
-// LibreOffice 不可用：PDF 任务明确失败并写明原因（不重试），DOCX 成功但标注目录页码未刷新、TOC 缓存为占位文字。
-func TestExportWithoutLibreOffice(t *testing.T) {
+// 文档引擎不可用：PDF 任务明确失败并写明原因（不重试），DOCX 成功但标注目录页码未刷新、TOC 缓存为占位文字。
+func TestExportWithoutOfficeEngine(t *testing.T) {
 	d := dbtest.Open(t)
 	ctx := context.Background()
 	p := dbtest.Ready(t, d, dbtest.DefaultSpec(0))
-	svc := &Service{DB: d, Store: &Store{Root: t.TempDir()}, OfficeReason: "测试：模拟 LibreOffice 不可用"}
+	svc := &Service{DB: d, Store: &Store{Root: t.TempDir()}, OfficeReason: "测试：模拟文档引擎不可用"}
 	jobs, _, err := d.CreateExportJobs(ctx, db.DefaultTenant, p.TaskID, "exporter", db.CreateExportInput{Formats: []string{db.ExportDOCX, db.ExportPDF},
 		DefaultTemplateHash: DefaultTemplateHash()})
 	if err != nil {
@@ -277,7 +278,7 @@ func TestExportWithoutLibreOffice(t *testing.T) {
 	}
 	runAll(t, &Runner{Service: svc, Owner: "no-office", Lease: time.Minute, TaskID: p.TaskID})
 	dj, pj := reloadJob(t, d, p.TaskID, jobs[0].ID), reloadJob(t, d, p.TaskID, jobs[1].ID)
-	if pj.Status != db.ExportFailed || pj.Attempts != 1 || !strings.Contains(pj.Error, "LibreOffice 不可用") || pj.ArtifactPath != "" {
+	if pj.Status != db.ExportFailed || pj.Attempts != 1 || !strings.Contains(pj.Error, "文档引擎（WPS / Word）不可用") || pj.ArtifactPath != "" {
 		t.Fatalf("pdf job = %s attempts=%d error=%q", pj.Status, pj.Attempts, pj.Error)
 	}
 	if dj.Status != db.ExportSucceeded || dj.TOCRefreshed {
@@ -308,7 +309,7 @@ func TestExportJobRecoveredAfterCrash(t *testing.T) {
 	d := dbtest.Open(t)
 	ctx := context.Background()
 	p := dbtest.Ready(t, d, dbtest.DefaultSpec(0))
-	svc := &Service{DB: d, Store: &Store{Root: t.TempDir()}, OfficeReason: "测试：恢复逻辑与 LibreOffice 无关"}
+	svc := &Service{DB: d, Store: &Store{Root: t.TempDir()}, OfficeReason: "测试：恢复逻辑与文档引擎无关"}
 	jobs, _, err := d.CreateExportJobs(ctx, db.DefaultTenant, p.TaskID, "exporter", db.CreateExportInput{Formats: []string{db.ExportDOCX},
 		DefaultTemplateHash: DefaultTemplateHash()})
 	if err != nil {
@@ -396,7 +397,7 @@ func TestMMDCRendersGantt(t *testing.T) {
 	}
 }
 
-// 上传的客户模板（无 {{content}} 占位、标题样式 ID 为 "1" / "2"、缺少题注样式）经 LibreOffice 刷新后，目录页码与版式同样一致。
+// 上传的客户模板（无 {{content}} 占位、标题样式 ID 为 "1" / "2"、缺少题注样式）经文档引擎刷新后，目录页码与版式同样一致。
 func TestCustomTemplateLayout(t *testing.T) {
 	office := requireOffice(t)
 	tpl, err := LoadTemplate("customer", customerTemplate(t))

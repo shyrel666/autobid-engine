@@ -1121,7 +1121,7 @@ export interface ProposalChart {
 export interface ChartReq { section_id: number; chart_type: ChartType; title: string; spec: unknown }
 
 export interface ExportStatus {
-  office: boolean; office_version?: string; office_path?: string; office_reason?: string
+  office: boolean; office_engine?: 'wps' | 'word'; office_version?: string; office_reason?: string
   renderer: boolean; renderer_name?: string; renderer_reason?: string
 }
 

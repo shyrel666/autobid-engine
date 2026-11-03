@@ -1,6 +1,6 @@
 # F3a+ 固定处理增强实施与验收
 
-实施日期：2026-10-31；**2026-11-01 已收口为 `[x] E`**。固定处理专项与浏览器验证已通过，本次原安装 LibreOffice 真实导出、真实 PostgreSQL 全量竞态、`go vet`、前端单测与构建复验通过；[复验结果及可选跳过项](../LIBREOFFICE_VALIDATION.md)。F2/F3b 脚本执行未启动，F4/V/P 没有推进。
+实施日期：2026-10-31；**2026-11-01 已收口为 `[x] E`**。固定处理专项与浏览器验证已通过，本次真实导出、真实 PostgreSQL 全量竞态、`go vet`、前端单测与构建复验通过。F2/F3b 脚本执行未启动，F4/V/P 没有推进。
 
 ## 交付范围
 
@@ -36,12 +36,5 @@
 - 前端单测 15/15、构建通过（保留既有 bundle 体积提示）。
 - 独立旧库升级、空库/重复迁移、备份恢复、旧版本读取器与原件 SHA-256 回读演练通过；`data/file-processing-drill/20261031t160119_24588/report.json`。使用合成代表数据，不是生产恢复演练。
 - 全量回归发现早期暂停可能导致首次会话没有历史，此时 `ExecuteWithMessage` 的人工续跑指令没有进入 fresh input；已修复，并增加 `TestEngineMessageWithoutSavedHistory`。两个暂停恢复用例连续三轮通过。
-- 本地详细日志：`data/fixed-*.log`、`data/fixed-full-tests-final.jsonl`；浏览器截图与报告：`data/file-processing-browser/`。最终摘要见 `eval/file-processing/reports/f3a-plus.json`。
+- 本地详细日志：`data/fixed-*.log`（完整测试日志 `fixed-full-tests*.jsonl` 含原导出引擎的报错，已于 2026-11-03 删除）；浏览器截图与报告：`data/file-processing-browser/`。最终摘要见 `eval/file-processing/reports/f3a-plus.json`。
 
-## LibreOffice 历史阻塞（2026-10-31）
-
-原安装 `F:/LibreOffice/program/python.exe` 仍返回 `0xc0000135`。对同包 CPython 解释器进行隔离加载可成功 `import uno`，但真实导出在创建 `com.sun.star.frame.Desktop` 时出现 `Binary URP bridge disposed during call`，未到打开文档阶段。
-
-另从 Document Foundation 官方镜像清单取得 26.2.6 MSI，核对 SHA-256 `f9877032fd908beb9c0ddf06df4af5c2e85f419c42e14876c4cce5aae5fb2660` 后以 `/a` 在 `data/libreoffice-26.2.6/` 隔离展开；仍复现 UNO 桥断开。尝试私有 profile、TCP/pipe、预初始化与重连未使端到端导出通过。未修改系统安装或永久环境变量，也未把未经验证的启动绕行写入默认配置。最终仅保留 Python traceback 和有界错误尾部，帮助定位失败调用点。
-
-当时的两个阻塞用例为 `TestExportEndToEndDOCXAndPDF` 与 `TestCustomTemplateLayout`，因此未标完整 E。2026-11-01 原安装首次探测即正常，两个用例在专项与全量中均实际通过；没有删除、跳过或放宽用例。此前故障根因未确定，安装包及隔离副本继续保留供追溯。本阶段仅收口 E，不代表 V/P。

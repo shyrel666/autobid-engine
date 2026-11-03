@@ -1,6 +1,6 @@
 package export
 
-// Service 组合导出目录、mmdc 渲染器与 LibreOffice；图表生成与渲染在本文件，导出执行见 exec.go / runner.go。
+// Service 组合导出目录、mmdc 渲染器与文档引擎（WPS / Word）；图表生成与渲染在本文件，导出执行见 exec.go / runner.go。
 
 import (
 	"bytes"
@@ -22,15 +22,15 @@ type Service struct {
 	Store          *Store
 	Renderer       Renderer
 	RendererReason string
-	Office         *Office
+	Office         Office
 	OfficeReason   string
 }
 
 // Status 是外部依赖可用性（门禁明细与前端展示）。
 type Status struct {
 	Office         bool   `json:"office"`
+	OfficeEngine   string `json:"office_engine,omitempty"`
 	OfficeVersion  string `json:"office_version,omitempty"`
-	OfficePath     string `json:"office_path,omitempty"`
 	OfficeReason   string `json:"office_reason,omitempty"`
 	Renderer       bool   `json:"renderer"`
 	RendererName   string `json:"renderer_name,omitempty"`
@@ -40,7 +40,7 @@ type Status struct {
 func (s *Service) Status() Status {
 	st := Status{OfficeReason: s.OfficeReason, RendererReason: s.RendererReason}
 	if s.Office != nil {
-		st.Office, st.OfficeVersion, st.OfficePath, st.OfficeReason = true, s.Office.Version, s.Office.Soffice, ""
+		st.Office, st.OfficeEngine, st.OfficeVersion, st.OfficeReason = true, s.Office.Name(), s.Office.Version(), ""
 	}
 	if s.Renderer != nil {
 		st.Renderer, st.RendererName, st.RendererReason = true, s.Renderer.Name(), ""
@@ -48,11 +48,22 @@ func (s *Service) Status() Status {
 	return st
 }
 
-// NewServiceFromEnv 探测 LibreOffice 与 mmdc（不可用时记录原因，不报错）。
+// NewService 返回不探测任何外部程序的服务（没有文档引擎与 mmdc）。
+func NewService(pg *db.DB, dir, reason string) *Service {
+	return &Service{DB: pg, Store: &Store{Root: dir}, OfficeReason: reason, RendererReason: reason}
+}
+
+// OfficeTimeout 是单次文档引擎刷新的上限（AUTOBID_OFFICE_TIMEOUT_SECONDS，默认 180 秒）。
+func OfficeTimeout() time.Duration {
+	return time.Duration(envInt("AUTOBID_OFFICE_TIMEOUT_SECONDS", 180)) * time.Second
+}
+
+// NewServiceFromEnv 探测文档引擎（AUTOBID_OFFICE_ENGINE，含实际刷新自检）与 mmdc；不可用时记录原因，不报错。
 func NewServiceFromEnv(pg *db.DB, dir string, logger *slog.Logger) *Service {
 	s := &Service{DB: pg, Store: &Store{Root: dir}}
-	if o, err := DetectOffice(OfficeOptions{Concurrency: envInt("AUTOBID_SOFFICE_CONCURRENCY", 2),
-		Timeout: time.Duration(envInt("AUTOBID_SOFFICE_TIMEOUT_SECONDS", 180)) * time.Second}); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*OfficeTimeout()+30*time.Second)
+	defer cancel()
+	if o, err := DetectOffice(ctx, OfficeOptions{Engine: os.Getenv("AUTOBID_OFFICE_ENGINE"), Timeout: OfficeTimeout()}); err != nil {
 		s.OfficeReason = err.Error()
 	} else {
 		s.Office = o
@@ -64,9 +75,9 @@ func NewServiceFromEnv(pg *db.DB, dir string, logger *slog.Logger) *Service {
 	}
 	if logger != nil {
 		if s.Office != nil {
-			logger.Info("LibreOffice available for export", "soffice", s.Office.Soffice, "version", s.Office.Version, "python", s.Office.Python)
+			logger.Info("document engine available for export", "engine", s.Office.Name(), "version", s.Office.Version())
 		} else {
-			logger.Warn("LibreOffice unavailable: PDF export jobs will fail and DOCX TOC page numbers will not be refreshed", "reason", s.OfficeReason)
+			logger.Warn("no document engine (WPS or Word): PDF export jobs will fail and DOCX TOC page numbers will not be refreshed", "reason", s.OfficeReason)
 		}
 		if s.Renderer != nil {
 			logger.Info("mermaid-cli available for charts", "renderer", s.Renderer.Name())

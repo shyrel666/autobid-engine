@@ -8,7 +8,8 @@ import (
 	"math"
 )
 
-// PDFLine 是一行版面文字。Box 的 Y 为 PDF 坐标（越大越靠上）。
+// PDFLine 是一行版面文字。Box 的 Y 为 PDF 坐标（越大越靠上）；X1 止于最后一个可见字形，不含行尾空格
+// （Word 会在恰好排满的行尾留一个越过右边距的空格字形）。
 type PDFLine struct {
 	Text     string   `json:"text"`
 	Size     float64  `json:"size"`
@@ -53,7 +54,11 @@ func ReadPDFLayout(data []byte) (pages []PDFPageLayout, err error) {
 			for k, s := range l.segs {
 				segs[k] = s.text
 			}
-			lay.Lines = append(lay.Lines, PDFLine{Text: l.text(), Size: l.size, Baseline: l.y, Box: l.box, Segments: segs})
+			box := l.box
+			if ink := l.segs[len(l.segs)-1].ink1; ink > 0 {
+				box.X1 = round2(ink)
+			}
+			lay.Lines = append(lay.Lines, PDFLine{Text: l.text(), Size: l.size, Baseline: l.y, Box: box, Segments: segs})
 		}
 		for _, im := range out.images {
 			lay.Images = append(lay.Images, BBox{Page: i + 1, X0: round2(im.box[0]), Y0: round2(im.box[1]), X1: round2(im.box[2]), Y1: round2(im.box[3])})

@@ -1,6 +1,6 @@
 // 关键数据安全与状态场景（FRONTEND_REFACTOR_PLAN.md 第 10.2 节）：对真实服务与隔离测试库执行。
 // 用法：node web/e2e/scenarios.mjs [场景名 ...]；不带参数时执行除 export-runtime-failure 以外的全部场景。
-// export-runtime-failure 需要服务端以 AUTOBID_SOFFICE_TIMEOUT_SECONDS=1 启动（让 LibreOffice 刷新必然超时）。
+// export-runtime-failure 需要服务端以 AUTOBID_OFFICE_TIMEOUT_SECONDS=1 启动（让文档引擎刷新必然超时；启动自检不受此值影响）。
 import { BASE, TOKEN, api, assert, launch, newPage, recorder, saveSection, seedProject, shot } from './lib.mjs'
 
 const rec = recorder('scenarios')
@@ -216,7 +216,7 @@ if (want('export-failure')) await rec.check('导出失败：创建请求失败�
   return '注入 500 / 410；表单保留、无任务被创建、下载失败提示'
 })
 
-if (want('export-runtime-failure')) await rec.check('导出执行失败（LibreOffice 刷新超时）：显示重试与最终失败原因，停止轮询', async () => {
+if (want('export-runtime-failure')) await rec.check('导出执行失败（文档引擎刷新超时）：显示重试与最终失败原因，停止轮询', async () => {
   const { page, context } = await newPage(browser)
   await page.goto(`${BASE}/tasks/${ready.id}/export`)
   await page.getByText('可以导出').waitFor()

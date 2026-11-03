@@ -1,7 +1,7 @@
 package export
 
 // 成稿 .docx 生成（WordprocessingML）：
-//   - 目录：TOC 域（\o "1-3" \h \z \u），未刷新时的缓存结果是一段提示文字，由 LibreOffice 刷新为带页码的条目；
+//   - 目录：TOC 域（\o "1-3" \h \z \u），未刷新时的缓存结果是一段提示文字，由文档引擎（WPS / Word）刷新为带页码的条目；
 //   - 标题：章节编码 + 标题写入「标题 N」样式（大纲级别 = 章节层级，正文内的 Markdown 标题降为不进目录的小标题），
 //     一级标题另起一页（紧跟分节符时不再额外分页，避免空白页）；
 //   - 正文 Markdown：段落、加粗 / 斜体 / 行内代码、有序 / 无序列表（缩进表示层级）、引用、代码块与 GFM 表格；
@@ -44,7 +44,7 @@ type BuildInput struct {
 	Matrix      []db.SnapshotMatrixRow
 	Bidder      string
 	Date        string
-	// UpdateFieldsOnOpen 在 settings.xml 中要求 Word 打开时更新域（目录未经 LibreOffice 刷新时使用）。
+	// UpdateFieldsOnOpen 在 settings.xml 中要求 Word 打开时更新域（目录未经文档引擎刷新时使用）。
 	UpdateFieldsOnOpen bool
 }
 
@@ -190,13 +190,20 @@ func stripControl(s string) string {
 
 type runStyle struct{ bold, italic, code bool }
 
+// eastAsianSymbols 是 Unicode 宽度不定的符号：不加 w:hint="eastAsia" 时 Word / WPS 按西文字体排版，
+// 西文字体缺字形便回退到 Segoe UI Symbol / MS PGothic；加上后改用中文字体（宋体有这些字形）。
+const eastAsianSymbols = "★☆▲△■□●○◆◇※"
+
 func run(text string, st runStyle) string {
 	if text == "" {
 		return ""
 	}
 	var rpr strings.Builder
-	if st.code {
+	switch {
+	case st.code:
 		rpr.WriteString(`<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>`)
+	case strings.ContainsAny(text, eastAsianSymbols):
+		rpr.WriteString(`<w:rFonts w:hint="eastAsia"/>`)
 	}
 	if st.bold {
 		rpr.WriteString(`<w:b/><w:bCs/>`)

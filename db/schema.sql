@@ -2795,9 +2795,14 @@ CREATE INDEX IF NOT EXISTS intent_section_outputs_producer ON intent_section_out
 
 -- A stopped recipient must not strand an active Hint after a crash or direct
 -- state transition. The Planner can consume/replan the returned instruction.
+-- S2: blocked + waiting_job (an Intent parked on background jobs) keeps its
+-- inputs; leaving that wait for any other non-active state returns them, even
+-- when only blocked_reason changes.
 CREATE OR REPLACE FUNCTION return_terminal_intent_inputs() RETURNS trigger AS $$
 BEGIN
- IF NEW.kind='intent' AND NEW.state NOT IN ('running','open','paused') AND OLD.state IS DISTINCT FROM NEW.state THEN
+ IF NEW.kind='intent' AND NEW.state NOT IN ('running','open','paused')
+    AND NOT (NEW.state='blocked' AND NEW.blocked_reason IS NOT DISTINCT FROM 'waiting_job')
+    AND (OLD.state, OLD.blocked_reason) IS DISTINCT FROM (NEW.state, NEW.blocked_reason) THEN
   UPDATE intent_inputs SET state='returned',updated_at=now()
    WHERE intent_id=NEW.id AND state IN ('pending','delivered');
  END IF;
@@ -2805,5 +2810,140 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_return_terminal_intent_inputs ON exploration_nodes;
-CREATE TRIGGER trg_return_terminal_intent_inputs AFTER UPDATE OF state ON exploration_nodes
+CREATE TRIGGER trg_return_terminal_intent_inputs AFTER UPDATE OF state, blocked_reason ON exploration_nodes
  FOR EACH ROW EXECUTE FUNCTION return_terminal_intent_inputs();
+
+-- S2 (AGENT_TOOL_SKILLS_PLAN 5.1 / 5.3): durable Agent job subscriptions and
+-- terminal events, domain B. Polymorphic job references cannot use a plain FK;
+-- the Go layer validates task, tenant and the live intent lease inside the
+-- submitting transaction. A kind is listed only once its validation exists
+-- (chart_render joins in S3).
+CREATE TABLE IF NOT EXISTS agent_job_subscriptions (
+    id                   BIGSERIAL PRIMARY KEY,
+    tenant_id            TEXT NOT NULL DEFAULT 'default',
+    task_id              BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    exploration_id       BIGINT NOT NULL REFERENCES explorations(id) ON DELETE CASCADE,
+    intent_id            BIGINT NOT NULL REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+    created_intent_epoch BIGINT NOT NULL,
+    job_kind             TEXT NOT NULL,
+    job_id               BIGINT NOT NULL,
+    target_ref           JSONB NOT NULL DEFAULT '{}',
+    expected_version     BIGINT,
+    required             BOOLEAN NOT NULL DEFAULT true,
+    state                TEXT NOT NULL DEFAULT 'waiting',
+    created_by           TEXT NOT NULL DEFAULT '',
+    updated_by           TEXT NOT NULL DEFAULT '',
+    approved_by          TEXT NOT NULL DEFAULT '',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ck_agent_job_subscriptions_kind CHECK (job_kind IN ('tender_parse','proposal_export')),
+    CONSTRAINT ck_agent_job_subscriptions_state CHECK (state IN ('waiting','notified','acknowledged','cancelled')),
+    CONSTRAINT uq_agent_job_subscriptions_intent_job UNIQUE (tenant_id, intent_id, job_kind, job_id),
+    CONSTRAINT uq_agent_job_subscriptions_tenant_id UNIQUE (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_job_subscriptions_job ON agent_job_subscriptions(tenant_id, job_kind, job_id) WHERE state = 'waiting';
+CREATE INDEX IF NOT EXISTS idx_agent_job_subscriptions_intent ON agent_job_subscriptions(intent_id, state, id);
+CREATE INDEX IF NOT EXISTS idx_agent_job_subscriptions_task ON agent_job_subscriptions(tenant_id, task_id, id DESC);
+DROP TRIGGER IF EXISTS trg_agent_job_subscriptions_upd ON agent_job_subscriptions;
+CREATE TRIGGER trg_agent_job_subscriptions_upd BEFORE UPDATE ON agent_job_subscriptions
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- One terminal event per subscription; ownership is read through the
+-- subscription. The terminal payload never changes after insertion.
+CREATE TABLE IF NOT EXISTS agent_job_events (
+    id              BIGSERIAL PRIMARY KEY,
+    tenant_id       TEXT NOT NULL DEFAULT 'default',
+    subscription_id BIGINT NOT NULL,
+    terminal_status TEXT NOT NULL CHECK (terminal_status IN ('succeeded','failed','cancelled','superseded')),
+    business_state  TEXT NOT NULL DEFAULT '',
+    payload         JSONB NOT NULL DEFAULT '{}',
+    state           TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','delivered','acknowledged','expired')),
+    delivery_epoch  BIGINT NOT NULL DEFAULT 0,
+    delivered_at    TIMESTAMPTZ,
+    acknowledged_at TIMESTAMPTZ,
+    created_by      TEXT NOT NULL DEFAULT '',
+    updated_by      TEXT NOT NULL DEFAULT '',
+    approved_by     TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_agent_job_events_subscription UNIQUE (subscription_id),
+    CONSTRAINT fk_agent_job_events_subscription FOREIGN KEY (tenant_id, subscription_id)
+        REFERENCES agent_job_subscriptions(tenant_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_job_events_open ON agent_job_events(subscription_id) WHERE state IN ('pending','delivered');
+DROP TRIGGER IF EXISTS trg_agent_job_events_upd ON agent_job_events;
+CREATE TRIGGER trg_agent_job_events_upd BEFORE UPDATE ON agent_job_events
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE FUNCTION agent_job_event_immutable() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.tenant_id, NEW.subscription_id, NEW.terminal_status, NEW.business_state, NEW.payload, NEW.created_by, NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.tenant_id, OLD.subscription_id, OLD.terminal_status, OLD.business_state, OLD.payload, OLD.created_by, OLD.created_at) THEN
+        RAISE EXCEPTION 'agent job event % is immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_agent_job_events_immutable ON agent_job_events;
+CREATE TRIGGER trg_agent_job_events_immutable BEFORE UPDATE ON agent_job_events
+    FOR EACH ROW EXECUTE FUNCTION agent_job_event_immutable();
+
+-- Terminal outcome of one job, shared by subscribe-after-terminal (Go) and the
+-- terminal triggers below; terminal_status is NULL while the job is active.
+-- Export results stay preview_only until S4 adds the strict final-draft policy.
+CREATE OR REPLACE FUNCTION agent_job_outcome(k TEXT, jid BIGINT, OUT terminal_status TEXT, OUT business_state TEXT, OUT payload JSONB) AS $$
+BEGIN
+    IF k = 'tender_parse' THEN
+        SELECT j.status,
+               CASE j.status
+                   WHEN 'succeeded' THEN CASE r.status WHEN 'ready' THEN 'candidate_pending_review' WHEN 'adopted' THEN 'adopted'
+                                                       WHEN 'failed' THEN 'failed' ELSE 'completed' END
+                   ELSE j.status END,
+               jsonb_build_object('status', j.status, 'attempts', j.attempts, 'max_attempts', j.max_attempts,
+                   'record_id', j.record_id, 'record_status', r.status, 'error', left(j.error, 500))
+          INTO terminal_status, business_state, payload
+          FROM fixed_file_jobs j LEFT JOIN file_processing_records r ON r.id = j.record_id
+         WHERE j.id = jid AND j.status IN ('succeeded','failed','cancelled');
+    ELSIF k = 'proposal_export' THEN
+        SELECT j.status,
+               CASE j.status WHEN 'succeeded' THEN 'preview_only' ELSE j.status END,
+               jsonb_build_object('status', j.status, 'attempts', j.attempts, 'max_attempts', j.max_attempts, 'format', j.format,
+                   'outline_version', j.outline_version, 'toc_refreshed', j.toc_refreshed, 'artifact_hash', j.artifact_hash,
+                   'artifact_size', j.artifact_size, 'error', left(j.error, 500))
+          INTO terminal_status, business_state, payload
+          FROM export_jobs j
+         WHERE j.id = jid AND j.status IN ('succeeded','failed','cancelled');
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Every terminal transition of a subscribed job publishes inside the job's own
+-- transaction: success, permanent failure, cancellation, deadline and attempt
+-- exhaustion alike. Returning to queued is not terminal. Only subscriptions and
+-- events are written; exploration_nodes are never locked here.
+CREATE OR REPLACE FUNCTION agent_job_terminal() RETURNS trigger AS $$
+DECLARE
+    o RECORD;
+BEGIN
+    IF NEW.status IN ('succeeded','failed','cancelled') AND OLD.status NOT IN ('succeeded','failed','cancelled') THEN
+        SELECT * INTO o FROM agent_job_outcome(TG_ARGV[0], NEW.id);
+        IF o.terminal_status IS NOT NULL THEN
+            WITH s AS (
+                UPDATE agent_job_subscriptions SET state = 'notified', updated_by = 'job-terminal'
+                 WHERE tenant_id = NEW.tenant_id AND job_kind = TG_ARGV[0] AND job_id = NEW.id AND state = 'waiting'
+                RETURNING tenant_id, id
+            )
+            INSERT INTO agent_job_events(tenant_id, subscription_id, terminal_status, business_state, payload, created_by, updated_by)
+            SELECT s.tenant_id, s.id, o.terminal_status, o.business_state, o.payload, 'job-terminal', 'job-terminal' FROM s
+            ON CONFLICT (subscription_id) DO NOTHING;
+        END IF;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_fixed_file_jobs_agent_terminal ON fixed_file_jobs;
+CREATE TRIGGER trg_fixed_file_jobs_agent_terminal AFTER UPDATE OF status ON fixed_file_jobs
+    FOR EACH ROW EXECUTE FUNCTION agent_job_terminal('tender_parse');
+DROP TRIGGER IF EXISTS trg_export_jobs_agent_terminal ON export_jobs;
+CREATE TRIGGER trg_export_jobs_agent_terminal AFTER UPDATE OF status ON export_jobs
+    FOR EACH ROW EXECUTE FUNCTION agent_job_terminal('proposal_export');

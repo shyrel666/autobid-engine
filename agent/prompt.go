@@ -21,6 +21,7 @@ const plannerBase = `你是企业投标推演引擎的 Planner。你面对的是
 - 先看触发事件与态势，再决定：投放新方向、用 kill_work 止损跑偏的工作、用 steer_work 纠偏，或在证据充分时 prove_goal。
 - 不要重复投放与 open/running 意图等价的方向。尚不能投放的后续步骤用 TodoWrite 记下，下一轮会带回给你。
 - 方向依赖本机运行组件（扫描件 OCR、图表渲染、PDF 与最终稿导出、语义检索）时，可先用 tool_runtime_status 查看能力状态；能力不可用时如实说明缺口，不要反复投放同类方向。
+- 态势中的 waiting_intents 是已提交后台作业（解析、图表、导出）并释放执行槽的意图：它们仍在进行，作业结束后会自动唤醒原 Worker 收尾。不要为它们重复派发等价方向，也不要 reopen 或 kill；需要细节时用 agent_job_status 查看（可传 intent_id）。
 - 人工补充（hints）处理完后用 consume_hint 标记；招标文件揭示出需要单独核验的新目标时用 add_goal。
 - 态势中的 cold_index 是久未变化的已结束节点；当它们的结论已稳定时，用 compact_nodes 折叠为一条摘要，保持态势精简（成员仍可用 node_detail 查看）。
 - 本轮决策完成后简短说明你做了什么、为什么，然后结束。`
@@ -36,6 +37,7 @@ const workerBase = `你是企业投标推演引擎的 Worker（%s）。你只负
 - 招标原文用 document_outline / search_document / read_chunk 精读；引用原文时把 read_chunk 返回的 source_ref 原样写入 insert_assets、record_fact 的 source_ref 或 report_finding 的 source_refs。
 - 需要专业核验或标书编审（资格比对 qualification-audit、评分模拟 scoring-simulation、报价验算 commercial-pricing、知识库复用与证据核验 knowledge-reuse、技术标章节写作 proposal-writing、技术标正文审查 proposal-review）时，先调用 Skill 加载对应技能，再用 SearchExtraTools("select:<tool>") 获取解锁工具的 Schema 并直接调用该工具。
 - 需要本机运行组件（OCR、图表渲染、文档引擎、语义检索模型）时，可用 tool_runtime_status 查看能力状态；available=false 时把缺口 record_fact 记下，不要反复重试。
+- 本意图提交过后台作业时，可用 agent_job_status 查看状态；作业结束后结果会作为新回合送达，不要循环轮询。提交本身不是交付物，结论仍须基于作业的真实结果写回。
 - 识别出的新招标要素用 insert_assets 写入（会自动锚定到当前意图），要素关系用 link_assets 写入。
 - 每个核实的事实（包括“不满足”“未找到”这类否定结论）都用 record_fact 记录，并锚定相关要素。
 - 能形成可交付结论（废标风险、合规缺口、得分策略、报价建议）时，用 report_finding 报告，并把支撑它的事实作为 evidence。

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"slices"
 )
 
 // NodeBrief 是节点在态势快照中的紧凑表示。
@@ -83,6 +84,7 @@ type Overview struct {
 	Frontier       []NodeBrief   `json:"open_intents"`
 	Running        []NodeBrief   `json:"running_intents"`
 	Paused         []NodeBrief   `json:"paused_intents,omitempty"`
+	Waiting        []NodeBrief   `json:"waiting_intents,omitempty"` // blocked + waiting_job：等待后台作业，仍在进行
 	RecentTerminal []NodeBrief   `json:"recent_terminal_intents"`
 	RecentFacts    []NodeBrief   `json:"recent_facts"`
 	RecentFindings []NodeBrief   `json:"recent_findings"`
@@ -97,6 +99,7 @@ const (
 	overviewFrontier  = 30
 	overviewRunning   = 50
 	overviewPaused    = 30
+	overviewWaiting   = 30
 	overviewTerminal  = 12
 	overviewFacts     = 20
 	overviewFindings  = 10
@@ -164,8 +167,10 @@ func (s *ExplorationStore) Overview(ctx context.Context) (*Overview, error) {
 		{&o.Paused, false, func() ([]*Node, error) {
 			return s.NodesByKind(ctx, KindIntent, []string{StateIntentPaused}, overviewPaused)
 		}, overviewPaused},
+		{&o.Waiting, true, func() ([]*Node, error) { return s.WaitingIntents(ctx, overviewWaiting) }, overviewWaiting},
 		{&o.RecentTerminal, true, func() ([]*Node, error) {
-			return s.RecentNodes(ctx, KindIntent, []string{StateIntentDone, StateIntentBlocked, StateIntentExhausted, StateIntentStopped}, overviewScan)
+			nodes, err := s.RecentNodes(ctx, KindIntent, []string{StateIntentDone, StateIntentBlocked, StateIntentExhausted, StateIntentStopped}, overviewScan)
+			return slices.DeleteFunc(nodes, IsWaitingIntent), err
 		}, overviewTerminal},
 		{&o.RecentFacts, false, func() ([]*Node, error) {
 			return s.RecentNodes(ctx, KindFact, []string{StateConfirmed}, overviewScan)

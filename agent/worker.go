@@ -62,6 +62,14 @@ func WorkerSessionID(explorationID, intentID int64) string {
 	return fmt.Sprintf("exp%d-worker-i%d", explorationID, intentID)
 }
 
+// SavedTranscript 读取已持久化的 Worker 会话；宿主据此只确认确已保存的投递（未配置存储时为空）。
+func (w *Worker) SavedTranscript(ctx context.Context, explorationID, intentID int64) ([]llm.Message, error) {
+	if w.cfg.Transcripts == nil {
+		return nil, nil
+	}
+	return w.cfg.Transcripts.Load(ctx, WorkerSessionID(explorationID, intentID))
+}
+
 func (w *Worker) Execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), notifyFinding func(int64, string)) (harness.TerminalReason, WriteCounts, error) {
 	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, notifyFinding, "")
 }

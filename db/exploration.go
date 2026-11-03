@@ -405,17 +405,22 @@ func (s *ExplorationStore) CompareAndSetIntentState(ctx context.Context, id int6
 }
 
 // ReopenIntent 只允许 blocked/exhausted/stopped 回到 open，保留节点 ID、血缘与会话。
+// 等待后台作业（blocked + waiting_job）只能由作业事件唤醒，不能经此绕过等待门禁。
 func (s *ExplorationStore) ReopenIntent(ctx context.Context, id int64) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE exploration_nodes
 		SET state = 'open', owner = NULL, blocked_reason = NULL, lease_until = NULL,
 		    completed_at = NULL, content_version = content_version + 1
 		WHERE id = $1 AND exploration_id = $2 AND kind = 'intent'
-		  AND state IN ('blocked','exhausted','stopped')`, id, s.expID)
+		  AND state IN ('blocked','exhausted','stopped')
+		  AND blocked_reason IS DISTINCT FROM 'waiting_job'`, id, s.expID)
 	return affectedOne(res, err)
 }
 
-// ReopenIntentsByBlockedReason 批量重开指定原因阻塞的 Intent（如配额恢复后）。
+// ReopenIntentsByBlockedReason 批量重开指定原因阻塞的 Intent（如配额恢复后）；不接受 waiting_job。
 func (s *ExplorationStore) ReopenIntentsByBlockedReason(ctx context.Context, reason string) (int64, error) {
+	if reason == BlockedReasonWaitingJob {
+		return 0, errors.New("db: waiting_job intents are reopened only by job events")
+	}
 	res, err := s.db.ExecContext(ctx, `UPDATE exploration_nodes
 		SET state = 'open', owner = NULL, blocked_reason = NULL, lease_until = NULL,
 		    completed_at = NULL, content_version = content_version + 1

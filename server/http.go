@@ -177,6 +177,7 @@ func (a *API) Handler() http.Handler {
 	// Phase 6B：章节图表（server/charts.go）与锁定版本导出（server/export.go）
 	a.registerChartRoutes(mux)
 	a.registerRuntimeRoutes(mux)
+	a.registerAgentJobRoutes(mux)
 	a.registerExportRoutes(mux)
 	// D3：章节故事板（Pink Team 评审）、受控引用渲染与句子级写作核验（server/d3.go）
 	a.registerD3Routes(mux)

@@ -80,6 +80,9 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		o := intentOutcome{ID: t.IntentID}
 		if n, err := ts.GetNode(ctx, t.IntentID); err == nil {
 			o.State, o.Summary = n.State, summaryOf(n, 200)
+			if n.BlockedReason != "" {
+				o.State += "：" + n.BlockedReason
+			}
 		}
 		if ys, err := ts.YieldedNodes(ctx, t.IntentID, 20); err == nil {
 			o.Yields = db.Briefs(ys, false)

@@ -16,6 +16,7 @@ const thinkingOnlyNudge = "你上一轮没有输出任何结论，也没有调�
 type steerHooks struct {
 	inner  harness.HookRunner
 	drain  func() (string, bool)
+	events func() (string, bool) // 后台作业终态事件；可为 nil
 	nudges *atomic.Int64
 	limit  int // <0 关闭轻推
 	label  string
@@ -24,6 +25,11 @@ type steerHooks struct {
 func (h *steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
 	if msg, ok := h.drain(); ok {
 		return true, "操作员纠偏指令（本次工具调用未执行，请按指令调整后继续）：" + msg, nil
+	}
+	if h.events != nil {
+		if msg, ok := h.events(); ok {
+			return true, "后台作业状态更新（本次工具调用未执行，请先处理该结果再继续）：" + msg, nil
+		}
 	}
 	if h.inner != nil {
 		return h.inner.PreToolUse(ctx, name, input)
@@ -41,6 +47,11 @@ func (h *steerHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []
 	if h.drain != nil {
 		if msg, ok := h.drain(); ok {
 			return false, []string{"操作员补充指令：" + msg}, ""
+		}
+	}
+	if h.events != nil {
+		if msg, ok := h.events(); ok {
+			return false, []string{"后台作业状态更新：" + msg}, ""
 		}
 	}
 	if h.inner != nil {

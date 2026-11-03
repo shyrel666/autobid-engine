@@ -17,7 +17,13 @@
   - 文档引擎、mmdc、OCR、embedding、reranker 启动时用固定样本实际自检。
   - 前端：项目顶栏的运行能力入口，以及上传与导出入口的能力提示。
   - 本机依赖登记见 [`docs/LOCAL_RUNTIME.md`](docs/LOCAL_RUNTIME.md)。
-- **尚未实施**：S2~S7。代码与 schema 中仍不存在本文其余拟新增的表、工具、路由与字段，也没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
+- **S2 已 E 收口（2026-11-03，本机验证，见第 9 节与 12.6）**：
+  - 持久化订阅与终态事件：`agent_job_subscriptions` / `agent_job_events`，作业终态由 `fixed_file_jobs`、`export_jobs` 上的触发器在作业自身事务内发布。
+  - 回合状态机：`db/agent_jobs.go` 的 `SubscribeAgentJob`（同事务校验宿主 Intent 活租约）、`TakeAgentJobEvent`、`FinalizeIntentTurn`（原子收尾 open / blocked+waiting_job / done / blocked）、`WakeWaitingIntents`（唤醒协调）、`SettleWaitingIntents`。
+  - 引擎接线：`runIntent` 投递事件并只确认已保存进 transcript 的事件；Watchdog Stop 与 RequireWriteback 的“持久化订阅释放本轮槽位”分支；等待态不通知 Planner 已结束。
+  - 公共只读工具 `agent_job_status`（Planner `ExtraTools` 与 Worker 均装配）、`GET /api/tasks/{id}/agent-jobs`，执行页“等待后台处理”与后台作业卡片。
+  - S2 只交付框架，没有注册任何提交类工具；测试作业直接写固定解析 / 导出队列表来驱动框架。
+- **尚未实施**：S3~S7。代码与 schema 中仍不存在本文其余拟新增的表（`chart_render_jobs`、`export_requests`）、提交类工具、路由与字段，也没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
 
 适用项目：AutoBid Engine。本文中的 Skill 指项目提供给 Agent 的业务技能（`bidtools.Skills()`），不是 Codex 桌面插件。
 
@@ -66,7 +72,7 @@
 | 导出 | `db.CreateExportJobs` 冻结快照；**CompleteExportJob、FailExportJob、Heartbeat 已检查 lease_token + running**；export/runner.go 异步执行 | 全生命周期请求幂等、cancelled、严格最终稿策略与完成通知；复用已有围栏，没有 FinishExportJob 这个待修补接口 |
 | 导出引擎 | **2026-11-03 已实现**：`export.Service.Office` 是文档引擎接口（`export/office.go`，含按 `AUTOBID_OFFICE_ENGINE` 探测与启动自检），实现为 WPS/Word COM 自动化（`office_windows.go` + `office_com.ps1`）；`Execute` 在引擎为 nil 时 PDF 永久失败，DOCX 只写 updateFields 占位；`/api/export/status` 返回 `office_engine` / `office_version` | 作业结果记录引擎名与版本（需 `export_jobs` 新列，S4）；多作业排队已在 S1 验证（引擎固定串行） |
 | HTTP 章节 Writer | `server/proposal.go:llmSectionWriter.WriteSection` 已调用 harness.Run（最多 6 轮工具调用，再解析 JSON）；SectionWriterTools 包含证据绑定，非纯只读；`server/section_jobs.go:executeSectionJob` 调 FinishSectionWriteJob 原子保存修订/结果 | 增加图表计划，并在修订提交事务内登记渲染作业；不改回单次 LLM 调用 |
-| Intent | intent_completion.go 校验产物；intent_inputs.go 持久化 Hint；runIntent 正常回合校验后 ACK；终态触发器和函数尾部均退回 Hint | 持久化作业事件、原子回合收尾与等待恢复、Hint 等待态兼容 |
+| Intent | intent_completion.go 校验产物；intent_inputs.go 持久化 Hint；runIntent 正常回合校验后 ACK；终态触发器和函数尾部均退回 Hint | 持久化作业事件、原子回合收尾与等待恢复、Hint 等待态兼容（**S2 已实现**：`db/agent_jobs.go`，见 12.6） |
 
 真实边界：
 
@@ -101,8 +107,8 @@ Skill 描述步骤，Tool 调应用内业务服务，不经 HTTP 回环重复实
 ### 3.1 Worker 与 Planner
 
 - 在 LLMService.Resolve 注入工具，沿用 Skill → SearchExtraTools → 执行。提交业务作业与订阅须同事务。
-- 现有 `db.WithIntentExecution/WithExecutionScope` 注入执行身份和范围。原稿所称 IntentExecutionFromContext/ExecutionScopeFromContext **目前不存在**。S2 在 db 内新增校验/提交方法，使用现有私有 Context 值并在事务内校验活租约；不必向模型开放身份读取接口。
-- Planner 新增可选 `ExtraTools []tool.CoreTool`，仅装配 tool_runtime_status、proposal_export_check、agent_job_status。解析/图表/导出由 add_intent 派发 Worker，人工采用不派发为 Agent 操作。
+- 现有 `db.WithIntentExecution/WithExecutionScope` 注入执行身份和范围。原稿所称 IntentExecutionFromContext/ExecutionScopeFromContext **目前不存在**。S2 在 db 内新增校验/提交方法，使用现有私有 Context 值并在事务内校验活租约；不必向模型开放身份读取接口。（S2 已实现：`LockSubmittingIntent`、`SubscribeAgentJob`、`CheckJobKindScope`。）
+- Planner 新增可选 `ExtraTools []tool.CoreTool`，仅装配 tool_runtime_status、proposal_export_check、agent_job_status。解析/图表/导出由 add_intent 派发 Worker，人工采用不派发为 Agent 操作。（现已装配 tool_runtime_status 与 agent_job_status；proposal_export_check 随 S4。）
 - `agent.WorkerWritebackTools` 是收尾白名单；`server/watchdog.go:isWatchdogWritebackTool` 是另一套写回识别。修改前者不会自动改变后者。**submit 不是交付物**：S2 为 Watchdog Stop 和 runIntent 增加“持久化订阅允许释放本轮槽位”分支，done 仍校验真实结果。不得添加工具名称后就绕过完成门禁。
 
 ### 3.2 HTTP Writer 与图表原子登记
@@ -190,6 +196,14 @@ import 还需现有 ProcessInput 的 TenderNo/LotNo/Title/DocRole/PublishedAt �
 | 新增 agent_job_events | id、subscription_id 外键、terminal_status/business_state/payload、state=pending/delivered/acknowledged/expired、delivery_epoch、delivered_at/acknowledged_at。UNIQUE(subscription_id)；归属通过 subscription 读取，避免冗余 task/intent 漂移；终态 payload 不可改写 |
 
 多态 job 引用不能用普通 FK 验证：同事务检查作业租户/任务、目标权限、tasks.exploration_id = intent.exploration_id 以及当前活租约。禁止按模型自报 ID 插入订阅。未来新增 kind 必须先实现对应验证。
+
+S2 落地说明（2026-11-03）：
+
+- `agent_job_subscriptions.job_kind` 的 CHECK（`ck_agent_job_subscriptions_kind`）目前只含已实现校验的 `tender_parse`、`proposal_export`；S3 先实现 `chart_render_jobs` 的校验，再按 5.1 的 DROP/ADD 写法扩展该约束。
+- `expected_version` 为可空 BIGINT（解析为目标 parse_revision，图表为 rev_no，导出为大纲版本）。
+- `agent_job_events` 另带 `tenant_id`，并以复合 FK `(tenant_id, subscription_id)` 关联订阅，归属仍只经订阅读取。
+- 终态发布用触发器 `agent_job_terminal` 挂在作业表 `AFTER UPDATE OF status` 上，与终态写入同一事务；终态内容由 SQL 函数 `agent_job_outcome` 统一给出，“先完成后订阅”的路径复用同一函数。
+- 触发器 `return_terminal_intent_inputs` 已改为监听 `state, blocked_reason` 并豁免 blocked+waiting_job。
 
 迁移验证覆盖新库、旧库升级、再次执行、旧 CHECK 替换及历史查询；原稿错误 FK 与不完整索引已改为上述约束，不把未运行的 DDL 当验收。
 
@@ -371,7 +385,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 
 ## 9. 分阶段实施与退出标准
 
-S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均未验收。
+S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2 外均未验收。
 
 各阶段的工作与退出标准同时包含第 8.1 节对应的前端交付及第 8.2 节联调要求，按“后端服务 → API/类型 → 页面接入 → 联调验收”闭环推进。
 
@@ -379,7 +393,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均
 | --- | --- | --- |
 | S0 文档核对（已完成） | 校正接口、契约、事务与不确定项 | 第 2~5、12 节作为编码输入，不代替迁移实测 |
 | [x] E S1 运行包、文档引擎与自检（2026-11-03） | WPS/Word 文档引擎、自检校准与 ★ 字体（6.1）；本机运行依赖登记（`docs/LOCAL_RUNTIME.md`）；mmdc（`tools/mermaid-cli`）；健康 Tool/API（`toolhealth`、`GET /api/runtime/tools`、`tool_runtime_status`）及前端能力提示 | 本机上，WPS（及配置时的 Word）真实刷新目录，DOCX/PDF 回读通过，交付 DOCX 换软件打开目录页码零误差；mmdc 真实 PNG；超时后无残留进程且不误杀用户进程；本机依赖版本已登记。**结果**见 12.5 末尾“S1 收口复验” |
-| [ ] E S2 订阅与回合状态机 | schema、拟新增 db/agent_jobs.go、engine/watchdog/intent_completion/intent_inputs | 原子提交/等待、恢复扫描、ACK、Hint 保留、范围授权；故障注入无丢唤醒/重复应用；测试作业可验证框架，不代表真实工具交付 |
+| [x] E S2 订阅与回合状态机（2026-11-03） | schema、db/agent_jobs.go、engine/watchdog/intent_completion/intent_inputs；`agent_job_status`、`GET /api/tasks/{id}/agent-jobs` 与执行页等待状态 | 原子提交/等待、恢复扫描、ACK、Hint 保留、范围授权；故障注入无丢唤醒/重复应用；测试作业可验证框架，不代表真实工具交付。**结果**见 12.6 |
 | [ ] E S3 图表 Skill | chart_render_jobs、服务/Tool/HTTP、SectionDraft.Charts 与章节事务 | 两条写作路径生成真实图；修订+图表入队崩溃恢复；取消/旧修订/兼容入口不覆盖新图 |
 | [ ] E S4 合稿 Skill | export_requests、组幂等、严格策略、取消/暂停与完成事件 | 终态重发复用，同键异参拒绝，真实目录/图片/表格回读，无迟到发布；高影响入口符合 R2 |
 | [ ] E S5a 招标解析 Skill | tender_file、candidate_only、人工 import 采用、原生解析/PaddleOCR | 真实 OCR、完整候选、原件定位、幂等采用、source_epoch 失效通过；不开放知识/企业来源 |
@@ -566,6 +580,49 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段均
   - OCR（S5a）。
 
 逐项记录见 [`docs/LOCAL_RUNTIME.md`](docs/LOCAL_RUNTIME.md) 第 4 节。
+
+### 12.6 S2 收口记录（2026-11-03，E 级，本机）
+
+**交付内容**（对应 3.1、5.1~5.3、7、8.1 S2 行）：
+
+| 落点 | 实现 |
+| --- | --- |
+| schema | `agent_job_subscriptions`、`agent_job_events`、`agent_job_outcome()`、作业表终态触发器 `agent_job_terminal`、事件载荷不可改触发器；`return_terminal_intent_inputs` 豁免等待态并监听 `blocked_reason`；冷节点条件排除等待态 |
+| db | `db/agent_jobs.go`：`LockSubmittingIntent`、`SubscribeAgentJob`、`ListAgentJobs`、`GetAgentJobSnapshot`、`TakeAgentJobEvent`、`FinalizeIntentTurn`、`WakeWaitingIntents`、`SettleWaitingIntents`；`CompleteIntentOrContinue` 改为委托 `FinalizeIntentTurn`；`HasActiveIntent` 计入等待态；`ReopenIntent` / 配额批量重开拒绝 waiting_job；Overview 新增 `waiting_intents` 并从最近结束中剔除 |
+| 宿主范围 | `IntentMandate.allowed_job_kinds`（提交、列表、单作业查询同样校验）、`required_job_kinds`；Worker 只能读当前意图的订阅，`restrict_objects` 时单作业查询只能读本意图已订阅的作业 |
+| 引擎 | `runIntent` 在唤醒回合把已到达事件作为本回合输入，其余经 `steerHooks` 送达；只确认确已保存进 transcript 的事件（按事件标记核对），未保存的退回 pending 重放；Watchdog Stop 与 RequireWriteback 的持久化订阅分支；等待态不调用 `NotifyDone`；`jobWakeLoop` 启动即扫并周期扫描，Runner 终态后加速；任务终态时等待中的 Intent 转 stopped（目标达成）/ exhausted（超时） |
+| Planner | `ExtraTools` 装配 `agent_job_status`；提示词说明 waiting_intents 勿重复派发或 reopen；结束事件附 blocked_reason |
+| 工具 / HTTP | `agent_job_status`（Planner 与 Worker 常驻只读）；`GET /api/tasks/{id}/agent-jobs?intent_id=&kind=&job_id=&before=&limit=` |
+| 前端 | `api/types.ts` / `client.ts` 的 `AgentJob` 与 `agentJobs`；`resources.ts` 新增 `agentJobs` 资源，`agent-jobs` / `file-processing` / `export` 活动触发重读；`TaskWorkspaceProvider` 重连与聚焦重读包含作业；执行页“等待后台处理”分组、与失败分开的说明、后台作业卡片（作业状态与业务状态分开，预览稿不显示为最终成功） |
+
+**验证结果**：
+
+- `go vet ./...` 通过；真实 PostgreSQL 下 `go test -race -count=1 ./...`：350 条测试/子测试通过，26 个包通过，0 失败，0 竞态报告。7 项可选跳过：真实模型、两个浏览器用例、两项 mmdc 与一项文档引擎长稳用例（需显式环境变量开启；S2 未改动导出与渲染，导出端到端用例在 WPS 下实际执行并通过，作业表新触发器随之执行）。
+- 新增 S2 用例（`db/agent_jobs_test.go`、`server/agent_jobs_test.go`）覆盖：
+  - 先订阅后终态、先终态后订阅、重复订阅幂等、回到 queued 不发布、终态载荷不可改；
+  - 订阅事务与终态事务两种先后顺序（事务屏障）都恰好一个事件；
+  - 收尾与终态发布并发：收尾等待终态事务提交后看到事件而继续，不误入等待态；
+  - 等待 → 暂停不派发 → 恢复重扫唤醒 → 同 epoch 不重复注入 → 未保存投递退回重放 → 旧 epoch 收尾被拒 → 确认后 done；
+  - 租约接管后重放已投递未确认事件；必需作业失败 → blocked(required_job_failed)，Hint 交回 Planner、失败事件已确认；
+  - 等待态保留 Hint、只改 blocked_reason 离开等待也交回；任务终态结束等待态、迟到终态不复活；
+  - 截止耗尽（`ClaimFixedFileJob`）、任务暂停取消、导出租约重试回队列不发布、导出成功为 preview_only；
+  - 宿主身份缺失 / 旧 epoch / 他任务作业 / 类型混用 / 未支持类型 / 作业类型越权均拒绝；
+  - 引擎端到端：测试作业提交后意图进入等待并释放槽位、任务不被判完成、Planner 未收到“已结束”，作业成功后唤醒、送达并 done，transcript 含事件标记；
+  - `agent_job_status` 与 `/agent-jobs` 的意图绑定、越界返回 SCOPE_VIOLATION、类型校验；Watchdog 持久化订阅不督促写回。
+- 前端 `npm --prefix web run build` 通过（保留既有 bundle 大于 500 kB 提示）；`test:unit` 23/23 通过（新增 3 条：等待与失败分开、作业/业务状态分开、活动到作业重读）。
+- 浏览器验收（本机服务 + 隔离库，真实 API；种子数据只写作业与订阅表来驱动框架）：
+  - 执行页显示“等待后台处理”分组、蓝色状态与“无需操作”说明、只读引导框，以及该工作的作业卡片（排队中、尝试次数、截止时间）；
+  - 必需作业失败的工作显示为红色失败说明与作业失败原因，和等待态分开；
+  - 作业在库内置为成功后，唤醒协调器重开该工作，SSE 活动触发页面重读：工作移至“待执行”，作业显示“已成功 · 已采用”；
+  - 整页刷新后状态由接口恢复；控制台无错误。
+- 原始日志在 Git 忽略的 `data/s2-checks/`（`vet.log`、`race.jsonl`、`race.exit`、`web-build.log`、`web-tests.log`、`server.log`）。
+
+**边界（未包含在 S2）**：
+
+- 没有注册任何提交类工具（document_parse_submit / chart_render_submit / proposal_export_submit 分别在 S5a / S3 / S4）；测试作业只验证框架，不代表真实工具交付。
+- `chart_render` 类型、`superseded` 终态与 `export_jobs` 的 cancelled 状态分别随 S3、S4 落地；导出结果在严格最终稿策略（S4）前一律为 preview_only。
+- 等待中的单个意图暂不支持从页面取消；SSE 断线重连依赖既有 `invalidate(ALL)`（已包含作业资源），未单独做断网演练。
+- 身份仍为宿主注入的执行身份，不是 R2 可信用户身份；开放高影响提交入口前仍须完成 R2。
 
 ## 13. 上游参考与版本核对入口
 

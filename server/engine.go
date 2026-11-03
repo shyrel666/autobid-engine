@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,7 @@ type Config struct {
 	DeadlineMaxSleep    time.Duration  // 截止协调器单次最长睡眠，默认 30s
 	WorkControlWait     time.Duration  // ControlWork 等待终态落库的上限，默认 30s
 	MinPlanHeartbeat    time.Duration  // Planner 心跳下限/默认，默认 600s
+	JobWakePoll         time.Duration  // 后台作业事件唤醒扫描间隔，默认 2s（作业终态另有加速信号）
 	Watchdog            WatchdogConfig // 独立 Watchdog 跑偏检测与自动纠偏/熔断配置
 	OnActivity          func(db.Activity)
 }
@@ -59,6 +61,7 @@ func (c *Config) defaults() {
 	set(&c.DeadlineMaxSleep, 30*time.Second)
 	set(&c.WorkControlWait, 30*time.Second)
 	set(&c.MinPlanHeartbeat, db.MinPlanHeartbeatSeconds*time.Second)
+	set(&c.JobWakePoll, 2*time.Second)
 	c.Watchdog.defaults()
 }
 
@@ -91,6 +94,8 @@ type Engine struct {
 	plannerRound sync.Map // taskID -> *atomic.Int64
 	settling     sync.Map // taskID -> struct{}
 	inflight     sync.Map // taskID -> *atomic.Int64
+
+	jobWake chan struct{} // 容量 1：作业终态后加速唤醒扫描，不承载事件内容
 }
 
 type taskRuntime struct {
@@ -120,6 +125,7 @@ func NewEngine(m *Manager, resolve Resolver, cfg Config) *Engine {
 		execCtx:    map[int64]context.Context{},
 		work:       map[int64]*workExecution{},
 		steerBox:   map[int64][]string{},
+		jobWake:    make(chan struct{}, 1),
 	}
 	return e
 }
@@ -144,9 +150,10 @@ func dbCtx(parent context.Context) (context.Context, context.CancelFunc) {
 // 运行时生命周期
 // ---------------------------------------------------------------------------
 
-// Start 启动全局后台循环（租约回收）；ctx 结束时退出。
+// Start 启动全局后台循环（租约回收、后台作业事件唤醒）；ctx 结束时退出。
 func (e *Engine) Start(ctx context.Context) {
 	go e.leaseReaper(ctx)
+	go e.jobWakeLoop(ctx)
 }
 
 // Run 启动任务的 Planner、Worker 与截止协调器循环（同一任务只启动一次）。
@@ -494,6 +501,7 @@ drain:
 		defer cancel()
 		if won, _ := e.m.SetTaskStatusGuarded(c, t, db.TaskDone); won {
 			e.emit(t, db.Activity{Worker: "system", Kind: "state", Summary: "全部目标已证明达成，任务完成"})
+			e.settleWaitingIntents(c, t, db.StateIntentStopped)
 		}
 		e.cancelExec(t.ID, agent.AbortGoalMet)
 	}
@@ -782,6 +790,20 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	iid := intent.ID
 	label := fmt.Sprintf("%s · #%d", name, iid)
 	emit := func(a db.Activity) { e.emit(t, a) }
+	// 后台作业终态事件：按当前 epoch 领取并记录投递；收尾时只确认已保存进 transcript 的事件。
+	delivered := &deliveredEvents{}
+	takeEvent := func() (string, bool) {
+		ev, ok, deliveryErr := t.Store.TakeAgentJobEvent(workCtx, iid, epoch)
+		if deliveryErr != nil {
+			workCancel(fmt.Errorf("read job event: %w", deliveryErr))
+			return "", false
+		}
+		if !ok {
+			return "", false
+		}
+		delivered.add(ev.EventID)
+		return formatAgentJobEvent(ev), true
+	}
 	watchdog := newWatchdogHooks(
 		t.Hooks,
 		iid,
@@ -792,6 +814,11 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		func(cause error) { workCancel(cause) },
 		emit,
 	)
+	// 持久化订阅允许 RequireWriteback 的意图释放本轮槽位进入等待；完成仍校验真实结果。
+	watchdog.durableWork = func() bool {
+		ok, subErr := t.Store.HasAgentJobSubscriptions(workCtx, iid)
+		return subErr == nil && ok
+	}
 	hooks := &steerHooks{
 		inner: watchdog,
 		drain: func() (string, bool) {
@@ -805,9 +832,24 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			}
 			return e.drainSteer(iid)
 		},
+		events: takeEvent,
 		nudges: &atomic.Int64{}, // 建在重试循环外，跨 model_error 重试共享
 		limit:  e.emptyTurnNudgeLimit(),
 		label:  label,
+	}
+	// 被作业事件唤醒的回合：已到达的事件直接作为本回合输入，其余在工具调用或结束前送达。
+	if message == "" {
+		var evs []string
+		for len(evs) < 20 {
+			text, ok := takeEvent()
+			if !ok {
+				break
+			}
+			evs = append(evs, text)
+		}
+		if len(evs) > 0 {
+			message = jobWakeInput + "\n\n" + strings.Join(evs, "\n")
+		}
 	}
 	runOnce := func() (harness.TerminalReason, agent.WriteCounts, error) {
 		if message != "" {
@@ -834,16 +876,21 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		reason, _, err = runOnce()
 	}
 
-	// Only a persisted, successful turn may acknowledge operator input.
+	// Only a persisted, successful turn may acknowledge operator input or job
+	// events; FinalizeIntentTurn decides open / waiting / done and checks the
+	// real deliverables atomically. A durable subscription lets a
+	// require_writeback intent release its slot, but never makes it done.
+	var savedEvents []int64
 	if err == nil && reason == harness.ReasonCompleted && workCtx.Err() == nil {
 		if mandate := db.NodeMandate(intent); mandate != nil && mandate.RequireWriteback && !watchdog.HasWriteback() {
-			err = errors.New("intent completion rejected: required writeback missing")
+			if durable, subErr := t.Store.HasAgentJobSubscriptions(workCtx, iid); subErr != nil {
+				err = subErr
+			} else if !durable {
+				err = errors.New("intent completion rejected: required writeback missing")
+			}
 		}
 		if err == nil {
-			err = e.m.pg.CheckIntentDeliverables(workCtx, t.ID, intent)
-		}
-		if err == nil {
-			err = t.Store.AcknowledgeIntentInputs(workCtx, iid, epoch)
+			savedEvents = savedJobEvents(workCtx, worker, t.ExpID, iid, delivered.list())
 		}
 	}
 	// 关键时序：先读取取消原因与 killed，再 detachWork（它会以 AbortWorkFinished 取消 workCtx）。
@@ -902,17 +949,29 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	case reason == harness.ReasonMaxTurns || reason == harness.ReasonTimeout:
 		_ = e.transitionIntent(ctx, t, iid, epoch, from, db.StateIntentExhausted)
 		t.NotifyDone(iid)
-	// [10] A message arriving after the last hook needs a new turn.
+	// [10] 原子收尾：未消费的输入或作业事件 -> open；仅剩等待中的后台作业 -> blocked+waiting_job
+	// （释放执行槽，不通知 Planner 已结束）；否则校验真实产物 -> done / blocked。
 	default:
 		c, cancel := dbCtx(ctx)
-		completionErr := t.Store.CompleteIntentOrContinue(c, iid, epoch)
+		outcome, detail, completionErr := t.Store.FinalizeIntentTurn(c, iid, epoch, savedEvents)
 		cancel()
-		if completionErr != nil {
+		switch {
+		case completionErr != nil:
 			e.emit(t, db.Activity{Worker: name, Kind: "error", NodeID: &iid, Summary: "工作完成状态未提交", Detail: completionErr.Error()})
+			t.NotifyDone(iid)
+		case outcome == db.TurnWaiting:
+			e.emit(t, db.Activity{Worker: "agent-jobs", Kind: "state", NodeID: &iid, Summary: fmt.Sprintf("意图 #%d 等待后台作业，已释放执行槽", iid)})
+		case outcome == db.TurnContinue:
+			e.emit(t, db.Activity{Worker: "system", Kind: "state", NodeID: &iid, Summary: from + " -> " + db.StateIntentOpen + "（有待处理的输入或作业事件）"})
+		case outcome == db.TurnBlocked:
+			e.emit(t, db.Activity{Worker: name, Kind: "error", NodeID: &iid, Summary: "意图执行失败", Detail: detail})
+			t.NotifyDone(iid)
+		default:
+			e.emit(t, db.Activity{Worker: "system", Kind: "state", NodeID: &iid, Summary: from + " -> " + db.StateIntentDone})
+			t.NotifyDone(iid)
 		}
-		t.NotifyDone(iid)
 	}
-	if node, readErr := t.Store.GetNode(ctx, iid); readErr == nil && node != nil && node.State != db.StateIntentRunning && node.State != db.StateIntentOpen && node.State != db.StateIntentPaused {
+	if node, readErr := t.Store.GetNode(ctx, iid); readErr == nil && node != nil && node.State != db.StateIntentRunning && node.State != db.StateIntentOpen && node.State != db.StateIntentPaused && !db.IsWaitingIntent(node) {
 		_ = t.Store.ReturnIntentInputs(ctx, iid)
 	}
 }
@@ -987,5 +1046,16 @@ func (e *Engine) reapOnce(ctx context.Context) {
 			e.emit(t, db.Activity{Worker: "system", Kind: "state", Summary: "回收过期租约的意图"})
 			t.appendTrigger(agent.TriggerEvent{Kind: agent.TriggerLeaseReaped})
 		}
+	}
+}
+
+// settleWaitingIntents 在任务进入终态后结束等待后台作业的 Intent（目标达成 -> stopped，超时 -> exhausted）。
+func (e *Engine) settleWaitingIntents(ctx context.Context, t *Task, state string) {
+	n, err := t.Store.SettleWaitingIntents(ctx, state)
+	switch {
+	case err != nil:
+		e.emit(t, db.Activity{Worker: "system", Kind: "error", Summary: "结束等待中的意图失败", Detail: err.Error()})
+	case n > 0:
+		e.emit(t, db.Activity{Worker: "agent-jobs", Kind: "state", Summary: fmt.Sprintf("任务已终态，%d 个等待后台作业的意图转为 %s", n, state)})
 	}
 }

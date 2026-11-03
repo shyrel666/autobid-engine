@@ -64,6 +64,11 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 	defer cancel()
 	if won, err := e.m.SetTaskStatusGuarded(c, t, status); err == nil && won {
 		e.emit(t, db.Activity{Worker: "system", Kind: "state", Summary: "超时收尾完成，任务状态：" + status})
+		waitingState := db.StateIntentExhausted
+		if met {
+			waitingState = db.StateIntentStopped
+		}
+		e.settleWaitingIntents(c, t, waitingState)
 	}
 }
 

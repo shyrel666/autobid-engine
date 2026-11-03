@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  AlertTriangle, ArrowDown, Check, ChevronDown, CircleCheck, CircleSlash, Clock3, Copy, Ellipsis, ListTree, Loader2, Network, PanelLeft, Pause, Send, ShieldAlert, Square, Wrench, XCircle, ZapOff,
+  AlertTriangle, ArrowDown, Check, ChevronDown, CircleCheck, CircleSlash, Clock3, Copy, Ellipsis, Hourglass, ListTree, Loader2, Network, PanelLeft, Pause, Send, ShieldAlert, Square, Wrench, XCircle, ZapOff,
 } from 'lucide-react'
 import { ApiError, api, errorText } from '../../api/client'
-import type { NodeBrief } from '../../api/types'
+import type { AgentJob, NodeBrief } from '../../api/types'
 import { Badge, Button, Drawer, Empty, Input, Menu, Notice, Select, Spinner, cx, statusTone, useConfirm, useToast } from '../../components/ui'
 import { useAsync, useElementWidth } from '../../hooks/useAsync'
 import type { StreamEvent } from '../../hooks/useTaskEvents'
@@ -12,7 +12,8 @@ import { pretty } from '../../lib/format'
 import { linkProps, useSearchParams } from '../../lib/router'
 import { ACTIVITY_KINDS, parseWork, pickEnum, taskUrl } from '../../lib/routes'
 import type { ActivityKind } from '../../lib/routes'
-import { useTaskWorkspace } from '../task-workspace/TaskWorkspaceProvider'
+import { useTaskWorkspace, useTick } from '../task-workspace/TaskWorkspaceProvider'
+import { blockedNotice, isWaitingWork, jobView } from './agentJobs'
 import { NodeDetailModal, OverviewSummary } from './NodeParts'
 import ExplorationGraph from './ExplorationGraph'
 
@@ -21,7 +22,7 @@ import ExplorationGraph from './ExplorationGraph'
 // 活动只是本次打开期间收到的实时事件；overview 是有界推演摘要，不代表全部工作历史。
 
 const stateLabel: Record<string, string> = {
-  open: '待执行', running: '运行中', paused: '已暂停', done: '已完成', blocked: '已阻塞', exhausted: '配额耗尽', stopped: '已停止', deleted: '已撤销',
+  open: '待执行', running: '运行中', paused: '已暂停', waiting: '等待后台处理', done: '已完成', blocked: '已阻塞', exhausted: '配额耗尽', stopped: '已停止', deleted: '已撤销',
 }
 const kindLabel: Record<string, string> = {
   all: '全部类型', round: '规划轮次', text: '阶段结论', tool: '工具调用', tool_error: '工具错误', state: '状态', error: '错误',
@@ -40,12 +41,36 @@ const SEND_MODE_KEY = 'autobid.chat_send_mode'
 
 function statusIcon(group: string, state?: string): ReactNode {
   if (group === 'running' || state === 'running') return <Loader2 className="size-3.5 shrink-0 animate-spin text-blue-600" aria-hidden />
+  if (group === 'waiting' || state === 'waiting') return <Hourglass className="size-3.5 shrink-0 text-sky-600" aria-hidden />
   if (group === 'paused' || state === 'paused') return <Pause className="size-3.5 shrink-0 text-amber-600" aria-hidden />
   if (state === 'done') return <CircleCheck className="size-3.5 shrink-0 text-emerald-600" aria-hidden />
   if (state === 'blocked') return <XCircle className="size-3.5 shrink-0 text-red-600" aria-hidden />
   if (state === 'exhausted') return <ZapOff className="size-3.5 shrink-0 text-purple-600" aria-hidden />
   if (state === 'stopped') return <CircleSlash className="size-3.5 shrink-0 text-amber-600" aria-hidden />
   return <Clock3 className="size-3.5 shrink-0 text-slate-400" aria-hidden />
+}
+
+// 后台作业卡片：作业状态读自 /agent-jobs（刷新、断线重连后据此恢复），不依赖本次打开期间收到的活动。
+function AgentJobList({ jobs, showIntent }: { jobs: AgentJob[]; showIntent: boolean }) {
+  return (
+    <section aria-label="后台作业" className="rounded-[10px] border border-line p-3">
+      <h3 className="mb-2 text-xs font-medium text-muted">后台作业 · {jobs.length} 项</h3>
+      <ul className="flex flex-col gap-2">
+        {jobs.map((j) => {
+          const v = jobView(j)
+          return (
+            <li key={j.id} className="flex flex-wrap items-start justify-between gap-2 text-sm">
+              <span className="min-w-0">
+                <span className="font-medium">{v.title}</span>{showIntent && <span className="text-muted"> · 工作 #{j.intent_id}</span>}
+                <span className="block text-xs text-muted break-words">{v.detail.join(' · ')}</span>
+              </span>
+              <Badge dot tone={v.tone}>{v.status}</Badge>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
 }
 
 function EventItem({ e, open, onToggle }: { e: StreamEvent; open: boolean; onToggle: () => void }) {
@@ -117,6 +142,7 @@ export default function ExecutionPage() {
   const o = overview.data
   const groups: Group[] = [
     { key: 'running', label: '正在执行', nodes: o?.running_intents ?? [] },
+    { key: 'waiting', label: '等待后台处理', nodes: o?.waiting_intents ?? [] },
     { key: 'open', label: '待执行', nodes: o?.open_intents ?? [] },
     { key: 'paused', label: '已暂停', nodes: o?.paused_intents ?? [] },
     { key: 'terminal', label: '最近结束', nodes: o?.recent_terminal_intents ?? [] },
@@ -135,7 +161,13 @@ export default function ExecutionPage() {
   const selected: NodeBrief | undefined = known?.node ?? (probedNode && probedNode.kind === 'intent'
     ? { id: probedNode.id, state: probedNode.state, owner: probedNode.owner, blocked_reason: probedNode.blocked_reason, summary: String(probedNode.payload?.summary ?? probedNode.payload?.title ?? '') }
     : undefined)
-  const state = known ? (known.group === 'running' ? 'running' : known.group === 'paused' ? 'paused' : known.node.state ?? '') : selected?.state ?? ''
+  const state = known ? (known.group === 'running' ? 'running' : known.group === 'paused' ? 'paused' : known.group === 'waiting' ? 'waiting' : known.node.state ?? '')
+    : isWaitingWork(selected) ? 'waiting' : selected?.state ?? ''
+  const notice = blockedNotice(selected?.blocked_reason)
+
+  // 后台作业：选中工作时只读该工作的订阅，否则读项目最近的 Agent 作业；状态以接口为准。
+  const jobsTick = useTick('agentJobs')
+  const jobs = useAsync(() => api.agentJobs(taskId, { intentId: selectedId, limit: 20 }), [taskId, selectedId, jobsTick], work !== undefined)
 
   // 活动：只按 node_id 精确匹配当前工作；不按 worker 名称或相似文字归入。不修改共享事件数组。
   const events = useMemo(() => stream.events.filter((e) => (selectedId === undefined || e.node_id === selectedId) && (kind === 'all' || e.kind === kind)),
@@ -253,7 +285,7 @@ export default function ExecutionPage() {
     const unread = selectedId !== n.id ? (unreadByWork.get(n.id) ?? 0) : 0
     return (
       <button key={`${group}-${n.id}`} type="button" aria-current={selectedId === n.id ? 'true' : undefined} onClick={() => select(n.id)}
-        title={`#${n.id} ${n.summary}${n.blocked_reason ? `\n阻塞：${n.blocked_reason}` : ''}`}
+        title={`#${n.id} ${n.summary}${isWaitingWork(n) ? '\n等待后台处理' : n.blocked_reason ? `\n阻塞：${n.blocked_reason}` : ''}`}
         className={cx('flex min-h-11 w-full items-center gap-2 rounded-lg p-2 text-left hover:bg-soft', selectedId === n.id && 'bg-soft')}>
         {statusIcon(group, n.state)}
         <span className="min-w-0 flex-1 truncate">#{n.id} {n.summary || '（无摘要）'}</span>
@@ -313,7 +345,7 @@ export default function ExecutionPage() {
         <div className={cx('flex min-h-12 flex-wrap items-center justify-between border-b border-line', narrow ? 'gap-1.5 px-3 py-2.5' : 'gap-2 px-4 py-3')}>
           <div className="flex min-w-0 items-center gap-2">
             <h2 className={cx('min-w-0 truncate font-semibold', narrow ? 'text-[13px]' : 'text-sm')} title={title}>{title}</h2>
-            {selectedId ? state && <Badge dot tone={statusTone(state)}>{stateLabel[state] ?? state}</Badge>
+            {selectedId ? state && <Badge dot tone={state === 'waiting' ? 'blue' : statusTone(state)}>{stateLabel[state] ?? state}</Badge>
               : <Badge dot tone={stream.status === 'open' ? 'green' : stream.status === 'closed' ? 'slate' : 'amber'}>{statusLabel}</Badge>}
           </div>
           {narrow ? (
@@ -347,7 +379,9 @@ export default function ExecutionPage() {
           {stream.dropped > 0 && <Notice>服务端因消费过慢已丢弃 {stream.dropped} 条活动事件；业务状态以刷新结果为准。</Notice>}
           {stream.trimmed > 0 && <p className="text-center text-xs text-muted">客户端最多保留最近 {stream.max} 条活动，已淘汰 {stream.trimmed} 条较早的活动。</p>}
           {stream.reconnects > 0 && <p className="text-center text-xs text-muted">活动流已重连 {stream.reconnects} 次；断开期间的活动可能缺失，不会补拉。</p>}
-          {selected?.blocked_reason && <Notice>阻塞原因：{selected.blocked_reason}</Notice>}
+          {notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
+          {jobs.error && <Notice tone="danger">后台作业读取失败：{jobs.error}</Notice>}
+          {jobs.data && jobs.data.length > 0 && <AgentJobList jobs={jobs.data} showIntent={selectedId === undefined} />}
           {events.length === 0 ? (
             <Empty>{stream.status !== 'open' ? `活动流${statusLabel}` : selectedId ? '本次打开期间尚未收到该工作的活动。没有工作编号的项目级活动在「全部实时活动」中查看。' : '等待活动事件…（Worker 的工具调用、阶段结论与审批请求会实时出现）'}</Empty>
           ) : (

@@ -2,10 +2,8 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 )
 
 // CheckIntentDeliverables checks authoritative section revisions, not tool names
@@ -31,37 +29,16 @@ func (d *DB) CheckIntentDeliverables(ctx context.Context, taskID int64, n *Node)
 	return nil
 }
 
-// CompleteIntentOrContinue serializes the last pending-input check with intake.
-// Intake either sees a running recipient and makes us continue, or leaves the
-// new Hint active for the Planner; there is no check/update gap.
+// CompleteIntentOrContinue finalizes a turn that delivered no job events (see
+// FinalizeIntentTurn). Intake either sees a running recipient and makes us
+// continue, or leaves the new Hint active for the Planner; there is no
+// check/update gap. A failed deliverable check blocks the intent atomically.
 func (s *ExplorationStore) CompleteIntentOrContinue(ctx context.Context, id, epoch int64) error {
-	return s.db.Transaction(ctx, func(tx *DB) error {
-		var n Node
-		var taskID int64
-		err := tx.QueryRowContext(ctx, `SELECT n.id,n.payload,t.id FROM exploration_nodes n JOIN tasks t ON t.exploration_id=n.exploration_id
-		 WHERE n.id=$1 AND n.exploration_id=$2 AND n.state='running' AND n.lease_epoch=$3 AND n.lease_until>now() FOR UPDATE OF n`, id, s.expID, epoch).Scan(&n.ID, &n.Payload, &taskID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrLeaseLost
-		}
-		if err != nil {
-			return err
-		}
-		// Recheck at commit, locking each required section in the standard order.
-		if m := NodeMandate(&n); m != nil {
-			ids := uniqueIDs(m.RequiredSectionIDs)
-			slices.Sort(ids)
-			for _, sid := range ids {
-				if _, _, _, err := sectionGateTx(ctx, tx.tx, DefaultTenant, taskID, sid); err != nil {
-					return err
-				}
-			}
-		}
-		if err := tx.CheckIntentDeliverables(ctx, taskID, &n); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE exploration_nodes n SET state=CASE WHEN EXISTS(SELECT 1 FROM intent_inputs i WHERE i.intent_id=n.id AND i.state IN ('pending','delivered')) THEN 'open' ELSE 'done' END,lease_until=NULL,content_version=content_version+1,completed_at=CASE WHEN EXISTS(SELECT 1 FROM intent_inputs i WHERE i.intent_id=n.id AND i.state IN ('pending','delivered')) THEN NULL ELSE now() END WHERE id=$1`, id)
-		return err
-	})
+	outcome, detail, err := s.FinalizeIntentTurn(ctx, id, epoch, nil)
+	if err == nil && outcome == TurnBlocked {
+		err = errors.New(detail)
+	}
+	return err
 }
 
 func (s *ExplorationStore) HasPendingIntentInputs(ctx context.Context, id int64) (bool, error) {

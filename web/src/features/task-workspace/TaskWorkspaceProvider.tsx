@@ -44,7 +44,7 @@ export function useTick(...rs: Resource[]): number {
 }
 
 const ALL: Resource[] = ['task', 'overview', 'documents', 'requirements', 'outline', 'sections', 'charts', 'matrix', 'consistency', 'export',
-  'exportJobs', 'templates', 'evidence', 'research', 'intercepts', 'business']
+  'exportJobs', 'templates', 'evidence', 'research', 'intercepts', 'business', 'agentJobs']
 const zero = () => Object.fromEntries(ALL.map((r) => [r, 0])) as Record<Resource, number>
 
 export function TaskWorkspaceProvider({ taskId, children }: { taskId: number; children: ReactNode }) {
@@ -108,7 +108,7 @@ export function TaskWorkspaceProvider({ taskId, children }: { taskId: number; ch
     const on = () => {
       if (document.visibilityState !== 'visible' || Date.now() - lastFocus.current < 15000) return
       lastFocus.current = Date.now()
-      invalidate(['task', 'overview', 'intercepts', 'business', 'requirements', 'outline', 'sections', 'matrix', 'consistency', 'export', 'exportJobs'])
+      invalidate(['task', 'overview', 'intercepts', 'business', 'requirements', 'outline', 'sections', 'matrix', 'consistency', 'export', 'exportJobs', 'agentJobs'])
     }
     window.addEventListener('focus', on)
     document.addEventListener('visibilitychange', on)

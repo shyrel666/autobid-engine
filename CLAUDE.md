@@ -78,10 +78,10 @@
   3. `KeepIntentLease` 每 TTL/3 续租，租约丢失时以 `AbortLeaseLost` 取消执行。
   4. `Worker.Execute` 运行会话 `exp{N}-worker-i{intentID}`，transcript 持久化，暂停后可续跑。工具 = 常驻工具 + 经 Skill 解锁的 `bidtools` 延迟工具。
 - **Hook 链**：依次经过 `steerHooks`、`watchdogHooks`、`guard`。
-  - `steerHooks`：先取持久化的 `intent_inputs`，再取内存 `steerBox`。
+  - `steerHooks`：先取持久化的 `intent_inputs`，再取后台作业终态事件（`agent_job_events`），最后取内存 `steerBox`。
   - `watchdogHooks`：`IntentMandate` 越界拦截，重复调用、连续报错、空转的纠偏与熔断，以及 `RequireWriteback`。
   - `guard`：`intercept` 工具级审批。
-- **完成确认**：`ReasonCompleted` 后依次校验 `RequireWriteback`、`CheckIntentDeliverables`、`AcknowledgeIntentInputs`，全部通过才算完成。
+- **完成确认**：`ReasonCompleted` 后先校验 `RequireWriteback`（同步写回，或已有持久化后台作业订阅时允许释放本轮槽位），再由 `FinalizeIntentTurn` 在一个事务内：只确认已保存进 transcript 的作业事件 → 有未消费事件/Hint 则 open，仅剩等待中的作业则 `blocked + waiting_job`（不通知 Planner 已结束），否则校验 `CheckIntentDeliverables` 与必需作业的真实结果后 done（不通过则 blocked），并确认 `intent_inputs`。
 - **终态分流**（`runIntent`，按以下优先级）：
 
   | 条件 | 结果 |
@@ -94,7 +94,7 @@
   | 被 Planner kill 或被 Watchdog 熔断 | stopped，并触发重规划 |
   | 执行失败 | blocked；配额链耗尽时另记 `quota_exhausted` |
   | MaxTurns / Timeout | exhausted |
-  | 其余 | `CompleteIntentOrContinue` |
+  | 其余 | `FinalizeIntentTurn`（open / waiting_job / done / blocked） |
 
   所有写回都经 `CompareAndSetIntentStateFenced`，并使用 `dbCtx`（`WithoutCancel` + 10s），不随运行 Context 取消。
 - **截止结算**（`server/timeout.go`）：
@@ -119,9 +119,15 @@
 - **发布**：`Hub.Publish` 把 `db.Activity`（`worker` / `kind` / `summary` / `detail` / `node_id`）按任务扇出到订阅者缓冲（SSE 为 512 条）。缓冲满时丢弃并计数；没有订阅者时直接丢弃。
 - **不可回放**：活动流不持久化，SSE `id` 是进程内序号，不支持 `Last-Event-ID` 回放。
 - **前端**：`useTaskEvents` 断线后退避重连，重连后执行 `invalidate(ALL)`。`resourcesForActivity` 与 `INVALIDATION` 矩阵（`web/src/features/task-workspace/resources.ts`）把活动映射为需要重读的资源。
-- **使用约定**：SSE 只用于提示前端"该重读了"，业务状态一律经 REST 读取。需要可靠送达的人工输入走持久化收件箱 `intent_inputs`，不走 `Hub`。
+- **使用约定**：SSE 只用于提示前端"该重读了"，业务状态一律经 REST 读取。需要可靠送达的人工输入走持久化收件箱 `intent_inputs`，后台作业终态走 `agent_job_events`，都不走 `Hub`。
 
 ### 2.2 阶段增量记录
+
+**2026-11-03 S2 Agent 后台作业订阅与回合状态机（E 级）**：按 [`AGENT_TOOL_SKILLS_PLAN.md`](./AGENT_TOOL_SKILLS_PLAN.md) S2 落地，收口记录见该计划 12.6。
+- **表与触发器（域 B）**：`agent_job_subscriptions`（`job_kind` 目前只含 `tender_parse` → `fixed_file_jobs`、`proposal_export` → `export_jobs`；chart_render 随 S3）与 `agent_job_events`（每订阅一条终态事件，载荷不可改）。作业表 `AFTER UPDATE OF status` 触发器 `agent_job_terminal` 在作业自身事务内发布全部终态（成功、失败、取消、截止/尝试耗尽）；回到 queued 不发布。`return_terminal_intent_inputs` 监听 `state, blocked_reason` 并豁免 `blocked + waiting_job`。
+- **存储层 `db/agent_jobs.go`**：`SubscribeAgentJob` 并入提交事务，按“Intent 活租约 → 作业行 → 订阅”加锁，先完成后订阅直接得到事件；`TakeAgentJobEvent` 同 epoch 不重复注入、接管后重放；`FinalizeIntentTurn` 按“Intent → 大纲 → 章节 → 订阅/事件 → Hint”加锁统一决策；`WakeWaitingIntents` 独立短事务先锁 Intent 再查事件，不派发暂停/终态任务；`SettleWaitingIntents` 在任务终态时结束等待中的 Intent。`HasActiveIntent` 把等待中的 Intent 计为进行中；`ReopenIntent`、配额批量重开与冷节点折叠都不触碰 waiting_job。
+- **宿主范围**：`IntentMandate.allowed_job_kinds`（`CheckJobKindScope`，提交/查询同样校验）与 `required_job_kinds`（完成前每类至少一个本意图作业成功且结果仍有效）。
+- **引擎与工具**：`Engine.jobWakeLoop`（`Config.JobWakePoll`，默认 2s；导出/文件 Runner 终态后 `WakeAgentJobs` 加速）；公共只读工具 `agent_job_status`（`bidtools/agent_jobs.go`，Planner 与 Worker 常驻，Worker 只能读当前意图）；`GET /api/tasks/{id}/agent-jobs`；执行页“等待后台处理”分组与后台作业卡片。S2 未注册任何提交类工具。
 
 **2026-11-01 ARTEX 推演与长文上下文增强（E 级）**：按 [`docs/ARTEX架构技术标系统解析.md`](docs/ARTEX架构技术标系统解析.md) 与 [`docs/implementation_plan.md`](docs/implementation_plan.md) 吸收 DeepSeek Super-agent 与 ARTEX 核心运行机制，验收记录见 [`docs/walkthrough.md`](docs/walkthrough.md)：
 1. **Goals 目标分解器（`BootstrapRFPGoals`）**：`db/rfp_goals.go` 串联 `ExtractRequirements` → 同步 `assets` 静态要素并回填 `requirement_items.source_asset_id` → 在 `exploration_nodes` 幂等创建四大 `kind='goal'` 根节点（`G-VETO` 资格/否决项、`G-DEVIATION` 实质性条款与技术偏离、`G-SCORING` 评分标准拆解、`G-OUTLINE` 技术标目录大纲）及 `exploration_anchors` → 可选生成 `v1 draft` 技术标目录大纲；暴露 `POST /api/tasks/{id}/goals/bootstrap`、Planner 工具 `decompose_rfp_goals` 及 `POST /api/tasks/{id}/documents?bootstrap_goals=true`。

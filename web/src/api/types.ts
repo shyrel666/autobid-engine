@@ -75,6 +75,8 @@ export interface Overview {
   open_intents: NodeBrief[] | null
   running_intents: NodeBrief[] | null
   paused_intents?: NodeBrief[] | null
+  /** 已提交后台作业并释放执行槽的工作（blocked + waiting_job）：仍在进行，不是失败或结束。 */
+  waiting_intents?: NodeBrief[] | null
   recent_terminal_intents: NodeBrief[] | null
   recent_facts: NodeBrief[] | null
   recent_findings: NodeBrief[] | null
@@ -82,6 +84,44 @@ export interface Overview {
   cold_index?: ColdEntry[] | null
   folded_nodes?: number
   coverage?: Coverage
+}
+
+/** S2：Agent 订阅的后台作业（GET /api/tasks/{id}/agent-jobs）。作业状态（job_status）与业务状态（event.business_state）分开。 */
+export type AgentJobKind = 'tender_parse' | 'proposal_export'
+
+export interface AgentJobEvent {
+  id: number
+  terminal_status: 'succeeded' | 'failed' | 'cancelled' | 'superseded'
+  /** candidate_pending_review / adopted / preview_only / failed / cancelled / completed */
+  business_state: string
+  payload: Record<string, unknown> | null
+  state: 'pending' | 'delivered' | 'acknowledged' | 'expired'
+  delivery_epoch?: number
+  delivered_at?: string
+  acknowledged_at?: string
+  created_at: string
+}
+
+export interface AgentJob {
+  id: number
+  task_id: number
+  intent_id: number
+  created_intent_epoch: number
+  job_ref: { kind: AgentJobKind; id: number }
+  target_ref: Record<string, unknown> | null
+  expected_version?: number
+  required: boolean
+  /** 订阅状态：waiting 等待终态 / notified 已有结果待送达 / acknowledged 已送达并确认 / cancelled 任务结束时取消 */
+  state: 'waiting' | 'notified' | 'acknowledged' | 'cancelled'
+  created_by: string
+  created_at: string
+  updated_at: string
+  job_status: string
+  job_attempts: number
+  job_max_attempts: number
+  job_deadline_at?: string
+  job_error?: string
+  event?: AgentJobEvent
 }
 
 export interface GraphNode {

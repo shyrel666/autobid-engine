@@ -12,7 +12,7 @@ import type {
   RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionDetail, BidScopeInput, VetoStatus, SectionWriteJob,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
   ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
-  RuntimeCapability, RuntimeCapabilityStatus,
+  RuntimeCapability, RuntimeCapabilityStatus, AgentJob,
   LLMSettings, LLMPoolStatus, LLMProfileInput, LLMTestResult, LLMRecordDetail, LLMRecordsResp, SystemCatalog, AgentRoleKey, TaskGraph,
   CompanyPerformance, EvidenceOriginal, EvidenceBinding, AdmissibilityRun, AdmissibilityDecision,
   Commitment, CommitmentInput, BidQuote, BidQuoteValidation, ObjectiveScoreRun,
@@ -196,6 +196,10 @@ export const api = {
     post<{ queued: boolean }>(`${t(id)}/works/${intentID}/steer`, { message }),
   messageWork: (id: number, intentID: number, message: string) =>
     post<{ resumed: boolean }>(`${t(id)}/works/${intentID}/message`, { message }),
+
+  // Agent 提交并订阅的后台作业（刷新/重连后据此恢复等待状态）
+  agentJobs: (id: number, f: { intentId?: number; before?: number; limit?: number } = {}) =>
+    get<AgentJob[]>(`${t(id)}/agent-jobs${qs({ intent_id: f.intentId, before: f.before, limit: f.limit })}`),
 
   // 推演图与产出物
   overview: (id: number) => get<Overview>(`${t(id)}/overview`),

@@ -107,6 +107,11 @@ const (
 	DefaultIntentLeaseTTL = 90 * time.Second
 	// BlockedReasonQuotaExhausted 标记因 LLM 配额链耗尽而阻塞的 Intent，供配额恢复后批量重开。
 	BlockedReasonQuotaExhausted = "llm_quota_exhausted"
+	// BlockedReasonWaitingJob 标记释放了执行槽、等待持久化后台作业事件的 Intent（S2）；
+	// 只有作业事件唤醒协调器能把它重新置为 open，Reopen / 配额批量重开都不得绕过。
+	BlockedReasonWaitingJob = "waiting_job"
+	// BlockedReasonRequiredJobFailed 标记必需后台作业失败、取消或结果已失效而不能完成的 Intent，交由 Planner 重规划。
+	BlockedReasonRequiredJobFailed = "required_job_failed"
 )
 
 // IsTerminalIntentState 报告 Intent 状态是否需要 completed_at。
@@ -130,6 +135,10 @@ type IntentMandate struct {
 	MaxToolCalls          int      `json:"max_tool_calls,omitempty"`
 	ForbiddenTools        []string `json:"forbidden_tools,omitempty"`
 	RequireWriteback      bool     `json:"require_writeback,omitempty"`
+	// AllowedJobKinds 收窄可提交/订阅/查询的后台作业类型；RestrictObjects 为真时空列表表示无权限。
+	AllowedJobKinds []string `json:"allowed_job_kinds,omitempty"`
+	// RequiredJobKinds 要求完成前每类至少有一个本意图订阅的作业成功且结果仍有效。
+	RequiredJobKinds []string `json:"required_job_kinds,omitempty"`
 }
 
 // IsEmpty 判断 Mandate 是否未设置任何约束条件。
@@ -145,7 +154,9 @@ func (m *IntentMandate) IsEmpty() bool {
 		m.TargetWordsMax <= 0 &&
 		m.MaxToolCalls <= 0 &&
 		len(m.ForbiddenTools) == 0 &&
-		!m.RequireWriteback
+		!m.RequireWriteback &&
+		len(m.AllowedJobKinds) == 0 &&
+		len(m.RequiredJobKinds) == 0
 }
 
 // NodeMandate 从节点 payload 中解析可选的 IntentMandate。

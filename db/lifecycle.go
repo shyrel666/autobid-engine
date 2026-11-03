@@ -104,11 +104,13 @@ func (s *ExplorationStore) HasOpenGoal(ctx context.Context) (bool, error) {
 	return ok, err
 }
 
-// HasActiveIntent 报告是否存在 open/running Intent（不含 paused）。
+// HasActiveIntent 报告是否存在 open/running Intent，或等待后台作业（blocked + waiting_job）的 Intent（不含 paused）。
+// 等待中的 Intent 仍在进行，任务不能因“无在途意图”被判完成。
 func (s *ExplorationStore) HasActiveIntent(ctx context.Context) (bool, error) {
 	var ok bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM exploration_nodes
-		WHERE exploration_id = $1 AND kind = 'intent' AND state IN ('open','running'))`, s.expID).Scan(&ok)
+		WHERE exploration_id = $1 AND kind = 'intent'
+		  AND (state IN ('open','running') OR (state = 'blocked' AND blocked_reason = 'waiting_job')))`, s.expID).Scan(&ok)
 	return ok, err
 }
 

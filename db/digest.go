@@ -31,8 +31,8 @@ func (s *ExplorationStore) CurrentRound(ctx context.Context) (int64, error) {
 }
 
 // coldEligible 是可冷却节点的完整条件：终态 Intent、非根 Fact、已消费 Hint。
-// Goal、在途 Intent、活跃 Hint、Finding（交付物）与 Digest 永不冷却。
-const coldEligible = `((kind = 'intent' AND state IN ('done','blocked','exhausted','stopped','deleted'))
+// Goal、在途 Intent（含等待后台作业的 blocked + waiting_job）、活跃 Hint、Finding（交付物）与 Digest 永不冷却。
+const coldEligible = `((kind = 'intent' AND state IN ('done','blocked','exhausted','stopped','deleted') AND blocked_reason IS DISTINCT FROM 'waiting_job')
 	OR (kind = 'fact' AND state IN ('confirmed','dismissed'))
 	OR (kind = 'hint' AND state = 'consumed'))`
 

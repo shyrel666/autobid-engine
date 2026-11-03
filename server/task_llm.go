@@ -343,8 +343,8 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 		kit.WithResearch(&retrieval.Coordinator{Service: s.cfg.Retrieval, Reasoner: &agent.RetrievalReasoner{Planner: b.plannerRuntime, Worker: b.workerRuntime}, MultiEnabled: s.cfg.MultiRetrieval})
 	}
 	kit.WithRuntime(s.cfg.Runtime)
-	pc.ExtraTools = append(append([]tool.CoreTool(nil), pc.ExtraTools...), kit.RuntimeTools()...)
-	wc.ExtraTools = append(append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...), kit.RuntimeTools()...)
+	pc.ExtraTools = append(append(append([]tool.CoreTool(nil), pc.ExtraTools...), kit.RuntimeTools()...), kit.AgentJobTools()...)
+	wc.ExtraTools = append(append(append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...), kit.RuntimeTools()...), kit.AgentJobTools()...)
 	wc.Deferred = append(append([]tool.CoreTool(nil), wc.Deferred...), kit.DeferredTools()...)
 	wc.Skills = append(append([]tool.Skill(nil), wc.Skills...), bidtools.Skills()...)
 	b.pl, b.wk = agent.NewPlanner(pc), agent.NewWorker(wc)

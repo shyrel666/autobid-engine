@@ -100,6 +100,9 @@ type watchdogHooks struct {
 	steer    func(msg string)
 	kill     func(cause error)
 	emit     func(db.Activity)
+	// durableWork 报告本 Intent 是否已有持久化后台作业订阅：有则 Stop 不因缺少同步写回而督促，
+	// 本轮可释放槽位进入等待；完成门禁仍校验真实结果。可为 nil。
+	durableWork func() bool
 
 	mu              sync.Mutex
 	totalCalls      int
@@ -279,7 +282,7 @@ func (w *watchdogHooks) Stop(ctx context.Context, messages []llm.Message) (bool,
 		w.mu.Lock()
 		wrote := w.hasWriteback
 		w.mu.Unlock()
-		if !wrote && w.writebackNudges.Add(1) <= 1 {
+		if !wrote && (w.durableWork == nil || !w.durableWork()) && w.writebackNudges.Add(1) <= 1 {
 			return false, []string{"【Mandate 完结门禁】当前意图设置了 require_writeback=true，但你尚未成功调用任何写回工具（如 record_fact、report_finding、section_write_draft、requirement_bind_evidence）。请先调用写回工具落盘结果后再结束。"}, ""
 		}
 	}

@@ -185,6 +185,7 @@ func run(logger *slog.Logger) error {
 		Lease:   export.OfficeTimeout() + 60*time.Second,
 		OnChange: func(j *db.ExportJob, summary string) {
 			hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "export", Kind: "state", At: time.Now(), Summary: summary})
+			e.WakeAgentJobs() // 终态事件已在作业事务内持久化；这里只加速等待中 Intent 的唤醒扫描
 		}}
 	runner.Start(engineCtx)
 	var fileStore *filework.Store
@@ -229,6 +230,7 @@ func run(logger *slog.Logger) error {
 		fileRunner = &filework.Runner{Processor: &filework.Processor{DB: pg, Store: fileStore, OCR: ocr}, Owner: fmt.Sprintf("%s/%d/files", hostname, os.Getpid()), Workers: envInt("AUTOBID_FILE_WORKERS", 2),
 			OnChange: func(j *db.FixedFileJob) {
 				hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "file-processing", Kind: "state", At: time.Now(), Summary: fmt.Sprintf("材料处理 #%d：%s", j.ID, j.Status)})
+				e.WakeAgentJobs()
 			}}
 		go func() { defer close(fileRunnerDone); fileRunner.Run(engineCtx) }()
 	} else {

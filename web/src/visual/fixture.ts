@@ -72,6 +72,7 @@ const routes: [RegExp, (m: RegExpMatchArray) => unknown][] = [
   [/^\/api\/tasks\/\d+\/llm-chain$/, () => ({ chain: [], active_profile_id: null, revision: 0 })],
   [/^\/api\/tasks\/\d+\/llm-usage$/, () => []],
   [/^\/api\/tasks\/\d+\/graph$/, () => ({ nodes: [], edges: [] })],
+  [/^\/api\/tasks\/\d+\/agent-jobs/, () => []],
   [/^\/api\/tasks\/\d+\/retrieval-runs$/, () => []],
   [/^\/api\/llm\/records$/, () => []],
   [/^\/api\/system\/catalog$/, () => ({ skills: [], tools: [], agents: [] })],

@@ -216,7 +216,8 @@ func newEnv(t *testing.T, timeoutSec int, prove bool, workerMode string, probe *
 type envOpts struct {
 	hooks      func(*Task) harness.HookRunner
 	extraTools []tool.CoreTool
-	onActivity func(db.Activity) // 额外的活动投递（如 SSE Hub）
+	onActivity func(db.Activity)           // 额外的活动投递（如 SSE Hub）
+	planner    func(env *harnessEnv) brain // 替换默认 plannerBrain
 }
 
 func newEnvWith(t *testing.T, timeoutSec int, prove bool, workerFn brain, cfg Config, o envOpts) *harnessEnv {
@@ -253,8 +254,12 @@ func newEnvWith(t *testing.T, timeoutSec int, prove bool, workerFn brain, cfg Co
 
 	env := &harnessEnv{acts: acts}
 	var e *Engine
+	planner := plannerBrain(t, &env.task, prove)
+	if o.planner != nil {
+		planner = o.planner(env)
+	}
 	env.pl = agent.NewPlanner(agent.PlannerConfig{
-		Provider:  plannerBrain(t, &env.task, prove),
+		Provider:  planner,
 		KillWork:  func(id int64) error { return e.KillWork(id) },
 		SteerWork: func(id int64, msg string) error { return e.SteerWork(id, msg) },
 	})

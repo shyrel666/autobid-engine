@@ -224,3 +224,87 @@ func TestVerifySectionClaims_DefectsRejected(t *testing.T) {
 		}
 	})
 }
+
+// 编造的投标人事实换个说法（借招标复述开头、省略"我方"、写案例或人员资格）不得被豁免。
+func TestVerifySectionClaims_RephrasedBidderFactsNotExempt(t *testing.T) {
+	cases := []struct{ name, sent string }{
+		{"restatement_prefix_completed_fact", "依据招标文件要求，投标人已完成同类项目12个。"},
+		{"restatement_prefix_track_record", "针对采购需求，项目团队曾为省级政务云平台完成等保三级测评。"},
+		{"restatement_prefix_cert_no", "按照招标文件要求，投标人具备二级资质（证书编号：AF-2024-0001）。"},
+		{"deployment_case_without_self_cue", "该方案已在杭州、宁波两地政务平台稳定运行三年。"},
+		{"named_personnel_qualification", "拟派项目经理张三具有十年同类系统集成经验。"},
+		{"cumulative_track_record", "公司累计承建智慧园区项目三十余个。"},
+		{"award", "本平台荣获省级科技进步二等奖。"},
+		{"we_self_cue", "我们自主研发了统一视频汇聚平台。"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := VerifySectionClaims(VerifyClaimsInput{SectionID: 1, ContentMD: tc.sent})
+			if len(res.Claims) != 1 {
+				t.Fatalf("expected 1 claim, got %+v", res.Claims)
+			}
+			c := res.Claims[0]
+			if c.ClaimType != ClaimTypeBidderFact || c.Status != ClaimStatusUngrounded {
+				t.Fatalf("got %s/%s, want %s/%s", c.ClaimType, c.Status, ClaimTypeBidderFact, ClaimStatusUngrounded)
+			}
+			if res.Verdict != WritingVerdictFailed || res.Metrics.UngroundedClaimCount != 1 {
+				t.Fatalf("expected failed verdict with 1 ungrounded claim, got %s %+v", res.Verdict, res.Metrics)
+			}
+		})
+	}
+}
+
+// 真正的招标复述、情态要求句与技术叙述仍然豁免，避免误拦。
+func TestVerifySectionClaims_RestatementsAndNarrativeStayExempt(t *testing.T) {
+	sents := []string{
+		"响应要求 REQ-PM「项目经理要求」（招标文件要求：投标人须为本项目配备项目经理一名，须具备信息系统项目管理师资格，并提供近 6 个月社保缴纳记录）。",
+		"响应要求 REQ-PERF「类似项目业绩」（招标文件要求：投标人须提供近三年 2 个类似安防项目业绩，须提供合同关键页及验收报告）。",
+		"招标文件要求投标人须已取得安全技术防范系统设计施工二级资质。",
+		"招标文件（招标编号：ZB-2026-001）要求投标人具备二级及以上资质。",
+		"我方承诺完全满足上述要求。",
+		"项目经理须具备五年以上系统集成管理经验。",
+		"智慧园区安防系统项目经理驻场统筹深化设计、施工质量控制、安全文明施工与竣工归档。",
+		"本方案采用感知接入、边缘分析、安防平台与统一运维四层解耦架构。",
+	}
+	for _, s := range sents {
+		res := VerifySectionClaims(VerifyClaimsInput{SectionID: 1, ContentMD: s})
+		if len(res.Claims) != 1 || res.Claims[0].Status != ClaimStatusExempt {
+			t.Errorf("expected exempt claim for %q, got %+v", s, res.Claims)
+		}
+	}
+}
+
+// 业绩案例按严格客观事实处理：绑定可采企业证据可通过，只绑定知识库证据不行。
+func TestVerifySectionClaims_TrackRecordNeedsAdmissibleEvidence(t *testing.T) {
+	facts := []GroundedFactSource{{
+		AdmissibilityItemID: 102,
+		EvidenceDomain:      "performance",
+		EvidenceID:          21,
+		Code:                "PERF-PARK-2024",
+		Title:               "华东智慧园区数字孪生与态势感知平台建设项目",
+		ProjectName:         "华东智慧园区数字孪生与态势感知平台建设项目",
+		SubjectType:         "bidder",
+		ClientName:          "华东高新区管委会",
+		Verdict:             Admissible,
+	}}
+	kbs := []GroundedKBSource{{EvidenceID: 9, Status: "verified", Relation: "supports", Excerpt: "华东高新区态势感知平台运行报告"}}
+
+	res := VerifySectionClaims(VerifyClaimsInput{
+		SectionID:       1,
+		ContentMD:       "项目团队曾承建华东智慧园区数字孪生与态势感知平台建设项目[EVID:102]。",
+		AdmissibleFacts: facts,
+	})
+	if len(res.Claims) != 1 || res.Claims[0].Status != ClaimStatusGrounded {
+		t.Fatalf("expected grounded track record with admissible evidence, got %+v", res.Claims)
+	}
+
+	res = VerifySectionClaims(VerifyClaimsInput{
+		SectionID:  1,
+		ContentMD:  "该平台已在华东高新区稳定运行三年[KB:9]。",
+		VerifiedKB: kbs,
+	})
+	if len(res.Claims) != 1 || res.Claims[0].Status != ClaimStatusUngrounded ||
+		!strings.Contains(strings.Join(res.Claims[0].Reasons, ";"), "strict_fact_requires_admissible_evidence") {
+		t.Fatalf("expected KB-only track record to be rejected, got %+v", res.Claims)
+	}
+}

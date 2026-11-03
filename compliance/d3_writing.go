@@ -23,7 +23,8 @@ import (
 )
 
 // WritingVerificationRuleVersion 标识 D3 写作核验规则版本。
-const WritingVerificationRuleVersion = "d3-writing-v1"
+// v2：招标复述豁免不再覆盖含投标人完成态/具体实体断言的句子；新增业绩案例与人员资格两类事实特征。
+const WritingVerificationRuleVersion = "d3-writing-v2"
 
 // 写作核验结论。
 const (
@@ -517,9 +518,36 @@ type VerifyClaimsInput struct {
 
 var (
 	// 投标人自我指称。
-	bidderSelfCueRe     = regexp.MustCompile(`我方|我公司|本公司|我司|我单位|本单位|投标人(?:已|具备|持有|拥有|完成|承建|投入|拟派)`)
-	firstPersonBidderRe = regexp.MustCompile(`我方|我公司|本公司|我司|我单位|本单位`)
+	bidderSelfCueRe     = regexp.MustCompile(`我方|我公司|本公司|我司|我单位|本单位|我们|本团队|投标人(?:已|具备|持有|拥有|完成|承建|投入|拟派)`)
+	firstPersonBidderRe = regexp.MustCompile(`我方|我公司|本公司|我司|我单位|本单位|我们|本团队`)
 	tenderRestatementRe = regexp.MustCompile(`^响应要求\s+|招标文件|招标要求|采购需求|采购文件|招标人要求|采购人要求|根据要求|要求为|要求[:：]`)
+
+	// 完成态/既往断言标记：招标要求只规定"须/应"，不会写"已完成""曾为""累计承建"。
+	// 句中出现这类标记（且前面不是"须/应"等情态词）即视为在陈述投标人事实，不再按招标复述豁免。
+	bidderAssertionRe = regexp.MustCompile(
+		`已(?:完成|承建|承担|实施|交付|建成|服务|为|在|取得|获得|通过|持有|具备|具有|拥有|配备|组建)|` +
+			`曾(?:为|在|经|承担|承建|参与|主导|负责|服务|实施|交付|获|荣获)|` +
+			`(?:累计|共计|先后|合计|总计)(?:完成|承建|承担|实施|服务|交付|获得|取得|中标)|` +
+			`(?:完成|承建|承担|实施|交付|获得|取得|通过|建成)了|成功(?:应用|实施|交付|服务|承建|中标)|荣获|服务过`)
+	modalBeforeAssertionRe = regexp.MustCompile(`(?:须|需|应|应当|必须|要求)$`)
+	// 具体证书号是实体断言（招标要求不会给出投标人的证书号）；不含"招标编号""项目编号"等。
+	assertedCertNoRe = regexp.MustCompile(`(?:证书编号|证号|登记号|专利号|注册号)[:：]?\s*[A-Za-z0-9][A-Za-z0-9\-_/.]{3,32}`)
+
+	// 既往业绩/案例断言（按严格客观事实处理，须绑定可采企业证据）。不要求"我方"等自称：
+	// "项目团队曾为……""该方案已在……稳定运行三年"同样是投标人事实。
+	trackRecordRe = regexp.MustCompile(
+		`曾(?:为|在|经|承担|承建|参与|主导|负责|服务|实施|交付|获|荣获)|` +
+			`已(?:为|在)[^。；;，,]{0,20}(?:运行|应用|部署|上线|落地|投运|投用|推广|提供|建设|实施|交付)|` +
+			`(?:累计|共计|先后|合计|总计)(?:完成|承建|承担|实施|服务|交付|获得|取得|中标)|` +
+			`成功(?:应用|实施|交付|服务|承建|中标)|荣获|服务过|` +
+			`稳定运行\s*(?:[0-9]+|[一二三四五六七八九十两]+)\s*(?:个)?(?:年|月)`)
+
+	// 人员资格/拟派人员断言。只有情态规范句（"项目经理须具备……"）且无完成态标记时不算事实。
+	personnelFactRe = regexp.MustCompile(
+		`拟(?:派|投入|委派|任|配备)[^。；;]{0,12}(?:项目经理|技术负责人|项目总监|总工|负责人|工程师|人员|团队)|` +
+			`(?:项目经理|技术负责人|项目总监|总工程师|负责人|工程师|团队成员|项目团队)[^。；;，,]{0,10}(?:具备|持有|具有|获得|拥有|取得)|` +
+			`(?:[0-9]+|[一二三四五六七八九十两]+)\s*年(?:以上)?[^。；;]{0,12}(?:经验|从业)`)
+	normativeRe = regexp.MustCompile(`须|必须|应当|应(?:具|持|有|为|在|满足|不少于|不低于)|需(?:具|持|要)|不得`)
 
 	// 严格客观企业事实特征（资质证书、认证、同类业绩、合同金额、验收、人员证书、社保、专利软著等）。
 	strictObjectiveFactRe = regexp.MustCompile(
@@ -856,8 +884,10 @@ func evaluateSentenceClaim(
 	}
 
 	// 判断句子类型：
-	// 1. 若引述招标文件要求且无我方第一人称事实/承诺标记，归为 tender_restatement；
-	isQuotedReq := tenderRestatementRe.MatchString(clean) && !firstPersonBidderRe.MatchString(clean) &&
+	// 1. 若引述招标文件要求，且无我方第一人称、完成态或具体实体断言，归为 tender_restatement。
+	//    只看"招标文件/采购需求"等字样会被"依据招标文件要求，投标人已完成……"之类的句子绕过。
+	asserted := hasBidderAssertion(clean)
+	isQuotedReq := tenderRestatementRe.MatchString(clean) && !firstPersonBidderRe.MatchString(clean) && !asserted &&
 		len(evidRefs) == 0 && len(kbRefs) == 0 && len(commitRefs) == 0
 	if isQuotedReq {
 		return SentenceClaim{
@@ -870,8 +900,10 @@ func evaluateSentenceClaim(
 		}
 	}
 
-	hasStrictFact := strictObjectiveFactRe.MatchString(clean)
+	// 既往业绩/案例与严格客观事实同等对待：只能由可采企业证据支撑，且优先于承诺分类。
+	hasStrictFact := strictObjectiveFactRe.MatchString(clean) || trackRecordRe.MatchString(clean)
 	hasGeneralFact := bidderSelfCueRe.MatchString(clean) && generalBidderFactRe.MatchString(clean)
+	hasPersonnelFact := personnelFactRe.MatchString(clean) && (asserted || !normativeRe.MatchString(clean))
 	hasModelFact := len(modelMentions) > 0
 	hasCommitCue := len(commitRefs) > 0 || len(nonModelMentions) > 0 || commitmentCueRe.MatchString(clean)
 
@@ -880,7 +912,7 @@ func evaluateSentenceClaim(
 	switch {
 	case len(commitRefs) > 0 || (hasCommitCue && !hasStrictFact && len(evidRefs) == 0):
 		claimType = ClaimTypeCommitment
-	case len(evidRefs) > 0 || len(kbRefs) > 0 || hasStrictFact || hasGeneralFact || hasModelFact:
+	case len(evidRefs) > 0 || len(kbRefs) > 0 || hasStrictFact || hasGeneralFact || hasPersonnelFact || hasModelFact:
 		claimType = ClaimTypeBidderFact
 	case hasCommitCue:
 		claimType = ClaimTypeCommitment
@@ -912,6 +944,19 @@ func evaluateSentenceClaim(
 
 	claim.Status = ClaimStatusExempt
 	return claim
+}
+
+// hasBidderAssertion 判断句子是否含投标人完成态或具体实体断言；"须已取得"这类情态要求句不算。
+func hasBidderAssertion(clean string) bool {
+	if assertedCertNoRe.MatchString(clean) {
+		return true
+	}
+	for _, loc := range bidderAssertionRe.FindAllStringIndex(clean, -1) {
+		if !modalBeforeAssertionRe.MatchString(clean[:loc[0]]) {
+			return true
+		}
+	}
+	return false
 }
 
 func verifyCommitmentClaim(
@@ -1106,10 +1151,10 @@ func verifyBidderFactClaim(
 		return
 	}
 
-	// 严格客观企业事实（资质证书、同类业绩、合同金额、社保证明等）必须绑定企业可采性证据 [EVID:<id>]，不能仅用通用知识库 [KB:<id>]。
+	// 严格客观企业事实（资质证书、同类业绩与案例、合同金额、社保证明等）必须绑定企业可采性证据 [EVID:<id>]，不能仅用通用知识库 [KB:<id>]。
 	if hasStrictFact && len(evidRefs) == 0 {
 		claim.Status = ClaimStatusUngrounded
-		claim.Reasons = append(claim.Reasons, "strict_fact_requires_admissible_evidence: 资质/证书/业绩/合同/社保等客观事实必须绑定可采企业证据 [EVID:<id>]，不得仅绑定知识库 [KB:<id>]")
+		claim.Reasons = append(claim.Reasons, "strict_fact_requires_admissible_evidence: 资质/证书/业绩案例/合同/社保等客观事实必须绑定可采企业证据 [EVID:<id>]，不得仅绑定知识库 [KB:<id>]")
 		return
 	}
 

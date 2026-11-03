@@ -577,7 +577,7 @@ func d3ReadinessTx(ctx context.Context, q queryer, tenant string, taskID, outlin
 	rows, err := q.QueryContext(ctx, `SELECT s.id, s.section_code, s.title, s.current_rev_no,
 			sb.status, COALESCE(sb.stale_reason,''),
 			rv.id, COALESCE(rv.created_by,''), COALESCE(rv.approved_by,''),
-			wv.verdict, COALESCE(wv.stale_reason,''), COALESCE(wv.ungrounded_claim_count, 0)
+			wv.verdict, COALESCE(wv.stale_reason,''), COALESCE(wv.ungrounded_claim_count, 0), COALESCE(wv.rule_version,'')
 		FROM proposal_sections s
 		LEFT JOIN section_storyboards sb
 		  ON sb.tenant_id = s.tenant_id AND sb.section_id = s.id AND sb.status <> 'superseded'
@@ -604,8 +604,9 @@ func d3ReadinessTx(ctx context.Context, q queryer, tenant string, taskID, outlin
 			wvVerdict      sql.NullString
 			wvStale        string
 			ungrounded     int
+			wvRule         string
 		)
-		if err := rows.Scan(&secID, &secCode, &title, &curRevNo, &sbStatus, &sbStale, &revID, &revCreatedBy, &revApprovedBy, &wvVerdict, &wvStale, &ungrounded); err != nil {
+		if err := rows.Scan(&secID, &secCode, &title, &curRevNo, &sbStatus, &sbStale, &revID, &revCreatedBy, &revApprovedBy, &wvVerdict, &wvStale, &ungrounded, &wvRule); err != nil {
 			return err
 		}
 		switch {
@@ -631,6 +632,10 @@ func d3ReadinessTx(ctx context.Context, q queryer, tenant string, taskID, outlin
 			case wvVerdict.String == compliance.WritingVerdictStale:
 				r.block(ExportBlocker{Kind: BlockWritingVerificationStale, SectionID: secID, SectionCode: secCode,
 					Message: fmt.Sprintf("章节 %s %s 的写作核验已失效（%s），需重新核验", secCode, title, wvStale)})
+			case wvRule != compliance.WritingVerificationRuleVersion:
+				// 旧规则的"通过"不能沿用：规则升级可能是为了堵住旧规则的漏检。
+				r.block(ExportBlocker{Kind: BlockWritingVerificationStale, SectionID: secID, SectionCode: secCode,
+					Message: fmt.Sprintf("章节 %s %s 的写作核验按旧规则 %s 完成，当前规则为 %s，需重新核验", secCode, title, wvRule, compliance.WritingVerificationRuleVersion)})
 			case ungrounded > 0:
 				r.block(ExportBlocker{Kind: BlockUngroundedClaim, SectionID: secID, SectionCode: secCode,
 					Message: fmt.Sprintf("章节 %s %s 存在 %d 条未绑定有效证据或承诺台账的断言", secCode, title, ungrounded)})

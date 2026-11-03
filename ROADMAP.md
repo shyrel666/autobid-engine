@@ -211,6 +211,17 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
     - 句子级断言抽取、证据/承诺绑定核验与写作核验 E 级指标（`compliance/d3_writing.go` + `section_writing_verifications`）：按句切分并分类（`bidder_fact` / `commitment` / `tender_restatement` / `general_narrative`），逐句核对证书编号、型号规格、合同金额、主体与承诺数值是否与所绑定来源一致；计算并持久化 `ungrounded_claim_count`、`fact_binding_rate`、`commitment_binding_rate`、`specificity_ratio`、`kb_similarity_max`、`boilerplate_similarity_max`；存在无证据断言（`ErrUngroundedClaim`）或违反针对性/套话阈值（`ErrWritingVerificationFailed`）时拒绝成为章节当前有效修订；
     - 章节红队定稿职责分离（`ApproveSectionRevision` 拦截修订创建人自批 `ErrRedSelfApproval` 且要求当前修订通过写作核验）；上游大纲、要求、可采性明细、知识库证据或承诺台账变化由触发器将故事板与写作核验级联置为 `stale`；`ExportReadiness` 接入 `storyboard_missing/unapproved/stale` 与 `writing_verification_missing/failed/stale` 阻断；补齐 `bidtools`、`server/d3.go` 与前端写作工作台。
   - **E 级验收**：`eval/bid/d3`（本地生成 `D3_ACCEPTANCE_REPORT.md`，不提交 Git）主链 S1~S16 95 项检查全部通过（失败 0）、`ExportReadiness.Ready=true`、DOCX 导出与回读通过、两轮归一化一致（差异 0 条）、D3-G01 ~ D3-G10 门禁正反例与恢复全部通过；`go vet ./...`、真实 PostgreSQL `go test -race ./...`、`npm --prefix web run test:unit && npm --prefix web run build`、M1 与 D2 回归全部通过。V 级仍缺合作企业真实原件与外部专家盲评，P 级仍缺多租户 RBAC 与试点记录。
+  - **2026-11-03 漏检修复（规则 `d3-writing-v2`，E 级）**：v1 规则下，6 句编造的投标人事实有 4 句被豁免。原因有二：
+    - 句中出现"招标文件 / 采购需求"、又没有"我方"等自称时，整句按招标复述豁免，例如"依据招标文件要求，投标人已完成同类项目12个"。
+    - 省略自称的案例句、人员资格句只被归为一般叙述，例如"该方案已在两地稳定运行三年""拟派项目经理张三具有十年经验"。
+
+    v2 的改动：
+    - 复述豁免不再覆盖含完成态标记（已完成 / 曾为 / 累计承建 / 荣获等，"须已取得"这类情态句除外）或具体证书号的句子。
+    - 新增业绩案例特征（按严格客观事实处理，只能绑定可采企业证据），新增人员资格特征（情态规范句除外）。
+    - 自称词补充"我们 / 本团队"。
+    - `ExportReadiness` 把旧规则版本的写作核验视为 `writing_verification_stale`，须重新核验才能导出。
+
+    验证：对抗句与误拦护栏单测见 `compliance/d3_writing_test.go`；D3 验收重跑 95 项通过、0 失败。限制：仍是关键词规则，默认仍放行未命中任何特征的句子；召回率与误拦率未在真实投标稿上测量，需按 D0 协议用真实材料评测。
 
 - **落点**：
   - 故事板对象：每节列出响应的得分点、主题句、引用的证据与承诺、图表计划。故事板作为 Pink 审批节点，复用现有的持久化审批状态机；撰写人不能批准自己的故事板。

@@ -315,4 +315,22 @@ func TestD3StoryboardPinkReviewAndWritingVerification(t *testing.T) {
 	if err != nil || !rd3.Ready {
 		t.Fatalf("expected recovery Ready=true, got ready=%v blockers=%+v err=%v", rd3 != nil && rd3.Ready, blockerText(rd3), err)
 	}
+
+	// 11. 旧规则版本下的"通过"不能沿用：规则升级后须重新核验才能导出
+	if _, err := f.d.ExecContext(ctx, `UPDATE section_writing_verifications SET rule_version = 'd3-writing-v1'
+		WHERE tenant_id = $1 AND section_id = $2`, tenant, secID); err != nil {
+		t.Fatal(err)
+	}
+	rd4, err := f.d.ExportReadiness(ctx, tenant, f.task.ID)
+	if err != nil || rd4.Ready || !hasBlocker(rd4, BlockWritingVerificationStale) {
+		t.Fatalf("expected writing_verification_stale for outdated rule version, got ready=%v blockers=%+v err=%v", rd4 != nil && rd4.Ready, blockerText(rd4), err)
+	}
+	rewv, err := f.d.EvaluateSectionWritingVerification(ctx, tenant, f.task.ID, secID, "verifier")
+	if err != nil || rewv.RuleVersion != compliance.WritingVerificationRuleVersion || rewv.Verdict != compliance.WritingVerdictPassed {
+		t.Fatalf("re-verify under current rule: %+v err=%v", rewv, err)
+	}
+	rd5, err := f.d.ExportReadiness(ctx, tenant, f.task.ID)
+	if err != nil || !rd5.Ready {
+		t.Fatalf("expected Ready=true after re-verification, got ready=%v blockers=%+v err=%v", rd5 != nil && rd5.Ready, blockerText(rd5), err)
+	}
 }

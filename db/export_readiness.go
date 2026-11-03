@@ -46,7 +46,8 @@ const (
 	BlockQuoteInconsistent         = "quote_inconsistent"
 	BlockQuoteOverCeiling          = "quote_over_ceiling"
 
-	// D3 持久化阻断：只在任务已启用 D3（存在故事板或写作核验记录）时生效，不改变 M1/D2 基线行为。
+	// D3 持久化阻断：任务强制启用 D3（新任务默认，见 tasks.grounded_writing_required）或已有故事板 / 写作核验记录时生效；
+	// 以 LegacyWriting 创建的旧基线任务保持 M1/D2 行为。
 	BlockStoryboardMissing         = "storyboard_missing"
 	BlockStoryboardUnapproved      = "storyboard_unapproved"
 	BlockStoryboardStale           = "storyboard_stale"

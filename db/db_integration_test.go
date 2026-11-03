@@ -57,7 +57,8 @@ func newFixture(t *testing.T, scopes ...TaskScope) *fixture {
 	t.Helper()
 	d := openTestDB(t)
 	ctx := context.Background()
-	task, err := d.CreateTask(ctx, CreateTaskInput{Name: uniq("task"), Goal: "核验招标文件合规性", Scopes: scopes})
+	// 通用夹具沿用旧基线；D3 强制门禁由 d3_integration_test 单独覆盖。
+	task, err := d.CreateTask(ctx, CreateTaskInput{Name: uniq("task"), Goal: "核验招标文件合规性", Scopes: scopes, LegacyWriting: true})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

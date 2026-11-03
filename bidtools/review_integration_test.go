@@ -16,7 +16,7 @@ import (
 func TestReviewToolsDetectContradictionAndOmission(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
-	task, err := d.CreateTask(ctx, db.CreateTaskInput{Name: fmt.Sprintf("p6a-tool-%d", time.Now().UnixNano()), Goal: "技术标审查"})
+	task, err := d.CreateTask(ctx, db.CreateTaskInput{Name: fmt.Sprintf("p6a-tool-%d", time.Now().UnixNano()), Goal: "技术标审查", LegacyWriting: true})
 	if err != nil {
 		t.Fatal(err)
 	}

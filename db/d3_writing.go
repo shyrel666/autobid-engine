@@ -100,10 +100,12 @@ func scanWritingVerification(r rowScanner) (*SectionWritingVerification, error) 
 	return &wv, nil
 }
 
+// taskHasD3ActivityQ 判断任务是否启用 D3 门禁：任务强制启用（新任务默认），或已有故事板 / 写作核验记录。
 func taskHasD3ActivityQ(ctx context.Context, q queryer, tenant string, taskID int64) (bool, error) {
 	var active bool
 	err := q.QueryRowContext(ctx, `SELECT
-		EXISTS (SELECT 1 FROM section_storyboards WHERE tenant_id = $1 AND task_id = $2)
+		COALESCE((SELECT grounded_writing_required FROM tasks WHERE id = $2), false)
+		OR EXISTS (SELECT 1 FROM section_storyboards WHERE tenant_id = $1 AND task_id = $2)
 		OR EXISTS (SELECT 1 FROM section_writing_verifications WHERE tenant_id = $1 AND task_id = $2)`,
 		tenant, taskID).Scan(&active)
 	return active, err

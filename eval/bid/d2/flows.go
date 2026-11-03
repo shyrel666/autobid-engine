@@ -67,7 +67,8 @@ var beijingZone = time.FixedZone("CST", 8*3600)
 func (f *flow) newTask(ctx context.Context, scenario, goal string) (*db.Task, string, error) {
 	tenant := fmt.Sprintf("d2-%s-%s", f.runID, scenario)
 	name := fmt.Sprintf("D2-%s-%s", f.runID, scenario)
-	t, err := f.app.d.CreateTask(ctx, db.CreateTaskInput{Name: name, Description: "D2 E 级验收（虚构演示数据，默认自动清理）", Goal: goal})
+	// D2 基线不建故事板，显式沿用旧写作门禁；D3 强制门禁由 eval/bid/d3 验收。
+	t, err := f.app.d.CreateTask(ctx, db.CreateTaskInput{Name: name, Description: "D2 E 级验收（虚构演示数据，默认自动清理）", Goal: goal, LegacyWriting: true})
 	if err != nil {
 		return nil, tenant, err
 	}

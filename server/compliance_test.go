@@ -17,7 +17,8 @@ func TestHTTPComplianceAndConsistency(t *testing.T) {
 	var task struct {
 		ID int64 `json:"id"`
 	}
-	if code := c.raw("POST", "/api/tasks", map[string]any{"name": "phase6a", "goal": "技术标审查"}, &task); code != 201 {
+	// 6A 流程不建故事板，显式沿用旧写作门禁。
+	if code := c.raw("POST", "/api/tasks", map[string]any{"name": "phase6a", "goal": "技术标审查", "legacy_writing": true}, &task); code != 201 {
 		t.Fatalf("create task: %d", code)
 	}
 	base := fmt.Sprintf("/api/tasks/%d", task.ID)

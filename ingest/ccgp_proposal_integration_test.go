@@ -76,7 +76,8 @@ func TestCCGPRealTendersRequirementsAndOutline(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			task, err := d.CreateTask(ctx, db.CreateTaskInput{Name: "ccgp-" + name, Goal: "真实招标文件要求清单与大纲"})
+			// 本用例验证解析、要求与大纲，写章节一步不建故事板，显式沿用旧写作门禁。
+			task, err := d.CreateTask(ctx, db.CreateTaskInput{Name: "ccgp-" + name, Goal: "真实招标文件要求清单与大纲", LegacyWriting: true})
 			if err != nil {
 				t.Fatal(err)
 			}

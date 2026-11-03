@@ -334,3 +334,70 @@ func TestD3StoryboardPinkReviewAndWritingVerification(t *testing.T) {
 		t.Fatalf("expected Ready=true after re-verification, got ready=%v blockers=%+v err=%v", rd5 != nil && rd5.Ready, blockerText(rd5), err)
 	}
 }
+
+// 新任务默认强制 D3：还没建任何故事板时，编造事实的草稿也不能保存，导出被拦下；LegacyWriting 任务保持旧行为。
+func TestD3GateOnByDefaultForNewTasks(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	tenant := uniq("d3-default")
+	fabricated := "我公司已完成同类项目12个，合同金额累计3000万元。"
+
+	setup := func(legacy bool) (taskID, secID int64, outlineVersion int) {
+		t.Helper()
+		task, err := d.CreateTask(ctx, CreateTaskInput{Name: uniq("d3-default"), Goal: "技术标写作", LegacyWriting: legacy})
+		if err != nil {
+			t.Fatalf("create task: %v", err)
+		}
+		if task.GroundedWritingRequired == legacy {
+			t.Fatalf("legacy=%v but grounded_writing_required=%v", legacy, task.GroundedWritingRequired)
+		}
+		if _, err := d.RequirementManifest(ctx, tenant, task.ID); err != nil {
+			t.Fatalf("manifest: %v", err)
+		}
+		code, title, desc, cat := "REQ-DEF-01", "智慧园区安防总体方案", "支持视频监控与门禁联动，总工期不超过90日历天。", ReqMandatoryClause
+		req, err := d.CreateRequirement(ctx, tenant, task.ID, "reviewer", RequirementInput{Code: &code, Category: &cat, Title: &title, Description: &desc})
+		if err != nil {
+			t.Fatalf("create requirement: %v", err)
+		}
+		if _, err := d.ConfirmRequirements(ctx, tenant, task.ID, "reviewer", 0); err != nil {
+			t.Fatalf("confirm requirements: %v", err)
+		}
+		det, err := d.CreateOutline(ctx, tenant, task.ID, "editor", OutlineInput{
+			Sections: []SectionInput{{Code: "1", Title: title, Level: 1, RequirementIDs: []int64{req.ID}}},
+		})
+		if err != nil {
+			t.Fatalf("create outline: %v", err)
+		}
+		if _, err := d.SubmitOutline(ctx, tenant, task.ID, det.Outline.Version, "editor"); err != nil {
+			t.Fatal(err)
+		}
+		if det, err = d.ApproveOutline(ctx, tenant, task.ID, det.Outline.Version, "approver"); err != nil {
+			t.Fatal(err)
+		}
+		return task.ID, det.Sections[0].ID, det.Outline.Version
+	}
+	save := func(taskID, secID int64, outlineVersion int) error {
+		_, err := d.SaveSectionRevision(ctx, tenant, "writer-alice", SaveRevisionInput{
+			TaskID: taskID, SectionID: secID, BasedOnOutlineVersion: outlineVersion, Source: RevHumanEdit, ContentMD: fabricated,
+		})
+		return err
+	}
+
+	taskID, secID, ver := setup(false)
+	if err := save(taskID, secID, ver); !errors.Is(err, ErrStoryboardMissing) {
+		t.Fatalf("default task: expected ErrStoryboardMissing before any storyboard exists, got %v", err)
+	}
+	rd, err := d.ExportReadiness(ctx, tenant, taskID)
+	if err != nil || rd.Ready || !hasBlocker(rd, BlockStoryboardMissing) {
+		t.Fatalf("default task: expected storyboard_missing blocker, got ready=%v blockers=%+v err=%v", rd != nil && rd.Ready, blockerText(rd), err)
+	}
+
+	legacyTaskID, legacySecID, legacyVer := setup(true)
+	if err := save(legacyTaskID, legacySecID, legacyVer); err != nil {
+		t.Fatalf("legacy task: save without storyboard should keep the old behavior, got %v", err)
+	}
+	rd, err = d.ExportReadiness(ctx, tenant, legacyTaskID)
+	if err != nil || hasBlocker(rd, BlockStoryboardMissing) {
+		t.Fatalf("legacy task: unexpected D3 blocker, blockers=%+v err=%v", blockerText(rd), err)
+	}
+}

@@ -122,7 +122,8 @@ func TestHTTPProposalWorkflow(t *testing.T) {
 	var task struct {
 		ID int64 `json:"id"`
 	}
-	if code := c.raw("POST", "/api/tasks", map[string]any{"name": "phase5", "goal": "编写技术标"}, &task); code != 201 {
+	// Phase 5 流程不建故事板，显式沿用旧写作门禁；新任务默认强制 D3 的行为由 db.TestD3GateOnByDefaultForNewTasks 覆盖。
+	if code := c.raw("POST", "/api/tasks", map[string]any{"name": "phase5", "goal": "编写技术标", "legacy_writing": true}, &task); code != 201 {
 		t.Fatalf("create task: %d", code)
 	}
 	base := fmt.Sprintf("/api/tasks/%d", task.ID)

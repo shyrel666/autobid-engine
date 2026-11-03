@@ -62,8 +62,9 @@ func parseCST(s string) (time.Time, error) {
 
 func (f *flow) newTask(ctx context.Context, scenario, goal string) (*db.Task, error) {
 	name := fmt.Sprintf("E2E-%s-%s", f.runID, scenario)
+	// M1 基线用确定性替身正文、不建故事板，显式沿用旧写作门禁；D3 强制门禁由 eval/bid/d3 验收。
 	t, err := f.app.d.CreateTask(ctx, db.CreateTaskInput{Name: name, Description: "E 级端到端验收（虚构演示数据，默认自动清理）",
-		Goal: goal})
+		Goal: goal, LegacyWriting: true})
 	if err == nil {
 		f.r.addTask(t.ID)
 	}

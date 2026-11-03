@@ -19,11 +19,13 @@ type Task struct {
 	Queued         bool   `json:"queued"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	// PlanHeartbeatSeconds 为 Planner 兜底心跳；执行层对 <MinPlanHeartbeatSeconds 的值取默认。
-	PlanHeartbeatSeconds int        `json:"plan_heartbeat_seconds"`
-	FirstRunAt           *time.Time `json:"first_run_at,omitempty"`
-	DeadlineAt           *time.Time `json:"deadline_at,omitempty"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	PlanHeartbeatSeconds int `json:"plan_heartbeat_seconds"`
+	// GroundedWritingRequired 为 true 时 D3 故事板与句子级落证门禁对本任务强制生效，不依赖是否已有故事板。
+	GroundedWritingRequired bool       `json:"grounded_writing_required"`
+	FirstRunAt              *time.Time `json:"first_run_at,omitempty"`
+	DeadlineAt              *time.Time `json:"deadline_at,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
 }
 
 // TaskScope 声明任务覆盖的招标项目/标段；LotNo 为空表示整个项目。
@@ -41,10 +43,12 @@ type CreateTaskInput struct {
 	PlanHeartbeatSeconds int
 	Scopes               []TaskScope
 	SourceTaskIDs        []int64 // 显式直接来源任务
+	// LegacyWriting 为 true 时不强制 D3 门禁（回到"有故事板或核验记录才启用"的旧行为），仅供旧基线回归与验收使用。
+	LegacyWriting bool
 }
 
 const taskCols = `id, name, description, exploration_id, status, paused, queued, timeout_seconds,
-	plan_heartbeat_seconds, first_run_at, deadline_at, created_at, updated_at`
+	plan_heartbeat_seconds, grounded_writing_required, first_run_at, deadline_at, created_at, updated_at`
 
 func scanTask(r rowScanner) (*Task, error) {
 	var (
@@ -52,7 +56,7 @@ func scanTask(r rowScanner) (*Task, error) {
 		firstRun, deadl sql.NullTime
 	)
 	if err := r.Scan(&t.ID, &t.Name, &t.Description, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued,
-		&t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &firstRun, &deadl, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.GroundedWritingRequired, &firstRun, &deadl, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.FirstRunAt, t.DeadlineAt = nullTimePtr(firstRun), nullTimePtr(deadl)
@@ -71,9 +75,9 @@ func (d *DB) CreateTask(ctx context.Context, in CreateTaskInput) (*Task, error) 
 			VALUES (NULLIF($1, ''), $2) RETURNING id`, in.Description, in.Goal).Scan(&expID); err != nil {
 			return err
 		}
-		t, err := scanTask(tx.QueryRowContext(ctx, `INSERT INTO tasks(name, description, exploration_id, timeout_seconds, plan_heartbeat_seconds)
-			VALUES ($1, $2, $3, $4, CASE WHEN $5::int > 0 THEN $5::int ELSE 600 END) RETURNING `+taskCols,
-			in.Name, in.Description, expID, in.TimeoutSeconds, in.PlanHeartbeatSeconds))
+		t, err := scanTask(tx.QueryRowContext(ctx, `INSERT INTO tasks(name, description, exploration_id, timeout_seconds, plan_heartbeat_seconds, grounded_writing_required)
+			VALUES ($1, $2, $3, $4, CASE WHEN $5::int > 0 THEN $5::int ELSE 600 END, $6) RETURNING `+taskCols,
+			in.Name, in.Description, expID, in.TimeoutSeconds, in.PlanHeartbeatSeconds, !in.LegacyWriting))
 		if err != nil {
 			return err
 		}

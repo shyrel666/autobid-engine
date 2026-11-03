@@ -166,7 +166,8 @@ func (s Spec) WithWideTable(code string, cols, rows int) Spec {
 func Ready(t testing.TB, d *db.DB, spec Spec) *Proposal {
 	t.Helper()
 	ctx := context.Background()
-	task, err := d.CreateTask(ctx, db.CreateTaskInput{Name: spec.Name, Goal: "技术标导出"})
+	// 导出夹具构造的是不含故事板的旧基线标书。
+	task, err := d.CreateTask(ctx, db.CreateTaskInput{Name: spec.Name, Goal: "技术标导出", LegacyWriting: true})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

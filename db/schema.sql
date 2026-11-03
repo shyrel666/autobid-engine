@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- Planner 心跳间隔（秒）；执行层下限/默认 600（§2.3）。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_heartbeat_seconds INT NOT NULL DEFAULT 600
     CHECK (plan_heartbeat_seconds >= 0);
+-- D3 句子级落证门禁是否强制启用：新任务默认 true；加列时已有任务填 false，保持原有"有故事板或核验记录才启用"的行为。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS grounded_writing_required BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE tasks ALTER COLUMN grounded_writing_required SET DEFAULT true;
 DROP TRIGGER IF EXISTS trg_tasks_upd ON tasks;
 CREATE TRIGGER trg_tasks_upd BEFORE UPDATE ON tasks
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();

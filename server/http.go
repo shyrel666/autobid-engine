@@ -412,6 +412,8 @@ type createTaskReq struct {
 	SourceTaskIDs        []int64    `json:"source_task_ids"`
 	LLMProfileIDs        []int64    `json:"llm_profile_ids"`
 	Start                bool       `json:"start"`
+	// LegacyWriting 显式关闭 D3 强制门禁（默认 false，即新任务强制启用），结果记录在任务的 grounded_writing_required 上。
+	LegacyWriting bool `json:"legacy_writing"`
 }
 
 func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
@@ -429,7 +431,8 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := db.CreateTaskInput{Name: req.Name, Description: req.Description, Goal: req.Goal,
-		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds, SourceTaskIDs: req.SourceTaskIDs}
+		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds, SourceTaskIDs: req.SourceTaskIDs,
+		LegacyWriting: req.LegacyWriting}
 	for _, s := range req.Scopes {
 		if strings.TrimSpace(s.TenderNo) == "" {
 			fail(w, badRequest("scope tender_no is required"))

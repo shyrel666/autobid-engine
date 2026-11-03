@@ -77,10 +77,12 @@ func DetectOffice(ctx context.Context, opt OfficeOptions) (Office, error) {
 		opt.Timeout = 3 * time.Minute
 	}
 	var reasons []string
+	installed := false
 	for _, name := range order {
 		// 自检用独立上限：作业超时配置得很短时（如故障演练），不应让引擎在启动时被判为不可用。
 		o, err := newOffice(name, max(opt.Timeout, selfTestTimeout))
 		if err == nil {
+			installed = true
 			err = selfTestOffice(ctx, o)
 		}
 		if err == nil {
@@ -88,6 +90,10 @@ func DetectOffice(ctx context.Context, opt OfficeOptions) (Office, error) {
 			return o, nil
 		}
 		reasons = append(reasons, name+": "+err.Error())
+	}
+	if !installed {
+		// 没有任何候选安装：与“已安装但自检失败”区分（运行能力状态为 unconfigured）。
+		return nil, fmt.Errorf("%w: %w: %s", ErrOfficeUnavailable, ErrNotInstalled, strings.Join(reasons, "; "))
 	}
 	return nil, fmt.Errorf("%w: %s", ErrOfficeUnavailable, strings.Join(reasons, "; "))
 }

@@ -11,6 +11,7 @@ package export
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/db/dbtest"
 	"github.com/autobid/autobid-engine/ingest"
+	"github.com/autobid/autobid-engine/toolhealth"
 )
 
 func requireOffice(t *testing.T) Office {
@@ -395,6 +397,39 @@ func TestMMDCRendersGantt(t *testing.T) {
 	if err != nil || len(png) < 100 {
 		t.Fatalf("mmdc render: %v", err)
 	}
+	if m.Version() == "" || rendererVersion(m) == "" {
+		t.Fatalf("mmdc version not detected: %q", m.Version())
+	}
+	if err := RendererSelfTest(context.Background(), m); err != nil {
+		t.Fatalf("mmdc self-test: %v", err)
+	}
+}
+
+type failingRenderer struct{ err error }
+
+func (failingRenderer) Name() string { return "failing" }
+func (f failingRenderer) RenderPNG(context.Context, string) ([]byte, error) {
+	return nil, f.err
+}
+
+// 自检用真实生成器构造中文架构图与甘特图；渲染失败或输出不是 PNG 时自检失败，未安装与自检失败分别记录。
+func TestRendererSelfTestAndProbeStates(t *testing.T) {
+	if err := RendererSelfTest(context.Background(), stubRenderer{}); err != nil {
+		t.Fatalf("stub self-test: %v", err)
+	}
+	if err := RendererSelfTest(context.Background(), failingRenderer{errors.New("chrome crashed")}); err == nil {
+		t.Fatal("failing renderer passed the self-test")
+	}
+	reg := toolhealth.New()
+	recordProbe(reg, toolhealth.Mermaid, toolhealth.Result{Provider: "mmdc"}, 0, fmt.Errorf("%w: %w: not on PATH", ErrRendererMissing, ErrNotInstalled))
+	recordProbe(reg, toolhealth.Office, toolhealth.Result{}, 0, fmt.Errorf("%w: wps: self-test PDF TOC check failed", ErrOfficeUnavailable))
+	if st := reg.Get(toolhealth.Mermaid); st.State != toolhealth.Unconfigured {
+		t.Fatalf("mermaid = %+v", st)
+	}
+	if st := reg.Get(toolhealth.Office); st.State != toolhealth.SelfTestFailed {
+		t.Fatalf("office = %+v", st)
+	}
+	recordProbe(nil, toolhealth.Office, toolhealth.Result{}, 0, nil) // 未注入注册表时不报错
 }
 
 // 上传的客户模板（无 {{content}} 占位、标题样式 ID 为 "1" / "2"、缺少题注样式）经文档引擎刷新后，目录页码与版式同样一致。
@@ -459,4 +494,67 @@ func customerTemplate(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// 真实 mmdc 渲染的中文架构图、甘特图、组织图插入成稿，经文档引擎刷新后回读 PDF：无版式问题、三张图都在、目录页码一致，
+// 运行能力状态在成功调用后保持 healthy。依赖 mmdc 与文档引擎，缺一则跳过。
+func TestExportWithRealMermaidCharts(t *testing.T) {
+	m, err := DetectMMDC()
+	if err != nil {
+		t.Skipf("依赖缺失：mermaid-cli 未配置：%v", err)
+	}
+	d := dbtest.Open(t)
+	office := requireOffice(t)
+	ctx := context.Background()
+	p := dbtest.Ready(t, d, dbtest.DefaultSpec(20))
+	health := toolhealth.New()
+	health.Record(toolhealth.Mermaid, toolhealth.Result{Provider: "mmdc", Version: m.Version()}, 0, nil)
+	health.Record(toolhealth.Office, toolhealth.Result{Provider: office.Name(), Engine: office.Name(), Version: office.Version()}, 0, nil)
+	svc := &Service{DB: d, Store: &Store{Root: t.TempDir()}, Renderer: m, Office: office, Health: health}
+	specs := []struct{ code, typ, title, raw string }{
+		{"1.1", db.ChartArchitecture, "系统总体架构图", `{"layers":[{"name":"感知层","nodes":["高清摄像机","门禁控制器","环境传感器"]},{"name":"平台层","nodes":["视频管理平台","统一运维平台"]},{"name":"应用层","nodes":["指挥调度","数据分析"]}],"edges":[{"from":"高清摄像机","to":"视频管理平台","label":"RTSP"},{"from":"统一运维平台","to":"指挥调度"}]}`},
+		{"5", db.ChartGantt, "实施进度甘特图", `{"start":"2026-11-01","tasks":[{"id":"t1","name":"需求调研","phase":"准备阶段","days":10},{"id":"t2","name":"设备采购","after":"t1","days":30},{"id":"t3","name":"安装调试","phase":"实施阶段","after":"t2","days":40},{"name":"试运行","after":"t3","days":20},{"name":"竣工验收","phase":"验收阶段","days":10,"milestone":true}]}`},
+		{"6", db.ChartOrg, "项目组织架构图", `{"nodes":[{"id":"pm","name":"项目经理","person":"张三"},{"id":"tech","name":"技术组","parent":"pm"},{"id":"qa","name":"质量组","parent":"pm"},{"id":"ops","name":"运维组","parent":"pm"}]}`},
+	}
+	for _, s := range specs {
+		c, err := svc.GenerateChart(ctx, db.DefaultTenant, p.TaskID, "writer", ChartRequest{SectionID: p.Sections[s.code], ChartType: s.typ, Title: s.title, Spec: []byte(s.raw)})
+		if err != nil || c.RenderStatus != db.ChartRendered || c.RenderFormat != db.ChartFormatPNG || c.WidthPx < 100 {
+			t.Fatalf("real mmdc chart %s: %v %+v", s.typ, err, c)
+		}
+		t.Logf("%s: %dx%d px, %d bytes", s.typ, c.WidthPx, c.HeightPx, c.ArtifactSize)
+	}
+	jobs, _, err := d.CreateExportJobs(ctx, db.DefaultTenant, p.TaskID, "exporter", db.CreateExportInput{Formats: []string{db.ExportPDF}, DefaultTemplateHash: DefaultTemplateHash()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runAll(t, &Runner{Service: svc, Owner: "real-mmdc", Lease: 5 * time.Minute, TaskID: p.TaskID})
+	j := reloadJob(t, d, p.TaskID, jobs[0].ID)
+	if j.Status != db.ExportSucceeded || !j.TOCRefreshed {
+		t.Fatalf("export = %s: %s", j.Status, j.Error)
+	}
+	for _, w := range j.Warnings {
+		t.Errorf("warning %s: %s", w.Kind, w.Message)
+	}
+	tpl, _ := DefaultTemplate()
+	rep, err := CheckPDF(artifact(t, svc, j), tpl.Geometry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, is := range rep.Issues {
+		t.Errorf("PDF issue (page %d) %s: %s", is.Page, is.Kind, is.Detail)
+	}
+	if rep.Images != len(specs) {
+		t.Fatalf("PDF has %d images, want %d", rep.Images, len(specs))
+	}
+	for i, e := range rep.TOC {
+		if e.Listed != e.Actual || e.Actual == 0 {
+			t.Fatalf("PDF TOC[%d] = %+v", i, e)
+		}
+	}
+	for _, c := range []toolhealth.Capability{toolhealth.Mermaid, toolhealth.Office} {
+		if st := health.Get(c); st.State != toolhealth.Healthy {
+			t.Fatalf("%s after successful use = %+v", c, st)
+		}
+	}
+	t.Logf("PDF: %d pages, landscape %v, %d images, engine %s", rep.Pages, rep.Landscape, rep.Images, office.Version())
 }

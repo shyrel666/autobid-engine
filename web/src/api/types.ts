@@ -1127,6 +1127,16 @@ export interface ExportStatus {
 
 export interface ExportWarning { kind: string; message: string; section_id?: number; chart_id?: number }
 
+/** 本机运行能力（GET /api/runtime/tools，与 Agent 工具 tool_runtime_status 同源）。 */
+export type RuntimeCapability = 'office' | 'mermaid' | 'ocr' | 'enhanced_pdf' | 'embedding' | 'reranker'
+export type RuntimeState = 'unconfigured' | 'starting' | 'healthy' | 'degraded' | 'self_test_failed'
+export interface RuntimeCapabilityStatus {
+  capability: RuntimeCapability; label: string; state: RuntimeState; available: boolean
+  provider?: string; engine?: 'wps' | 'word'; version?: string
+  checked_at?: string; duration_ms?: number; failed_at?: string
+  reason?: string; impact?: string; next_action?: string
+}
+
 export interface ExportTemplate {
   id: number; name: string; file_name: string; sha256: string; size: number
   meta: { page_width_mm?: number; page_height_mm?: number; margins_mm?: number[]; has_content_placeholder?: boolean; missing_styles?: string[] }

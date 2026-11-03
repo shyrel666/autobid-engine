@@ -19,7 +19,7 @@ func TestBuildChartSource(t *testing.T) {
 		{db.ChartArchitecture, `{"layers":[{"name":"感知层","nodes":["摄像机","门禁"]},{"name":"平台层","nodes":["视频\"平台\""]}],"edges":[{"from":"摄像机","to":"视频\"平台\"","label":"RTSP"}]}`,
 			[]string{"flowchart TB", `subgraph L1["感知层"]`, `n3["视频#quot;平台#quot;"]`, `n1 -->|"RTSP"| n3`}},
 		{db.ChartGantt, `{"start":"2026-11-01","tasks":[{"id":"t1","name":"调研: 需求","phase":"准备","days":10},{"name":"实施","after":"t1","days":30},{"name":"验收","milestone":true,"days":0}]}`,
-			[]string{"gantt", "dateFormat YYYY-MM-DD", "section 准备", "调研： 需求 : t1, 2026-11-01, 10d", "实施 : after t1, 30d", "验收 : milestone, 0d"}},
+			[]string{"gantt", "dateFormat YYYY-MM-DD", "todayMarker off", "section 准备", "调研： 需求 : t1, 2026-11-01, 10d", "实施 : after t1, 30d", "验收 : milestone, 0d"}},
 		{db.ChartOrg, `{"nodes":[{"id":"pm","name":"项目经理","person":"张三"},{"id":"dev","name":"开发组","parent":"pm"}]}`,
 			[]string{"flowchart TD", `o1["项目经理<br/>张三"]`, "o1 --> o2"}},
 	}

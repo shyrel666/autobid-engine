@@ -12,12 +12,13 @@ import (
 	"time"
 )
 
-// runWithTimeout 运行子进程；超时或 ctx 取消时杀掉整个进程树。
-func runWithTimeout(ctx context.Context, timeout time.Duration, dir, name string, args ...string) (string, string, error) {
+// runWithTimeout 运行子进程（env 为 nil 时继承当前环境）；超时或 ctx 取消时杀掉整个进程树。
+func runWithTimeout(ctx context.Context, timeout time.Duration, dir string, env []string, name string, args ...string) (string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	prepareTree(cmd)

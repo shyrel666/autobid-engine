@@ -288,3 +288,44 @@ func ModelsFromEnv() (db.Embedder, Reranker, error) {
 	}
 	return emb, rank, nil
 }
+
+// SelfTestEmbedder embeds one fixed short text and checks the vector size against the configured dimension.
+func SelfTestEmbedder(ctx context.Context, e db.Embedder) error {
+	if e == nil {
+		return fmt.Errorf("embedding model is not configured")
+	}
+	vs, err := e.Embed(ctx, []string{"招标文件技术要求自检"})
+	if err != nil {
+		return fmt.Errorf("self-test embed: %w", err)
+	}
+	if len(vs) != 1 || len(vs[0]) == 0 {
+		return fmt.Errorf("self-test embed: got %d vectors", len(vs))
+	}
+	if m, ok := e.(*HTTPModel); ok && m.Dimension > 0 && len(vs[0]) != m.Dimension {
+		return fmt.Errorf("self-test embed: vector has %d dimensions, configured %d", len(vs[0]), m.Dimension)
+	}
+	for _, x := range vs[0] {
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return fmt.Errorf("self-test embed: non-finite vector value")
+		}
+	}
+	return nil
+}
+
+// SelfTestReranker ranks two fixed passages and checks that the relevant one scores higher.
+func SelfTestReranker(ctx context.Context, r Reranker) error {
+	if r == nil {
+		return fmt.Errorf("reranker is not configured")
+	}
+	scores, err := r.Rank(ctx, "视频监控摄像机分辨率", []string{"本项目采购的视频监控摄像机分辨率不低于400万像素。", "投标保证金应在截止时间前缴纳。"})
+	if err != nil {
+		return fmt.Errorf("self-test rerank: %w", err)
+	}
+	if len(scores) != 2 {
+		return fmt.Errorf("self-test rerank: got %d scores for 2 passages", len(scores))
+	}
+	if scores[0] <= scores[1] {
+		return fmt.Errorf("self-test rerank: relevant passage scored %.4f, unrelated %.4f", scores[0], scores[1])
+	}
+	return nil
+}

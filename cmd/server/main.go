@@ -13,7 +13,10 @@
 //	AUTOBID_FILEWORK_DIR   原件内容寻址存储目录，默认 data/filework（已加入 .gitignore）
 //	AUTOBID_OFFICE_ENGINE  导出文档引擎：auto（默认，WPS 优先、Word 备选）/ wps / word；启动时用小样本实际刷新自检
 //	AUTOBID_OFFICE_TIMEOUT_SECONDS  文档引擎单次刷新超时（默认 180）；同一引擎同一时间只处理一个文档
-//	AUTOBID_MMDC_PATH      mermaid-cli（mmdc）路径；未设置时查 PATH，均不可用时图表为 unrendered
+//	AUTOBID_MMDC_PATH      mermaid-cli（mmdc 或其 cli.js）路径；未设置时查 PATH，均不可用或自检失败时图表为 unrendered
+//	AUTOBID_MMDC_BROWSER   mmdc 使用的本机 Chrome / Chromium 可执行文件（puppeteer executablePath）
+//	AUTOBID_MMDC_TIMEOUT_SECONDS / AUTOBID_MMDC_CONCURRENCY  单次渲染超时（默认 90）与并发上限（默认 2）
+//	运行能力（文档引擎、mmdc、OCR、embedding、reranker）在启动时用固定小样本实际自检，状态见 GET /api/runtime/tools
 //	模型密钥优先使用 Profile 加密保存的 Key，否则按 api_key_env 读取环境变量。
 package main
 
@@ -41,6 +44,7 @@ import (
 	"github.com/autobid/autobid-engine/intercept"
 	"github.com/autobid/autobid-engine/internal/harness"
 	"github.com/autobid/autobid-engine/server"
+	"github.com/autobid/autobid-engine/toolhealth"
 )
 
 func main() {
@@ -116,12 +120,15 @@ func run(logger *slog.Logger) error {
 	if exportDir == "" {
 		exportDir = "data/exports"
 	}
-	// 启动时探测文档引擎（WPS / Word，含自检）与 mermaid-cli 并记日志；不可用时 PDF 任务明确失败、DOCX 标注目录页码未刷新。
-	exporter := export.NewServiceFromEnv(pg, exportDir, logger)
+	// 启动时并行自检文档引擎（WPS / Word）与 mermaid-cli 并记日志；不可用时 PDF 任务明确失败、DOCX 标注目录页码未刷新，
+	// 图表保持 unrendered。OCR / embedding / reranker 在后台自检（见下方 ProbeRuntime）。
+	runtimeHealth := toolhealth.New()
+	exporter := export.NewServiceFromEnv(pg, exportDir, logger, runtimeHealth)
 	svc := server.NewLLMService(pg, server.LLMServiceConfig{
 		MultiRetrieval: envBool("AUTOBID_RETRIEVAL_MULTI_AGENT"),
 		Retrieval:      retriever,
 		Charts:         exporter,
+		Runtime:        runtimeHealth,
 		OnActivity:     func(_ int64, a db.Activity) { hub.Publish(a) },
 		OnLedgerErr:    func(err error) { logger.Warn("llm ledger write failed", "err", err) },
 		RecordBodies:   recordBodies.Load,
@@ -171,6 +178,7 @@ func run(logger *slog.Logger) error {
 	// 4. HTTP/SSE 控制面。WriteTimeout 为 0：SSE 是长连接，单个处理器自行控制生命周期。
 	// 扫描件 OCR：AUTOBID_OCR_URL（HTTP 服务）→ PATH 中的 tesseract → 不可用（扫描件上传返回 422）。
 	ocr := ingest.DefaultOCR()
+	server.ProbeRuntime(engineCtx, runtimeHealth, ocr, embedding, reranker)
 	// 导出执行者：先回收租约已过期的 running 任务（上次进程中断），再轮询 queued 任务。
 	runner := &export.Runner{Service: exporter, Owner: fmt.Sprintf("%s/%d", hostname, os.Getpid()), Logger: logger,
 		Workers: envInt("AUTOBID_EXPORT_WORKERS", 2),
@@ -227,7 +235,7 @@ func run(logger *slog.Logger) error {
 		close(fileRunnerDone)
 	}
 	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
-		Retrieval: retriever, Export: exporter, ExportRunner: runner, FileStore: fileStore, FileRunner: fileRunner})
+		Retrieval: retriever, Export: exporter, ExportRunner: runner, FileStore: fileStore, FileRunner: fileRunner, Runtime: runtimeHealth})
 	go api.RunSectionJobs(engineCtx)
 	srv := &http.Server{
 		Addr:              addr,

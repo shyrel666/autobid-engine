@@ -50,7 +50,7 @@ func newOffice(name string, timeout time.Duration) (officeEngine, error) {
 		return nil, fmt.Errorf("unknown document engine %q", name)
 	}
 	if !progIDRegistered(eng.progID) {
-		return nil, fmt.Errorf("%s is not installed (COM class %s is not registered)", eng.label, eng.progID)
+		return nil, fmt.Errorf("%w: %s (COM class %s is not registered)", ErrNotInstalled, eng.label, eng.progID)
 	}
 	ps := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 	if st, err := os.Stat(ps); err != nil || st.IsDir() {
@@ -119,7 +119,7 @@ func (o *comOffice) Refresh(ctx context.Context, inDocx, outDocx, outPDF string)
 		args = append(args, "-OutPdf", outPDF)
 	}
 	started := time.Now()
-	_, stderr, runErr := runWithTimeout(ctx, o.timeout, dir, o.ps, args...)
+	_, stderr, runErr := runWithTimeout(ctx, o.timeout, dir, nil, o.ps, args...)
 	raw, readErr := os.ReadFile(result)
 	if runErr != nil || readErr != nil {
 		// 脚本没有走到自己的清理步骤：结束本次开始后启动的自动化进程。
@@ -167,5 +167,5 @@ func (o *comOffice) sweep(since time.Time) {
 		`Where-Object { [string]$_.CommandLine -match '/Automation|-Embedding' -and $_.CreationDate -ge $since } | `+
 		`ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
 		since.Add(-2*time.Second).Format("2006-01-02T15:04:05"), o.eng.image)
-	_, _, _ = runWithTimeout(context.Background(), 30*time.Second, "", o.ps, "-NoProfile", "-NonInteractive", "-Command", cmd)
+	_, _, _ = runWithTimeout(context.Background(), 30*time.Second, "", nil, o.ps, "-NoProfile", "-NonInteractive", "-Command", cmd)
 }

@@ -127,6 +127,12 @@ if defined AB_BUILD_ONLY (
     exit /b 0
 )
 
+rem 本机运行组件（见 docs/LOCAL_RUNTIME.md）：已按 tools\mermaid-cli 安装 Mermaid-CLI 时自动使用，浏览器用本机 Chrome / Edge。
+set "AB_MMDC=%CD%\tools\mermaid-cli\node_modules\@mermaid-js\mermaid-cli\src\cli.js"
+if not defined AUTOBID_MMDC_PATH if exist "%AB_MMDC%" set "AUTOBID_MMDC_PATH=%AB_MMDC%"
+if not defined AUTOBID_MMDC_BROWSER if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "AUTOBID_MMDC_BROWSER=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+if not defined AUTOBID_MMDC_BROWSER if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" set "AUTOBID_MMDC_BROWSER=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
+
 if not defined AUTOBID_HTTP_ADDR set "AUTOBID_HTTP_ADDR=127.0.0.1:8080"
 if not defined AUTOBID_WEB_DIR set "AUTOBID_WEB_DIR=%CD%\web\dist"
 if not exist "%AUTOBID_WEB_DIR%\index.html" (

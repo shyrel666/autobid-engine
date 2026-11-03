@@ -43,3 +43,6 @@ Thumbs.db
 /d3-artifacts/
 /D3_ACCEPTANCE_REPORT.md
 /d3-acceptance-report.json
+
+# Local runtime components (installed from the pinned manifests under tools/, see docs/LOCAL_RUNTIME.md)
+/tools/mermaid-cli/node_modules/

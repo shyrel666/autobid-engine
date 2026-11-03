@@ -21,6 +21,8 @@ type PlannerConfig struct {
 	KillWork   func(intentID int64) error
 	SteerWork  func(intentID int64, msg string) error
 	Hooks      harness.HookRunner
+	// ExtraTools 是宿主装配的只读业务工具（如 tool_runtime_status），终局轮同样可用；不得装配提交或审批类工具。
+	ExtraTools []tool.CoreTool
 }
 
 // Planner 每轮新建会话；跨轮连续性依赖“图 + 触发事件 + 共享 TodoStore”（§2.4）。
@@ -89,7 +91,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		Provider:     p.cfg.Provider,
 		Model:        p.cfg.Model,
 		SystemPrompt: plannerSystem(clock.Final),
-		Tools:        set.plannerTools(todos, clock.Final),
+		Tools:        append(set.plannerTools(todos, clock.Final), p.cfg.ExtraTools...),
 		MaxTurns:     p.cfg.MaxTurns,
 		MaxTokens:    p.cfg.MaxTokens,
 		Hooks:        p.cfg.Hooks,

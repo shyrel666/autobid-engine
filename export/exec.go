@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/toolhealth"
 )
 
 // ---------------------------------------------------------------------------
@@ -161,8 +162,12 @@ func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob)
 			outDocx, outPDF = "", filepath.Join(work, "out.pdf")
 		}
 		if _, err := s.Office.Refresh(ctx, draft, outDocx, outPDF); err != nil {
+			if ctx.Err() == nil { // 取消 / 租约丢失不算引擎故障
+				s.Health.Degrade(toolhealth.Office, err)
+			}
 			return nil, err
 		}
+		s.Health.Recover(toolhealth.Office)
 		out := outDocx
 		if outPDF != "" {
 			out = outPDF

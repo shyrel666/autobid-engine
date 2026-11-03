@@ -28,6 +28,7 @@ import (
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/intercept"
 	"github.com/autobid/autobid-engine/retrieval"
+	"github.com/autobid/autobid-engine/toolhealth"
 )
 
 type APIConfig struct {
@@ -54,6 +55,8 @@ type APIConfig struct {
 	FileRunner *filework.Runner
 	// ExportRunner 非空时创建导出任务后立即唤醒执行者（否则等待其轮询）。
 	ExportRunner *export.Runner
+	// Runtime 是本机运行能力状态（GET /api/runtime/tools）；为 nil 时按 Export 现状生成，其余能力记为未配置。
+	Runtime *toolhealth.Registry
 }
 
 type API struct {
@@ -81,6 +84,9 @@ func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *
 	}
 	if cfg.Evidence == nil {
 		cfg.Evidence = evidence.FromEnv()
+	}
+	if cfg.Runtime == nil {
+		cfg.Runtime = fallbackRuntime(cfg.Export)
 	}
 	return &API{runCtx: runCtx, m: m, e: e, llm: svc, ic: ic, hub: hub, pg: m.DB(), cfg: cfg, sectionJobSlots: make(chan struct{}, 4)}
 }
@@ -170,6 +176,7 @@ func (a *API) Handler() http.Handler {
 	a.registerComplianceRoutes(mux)
 	// Phase 6B：章节图表（server/charts.go）与锁定版本导出（server/export.go）
 	a.registerChartRoutes(mux)
+	a.registerRuntimeRoutes(mux)
 	a.registerExportRoutes(mux)
 	// D3：章节故事板（Pink Team 评审）、受控引用渲染与句子级写作核验（server/d3.go）
 	a.registerD3Routes(mux)

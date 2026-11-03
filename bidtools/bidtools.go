@@ -11,6 +11,7 @@ import (
 	"github.com/autobid/autobid-engine/export"
 	"github.com/autobid/autobid-engine/internal/tool"
 	"github.com/autobid/autobid-engine/retrieval"
+	"github.com/autobid/autobid-engine/toolhealth"
 )
 
 // 常驻工具名。
@@ -46,6 +47,7 @@ type Kit struct {
 	retrieval *retrieval.Service
 	research  *retrieval.Coordinator
 	charts    *export.Service
+	runtime   *toolhealth.Registry
 }
 
 func (k *Kit) WithRetrieval(s *retrieval.Service) *Kit { k.retrieval = s; return k }

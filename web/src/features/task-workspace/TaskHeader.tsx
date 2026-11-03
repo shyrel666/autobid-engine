@@ -10,6 +10,7 @@ import { linkProps } from '../../lib/router'
 import { TASK_NAV, navGroupOf, taskUrl } from '../../lib/routes'
 import type { TaskPage } from '../../lib/routes'
 import { useTaskWorkspace } from './TaskWorkspaceProvider'
+import { RuntimeIndicator } from '../runtime/RuntimeStatus'
 
 export function RunStatusBadge({ task }: { task: Pick<Task, 'status' | 'paused' | 'queued'> }) {
   const paused = task.paused && task.status !== 'paused'
@@ -273,6 +274,7 @@ export default function TaskHeader({ page }: { page: TaskPage }) {
         {t && <RunStatusBadge task={t} />}
         {t?.settling && <Badge tone="purple">收尾中</Badge>}
         <span className="flex-1" />
+        <RuntimeIndicator />
         {t && <TaskLLMControl task={t} />}
         {t && <ExecutionMenu task={t} />}
       </div>

@@ -3,10 +3,10 @@
 package export
 
 import (
-	"errors"
+	"fmt"
 	"time"
 )
 
 func newOffice(string, time.Duration) (officeEngine, error) {
-	return nil, errors.New("WPS / Word COM automation requires Windows")
+	return nil, fmt.Errorf("%w: WPS / Word COM automation requires Windows", ErrNotInstalled)
 }

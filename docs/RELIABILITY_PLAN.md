@@ -62,6 +62,6 @@ R1 核心实现已经落地，**全量 E 验收仍未通过**。R2 已补对象�
 | 前端 `npm --prefix web run build` | 通过；保留既有 bundle 大于 500 kB 提示 |
 | 前端 `npm --prefix web run test:unit` | 15/15 通过 |
 
-R1 由此满足本文件的 E 标准并勾选。R2 显式质量策略与可信身份、R3、R4 仍未完成；目标环境 Windows Server 上的导出尚未验收。
+R1 由此满足本文件的 E 标准并勾选。R2 显式质量策略与可信身份、R3、R4 仍未完成；运行与验收环境以本机为准。
 
 原始日志在 Git 忽略的 `data/office-engine-checks/`：`vet.log`、`race.jsonl`、`race.stderr`。下一步按 R2 → R3 → R4 继续；真实企业材料与外部评审仍待补齐。

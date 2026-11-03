@@ -11,6 +11,7 @@ import type {
 } from '../../../api/types'
 import { Badge, Button, Card, Empty, ErrorBanner, Field, IconButton, Input, Modal, Notice, Pre, Select, Spinner, TextArea, cx, useConfirm, useToast } from '../../../components/ui'
 import BlockerList from '../../task-workspace/BlockerList'
+import { RuntimeNotice } from '../../runtime/RuntimeStatus'
 import type { Tone } from '../../../components/ui'
 import { useAsync, useInterval } from '../../../hooks/useAsync'
 import {
@@ -290,6 +291,7 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
                 创建导出时在同一数据库事务内固化章节修订、图表与偏离表快照，之后再编辑不影响该次导出。</p>
               : <BlockerList taskId={taskID} blockers={r.blockers} />}
             <Warnings list={warnings} />
+            <RuntimeNotice capabilities={['office', 'mermaid']} />
             {p && <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
               <span>文档引擎：{p.status.office ? <span className="text-emerald-700">{p.status.office_version || p.status.office_engine}</span> : <span className="text-red-600">不可用（PDF 将失败，DOCX 目录页码不刷新）</span>}</span>
               <span>mermaid-cli：{p.status.renderer ? <span className="text-emerald-700">可用</span> : <span className="text-amber-700">不可用（图表为源码占位）</span>}</span>

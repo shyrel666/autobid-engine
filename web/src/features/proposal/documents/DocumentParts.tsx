@@ -5,6 +5,7 @@ import type { DocumentChunk, DocumentWithChunks, UploadArchiveResp, UploadDocume
 import { TableView } from '../../../components/TableView'
 import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Select, Tabs, TextArea, cx, useToast } from '../../../components/ui'
 import { docFormatLabel, docRoleLabel, fmtNum, fmtTime, pageRange } from '../../../lib/format'
+import { RuntimeNotice } from '../../runtime/RuntimeStatus'
 
 const MAX_TEXT_BYTES = 32 << 20 // 与后端 maxDocumentBody 一致（JSON 文本上传）
 const MAX_FILE_BYTES = 64 << 20 // 与后端 maxUploadBytes 一致（multipart 文件上传）
@@ -99,6 +100,7 @@ export function UploadCard({ taskID, onUploaded, bare, dirtyRef }:
             {file ? <span className="font-medium text-slate-700">{file.name}（{fmtNum(Math.round(file.size / 1024))} KB）</span> : <span>点击选择或拖入文件</span>}
             <span className="text-xs text-slate-400">.docx 按标题样式分级并还原合并单元格表格；.pdf 还原页码范围与跨页表格；扫描件经服务端 OCR（未配置时返回 422）</span>
           </button>
+          <RuntimeNotice capabilities={['ocr']} className="mt-2" />
         </div>
       ) : (
         <div className="mt-3">

@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -147,5 +148,59 @@ func TestModelsFromEnvDashScope(t *testing.T) {
 	t.Setenv("AUTOBID_EMBEDDING_FORMAT", "openai")
 	if _, _, err = ModelsFromEnv(); err == nil {
 		t.Fatal("unsupported format accepted")
+	}
+}
+
+type fixedEmbedder struct {
+	vec []float64
+	err error
+}
+
+func (fixedEmbedder) Model() string { return "fixed@1" }
+func (f fixedEmbedder) Embed(_ context.Context, texts []string) ([][]float64, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([][]float64, len(texts))
+	for i := range out {
+		out[i] = f.vec
+	}
+	return out, nil
+}
+
+type fixedRanker struct{ scores []float64 }
+
+func (fixedRanker) Model() string { return "rank@1" }
+func (f fixedRanker) Rank(context.Context, string, []string) ([]float64, error) {
+	return f.scores, nil
+}
+
+func TestSelfTestModels(t *testing.T) {
+	ctx := context.Background()
+	if err := SelfTestEmbedder(ctx, fixedEmbedder{vec: []float64{0.1, 0.2}}); err != nil {
+		t.Fatalf("embedder: %v", err)
+	}
+	if err := SelfTestEmbedder(ctx, fixedEmbedder{vec: nil}); err == nil {
+		t.Fatal("empty vector accepted")
+	}
+	if err := SelfTestEmbedder(ctx, fixedEmbedder{err: errors.New("HTTP 401")}); err == nil {
+		t.Fatal("provider error accepted")
+	}
+	// 配置维度与实际返回不一致（例如换了模型却没改维度）时自检失败。
+	stub := &dashScopeStub{}
+	server := httptest.NewServer(stub.handler(t))
+	defer server.Close()
+	m := &HTTPModel{URL: server.URL + "/embeddings", Name: "text-embedding-v4", Revision: "r1", Format: "dashscope", Dimension: 1024, MaxBatch: 10}
+	if err := SelfTestEmbedder(ctx, m); err == nil || !strings.Contains(err.Error(), "dimension") {
+		t.Fatalf("dimension mismatch accepted: %v", err)
+	}
+	if err := SelfTestReranker(ctx, fixedRanker{scores: []float64{0.9, 0.1}}); err != nil {
+		t.Fatalf("reranker: %v", err)
+	}
+	if err := SelfTestReranker(ctx, fixedRanker{scores: []float64{0.1, 0.9}}); err == nil {
+		t.Fatal("inverted ranking accepted")
+	}
+	if err := SelfTestReranker(ctx, fixedRanker{scores: []float64{0.9}}); err == nil {
+		t.Fatal("short score list accepted")
 	}
 }

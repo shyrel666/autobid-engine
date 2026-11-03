@@ -3,6 +3,7 @@ import { api, errorText } from '../../../api/client'
 import type { FixedJob, ProcessingFile, TaskMaterial } from '../../../api/processing-types'
 import { Badge, Button, ErrorBanner, Field, Input, Notice, Select } from '../../../components/ui'
 import { useAsync } from '../../../hooks/useAsync'
+import { RuntimeNotice } from '../../runtime/RuntimeStatus'
 
 const materialLabels = { missing: '尚未上传或绑定', unavailable: '原件不可用', processing: '正在处理', review: '待采用修订', not_imported: '尚未正式导入', complete: '已完成' }
 const jobLabels = { queued: '排队中', running: '处理中', succeeded: '处理完成', failed: '失败', cancelled: '已取消' }
@@ -65,6 +66,7 @@ export function FixedWorkflow({ taskId, files, tick, refresh, show }: { taskId: 
     <div className="space-y-2">
       <p className="font-medium">上传原件后处理</p>
       <p className="text-xs text-muted">原件上传完成后可关闭页面。ZIP 在后台展开；其他文件在下方选择导入。单文件上限 64 MiB。</p>
+      <RuntimeNotice capabilities={['ocr']} />
       <input ref={upload} type="file" aria-label="选择后台处理原件" disabled={busy} />
       <Button size="sm" loading={busy} onClick={() => run(async () => {
         const file = upload.current?.files?.[0]; if (!file) throw new Error('请选择文件'); if (file.size > 64 * 1024 * 1024) throw new Error('文件超过 64 MiB')

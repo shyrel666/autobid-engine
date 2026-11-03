@@ -22,6 +22,7 @@ import (
 	"github.com/autobid/autobid-engine/internal/tool"
 	"github.com/autobid/autobid-engine/llmpool"
 	"github.com/autobid/autobid-engine/llmrec"
+	"github.com/autobid/autobid-engine/toolhealth"
 )
 
 // ProviderFactory 按 Profile 构造底层 Provider（未包装计量）。httpClient 已承载该 Profile 的代理、
@@ -97,7 +98,9 @@ type LLMServiceConfig struct {
 	MultiRetrieval bool
 	Retrieval      *retrieval.Service
 	// Charts 为 chart_generate 工具提供图表生成 / 渲染（为 nil 时工具返回未配置）。
-	Charts      *export.Service
+	Charts *export.Service
+	// Runtime 是本机运行能力状态；非 nil 时 Planner 与 Worker 常驻 tool_runtime_status。
+	Runtime     *toolhealth.Registry
 	Factory     ProviderFactory
 	Retry       RetryConfig
 	Planner     agent.PlannerConfig // Provider / KillWork / SteerWork 由服务注入
@@ -339,7 +342,9 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 	if s.cfg.Retrieval != nil {
 		kit.WithResearch(&retrieval.Coordinator{Service: s.cfg.Retrieval, Reasoner: &agent.RetrievalReasoner{Planner: b.plannerRuntime, Worker: b.workerRuntime}, MultiEnabled: s.cfg.MultiRetrieval})
 	}
-	wc.ExtraTools = append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...)
+	kit.WithRuntime(s.cfg.Runtime)
+	pc.ExtraTools = append(append([]tool.CoreTool(nil), pc.ExtraTools...), kit.RuntimeTools()...)
+	wc.ExtraTools = append(append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...), kit.RuntimeTools()...)
 	wc.Deferred = append(append([]tool.CoreTool(nil), wc.Deferred...), kit.DeferredTools()...)
 	wc.Skills = append(append([]tool.Skill(nil), wc.Skills...), bidtools.Skills()...)
 	b.pl, b.wk = agent.NewPlanner(pc), agent.NewWorker(wc)

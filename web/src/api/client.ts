@@ -12,6 +12,7 @@ import type {
   RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionDetail, BidScopeInput, VetoStatus, SectionWriteJob,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
   ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
+  RuntimeCapability, RuntimeCapabilityStatus,
   LLMSettings, LLMPoolStatus, LLMProfileInput, LLMTestResult, LLMRecordDetail, LLMRecordsResp, SystemCatalog, AgentRoleKey, TaskGraph,
   CompanyPerformance, EvidenceOriginal, EvidenceBinding, AdmissibilityRun, AdmissibilityDecision,
   Commitment, CommitmentInput, BidQuote, BidQuoteValidation, ObjectiveScoreRun,
@@ -360,6 +361,8 @@ export const api = {
   exportJobs: (id: number) => get<{ jobs: ExportJob[] }>(`${t(id)}/exports`),
   downloadExport: (id: number, jobID: number) => blob(`${t(id)}/exports/${jobID}/download`),
   exportTemplates: () => get<{ templates: ExportTemplate[]; default_template_hash: string }>('/api/export/templates'),
+  runtimeTools: (capability?: RuntimeCapability) =>
+    get<{ capabilities: RuntimeCapabilityStatus[]; now: string }>(`/api/runtime/tools${qs({ capability })}`),
   uploadTemplate: (file: File, name: string) => json<ExportTemplate>('POST', '/api/export/templates', formData({ name }, file)),
   deleteTemplate: (templateID: number) => del(`/api/export/templates/${templateID}`),
   defaultTemplate: () => blob('/api/export/templates/default/file'),

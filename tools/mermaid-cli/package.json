@@ -1,0 +1,9 @@
+{
+  "name": "autobid-mermaid-runtime",
+  "private": true,
+  "description": "本机图表渲染运行组件（固定版本）。安装见 docs/LOCAL_RUNTIME.md；浏览器使用本机 Chrome，安装时设置 PUPPETEER_SKIP_DOWNLOAD=true。",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "11.17.0",
+    "puppeteer": "25.13.0"
+  }
+}

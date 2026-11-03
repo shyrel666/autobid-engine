@@ -33,7 +33,7 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 | 3 | 编写章节 | 依赖门禁、单次 LLM 调用（测试用替身 Writer）；章节故事板、受控引用标记 `[[EVID:...]] / [[KB:...]] / [[COMMIT:...]]` 确定性展开、句子级断言落证门禁与针对性/套话度 E 级指标（2026-11-01，E） | 尚未在合作企业真实原件与外部专家盲评上完成 V 级验证 → D3（V） |
 | 5 | 草稿、修订与确认 | 乐观锁、批准绑定版本、自动撤销、回滚；故事板粉队评审与章节红队定稿的撰写人/评审人分离门禁（2026-11-01，E） | 尚未经过外部盲评与回测验证 → D3（V）、D5 |
 | 6 | 一致性与逐条响应 | 双层矩阵；实质响应以关键词二元组覆盖率（≥ 45%）加数值、否定等字面规则判定；技术标章节之间做数值比对 | 判据是字面覆盖，而不是得分点；只比较技术标内部，不比商务响应、报价、承诺函和人员表；没有承诺台账 → D2、D4 |
-| 7 | 图表 | 结构化规格 → Mermaid / 设备表；mmdc 渲染未验证 | 延后（见第五节） |
+| 7 | 图表 | 结构化规格 → Mermaid / 设备表；本机 Mermaid-CLI 11.17.0 真实渲染中文架构图 / 甘特图 / 组织图，并插入导出回读无版式问题（2026-11-03，E，[`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S1） | 异步渲染作业与两条写作路径产图在该计划 S3；图表内容是否正确未经外部评审 |
 | 8 | 套模板导出 | 锁定快照、刷新目录、版式回读自检 | 没有评分索引表和证明材料页码；模板作者字段写死；没有在任何交易平台的投标文件制作工具中验证过导入 → D4 |
 | 10 | 多租户与 RBAC | 未实施 | 范围不变，是多企业部署的前置条件（Phase 7） |
 
@@ -49,7 +49,7 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 ### 1.3 基座的既有边界（仍然有效）
 
 - [ ] E **执行可靠性深化 R1 / 门禁边界 R2**（2026-11-01 进行中）：章节持久化队列、幂等派发、有界并发、租约恢复/取消/暂停围栏、Hint 持久化投递与确认、意图交付物归属校验及章节/要求对象范围检查已落地，详见 [`docs/RELIABILITY_PLAN.md`](docs/RELIABILITY_PLAN.md)。本次真实 PostgreSQL 全量竞态有 310 条测试/子测试通过，当时两个真实导出测试因原导出引擎的本机运行环境故障失败；2026-11-03 改用 WPS 文档引擎后全量竞态 315 条通过、0 失败，R1 已达 E（见可靠性计划复验）。本项因 R2 显式质量策略与可信身份未完成仍不勾选，R3/R4 也未完成；不改变 D0~D5 的 V/P 状态。
-- [ ] E **导出文档引擎替换为 WPS / Word**（2026-11-03 实施）：原导出引擎及其代码、配置、文档与本地诊断文件已全部移除；`export/office.go` 定义文档引擎接口与启动自检，`office_windows.go` + `office_com.ps1` 经 COM 自动化刷新目录、另存 DOCX、导出 PDF，`AUTOBID_OFFICE_ENGINE=auto` 时 WPS 优先、Word 备选；同时校准回读自检（行尾空格、行末压缩标点不算越界）并修正 ★/▲ 字体回退。开发机（Windows 11 + 本机 WPS / Word）实测通过，真实 PostgreSQL 全量竞态 315 条通过、0 失败，两个真实导出用例在 WPS 下通过；目标环境 Windows Server、商业授权与并发尚未验收，详见 [`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) 6.1 / 12.5。
+- [x] E **导出文档引擎替换为 WPS / Word**（2026-11-03 实施，同日随 [`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S1 收口：多作业排队、140 页大文档、WPS 30 次 / Word 15 次连续刷新与中途取消清理均在本机通过，引擎内并发保持 1，真实企业模板待用户提供）：原导出引擎及其代码、配置、文档与本地诊断文件已全部移除；`export/office.go` 定义文档引擎接口与启动自检，`office_windows.go` + `office_com.ps1` 经 COM 自动化刷新目录、另存 DOCX、导出 PDF，`AUTOBID_OFFICE_ENGINE=auto` 时 WPS 优先、Word 备选；同时校准回读自检（行尾空格、行末压缩标点不算越界）并修正 ★/▲ 字体回退。开发机（Windows 11 + 本机 WPS / Word）实测通过，真实 PostgreSQL 全量竞态 315 条通过、0 失败，两个真实导出用例在 WPS 下通过（运行与验收以本机为准），详见 [`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) 6.1 / 12.5。
 
 - [x] E **ARTEX 推演与长文上下文增强**（2026-11-01）：按 [`docs/ARTEX架构技术标系统解析.md`](docs/ARTEX架构技术标系统解析.md) 与 [`docs/implementation_plan.md`](docs/implementation_plan.md) 落地三大运行期机制，验收见 [`docs/walkthrough.md`](docs/walkthrough.md)：① Goals 目标分解器（`db/rfp_goals.go` `BootstrapRFPGoals` 串联要求拆解、`assets` 同步、四大图谱 Goal 根节点 `G-VETO/G-DEVIATION/G-SCORING/G-OUTLINE` 幂等初始化与 `v1 draft` 大纲生成）；② Intent `Mandate` 硬件门禁、确定性 `Watchdog` 跑偏纠偏/熔断（`server/watchdog.go`）与 `AddHint` 锚点事件直通；③ 章节上下文 `UsableEvidence/SpilledEvidence` 分离、`read_chunk` 分页预算与 `prepareContext` 两级 `ToolResult` Spill + 工具回合边界压缩（消除连续工具调用 `413` 崩溃）。不改变 D0~D5 外部验证（V/P）状态。
 
@@ -255,7 +255,7 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 ## 五、明确不做或延后的事（防止变大）
 
 - 不新增功能面：投标日历、客户关系管理、报价优化、竞争对手情报、新的图表类型和导出格式都不做。
-- 延后：多 Agent 生产路由、GraphRAG、mmdc 渲染适配。
+- 延后：多 Agent 生产路由、GraphRAG。（mmdc 渲染已在 [`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S1 本机落地；异步渲染作业属该计划 S3。）
 - 不针对具体评审专家做画像或接触；结果公告中的评审专家名单（87 号令第六十九条第二款）不入库。
 - 不自动绕过官方查询网站的验证码；登记核验通过人工或经授权的接口完成。
 - 不以合成样本、替身模型、开发者自测或使用者自评宣称达到 V 或 P。

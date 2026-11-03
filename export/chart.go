@@ -220,7 +220,8 @@ func ganttMermaid(title string, s *GanttSpec) (string, error) {
 		return "", specErr("start must be YYYY-MM-DD")
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "gantt\n  title %s\n  dateFormat YYYY-MM-DD\n  axisFormat %%m-%%d\n", strings.ReplaceAll(title, "\n", " "))
+	// todayMarker off：不画渲染当天的红线，图表只由规格决定（同一规格任何一天渲染结果相同）。
+	fmt.Fprintf(&b, "gantt\n  title %s\n  dateFormat YYYY-MM-DD\n  axisFormat %%m-%%d\n  todayMarker off\n", strings.ReplaceAll(title, "\n", " "))
 	ids := map[string]bool{}
 	phase := "\x00"
 	for i, t := range s.Tasks {

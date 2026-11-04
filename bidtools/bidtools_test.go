@@ -270,7 +270,7 @@ func TestSkillsUnlockDeferredTools(t *testing.T) {
 		names[d.Name()] = true
 	}
 	skills := Skills()
-	if len(skills) != 7 {
+	if len(skills) != 8 {
 		t.Fatalf("skills = %d", len(skills))
 	}
 	owned := map[string]string{}
@@ -321,7 +321,8 @@ func TestResidentToolsAreReadOnly(t *testing.T) {
 		if tl.Name() == ToolRequirementBindEvidence || tl.Name() == ToolSectionWriteDraft ||
 			tl.Name() == ToolSectionUpsertStoryboard || tl.Name() == ToolSectionVerifyWriting ||
 			tl.Name() == ToolComplianceVerify || tl.Name() == ToolFulltextConsistent || tl.Name() == ToolChartGenerate ||
-			tl.Name() == ToolChartRenderSubmit || tl.Name() == ToolChartRenderCancel {
+			tl.Name() == ToolChartRenderSubmit || tl.Name() == ToolChartRenderCancel ||
+			tl.Name() == ToolProposalExportSubmit || tl.Name() == ToolProposalExportCancel {
 			if tl.IsReadOnly(nil) {
 				t.Fatalf("%s writes proposal-domain records and must not be read-only", tl.Name())
 			}
@@ -332,7 +333,8 @@ func TestResidentToolsAreReadOnly(t *testing.T) {
 		}
 		if err := tool.ValidateInput(tl.InputSchema(), json.RawMessage(`{}`)); err != nil &&
 			tl.Name() != ToolReadChunk && tl.Name() != ToolVerifyCommercial && tl.Name() != ToolKBReadChunk &&
-			tl.Name() != ToolKBReadEvidence && tl.Name() != ToolKBVerifyEvidence && tl.Name() != ToolKBResearch && tl.Name() != ToolChartRenderStatus {
+			tl.Name() != ToolKBReadEvidence && tl.Name() != ToolKBVerifyEvidence && tl.Name() != ToolKBResearch && tl.Name() != ToolChartRenderStatus &&
+			tl.Name() != ToolProposalExportCheck {
 			t.Fatalf("%s: unexpected required fields: %v", tl.Name(), err)
 		}
 	}

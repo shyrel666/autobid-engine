@@ -97,8 +97,11 @@ type LLMServiceConfig struct {
 	Vault          *secrets.Vault
 	MultiRetrieval bool
 	Retrieval      *retrieval.Service
-	// Charts 为 chart_generate 工具提供图表生成 / 渲染（为 nil 时工具返回未配置）。
+	// Charts 为 chart_generate 工具提供图表生成 / 渲染（为 nil 时工具返回未配置），S3 / S4 起同样承载图表渲染与导出作业的提交。
 	Charts *export.Service
+	// AgentExport 是宿主授予 Worker 的任务导出能力（AUTOBID_AGENT_EXPORT_ENABLED，默认关闭）：高影响入口，R2 可信身份完成前保持关闭；
+	// 未授予时 proposal_export_submit 返回 FEATURE_DISABLED，Planner mandate 不能自行授予。
+	AgentExport bool
 	// Runtime 是本机运行能力状态；非 nil 时 Planner 与 Worker 常驻 tool_runtime_status。
 	Runtime     *toolhealth.Registry
 	Factory     ProviderFactory
@@ -342,8 +345,8 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 	if s.cfg.Retrieval != nil {
 		kit.WithResearch(&retrieval.Coordinator{Service: s.cfg.Retrieval, Reasoner: &agent.RetrievalReasoner{Planner: b.plannerRuntime, Worker: b.workerRuntime}, MultiEnabled: s.cfg.MultiRetrieval})
 	}
-	kit.WithRuntime(s.cfg.Runtime)
-	pc.ExtraTools = append(append(append([]tool.CoreTool(nil), pc.ExtraTools...), kit.RuntimeTools()...), kit.AgentJobTools()...)
+	kit.WithRuntime(s.cfg.Runtime).WithExportSubmit(s.cfg.AgentExport)
+	pc.ExtraTools = append(append(append(append([]tool.CoreTool(nil), pc.ExtraTools...), kit.RuntimeTools()...), kit.AgentJobTools()...), kit.ExportCheckTools()...)
 	wc.ExtraTools = append(append(append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...), kit.RuntimeTools()...), kit.AgentJobTools()...)
 	wc.Deferred = append(append([]tool.CoreTool(nil), wc.Deferred...), kit.DeferredTools()...)
 	wc.Skills = append(append([]tool.Skill(nil), wc.Skills...), bidtools.Skills()...)

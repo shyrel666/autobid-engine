@@ -1,7 +1,7 @@
 package export
 
-// Runner 从 export_jobs 领取任务（FOR UPDATE SKIP LOCKED + 租约 + 围栏令牌）并执行：心跳续租，租约被回收时取消本次执行；
-// 完成 / 失败写入必须携带当前令牌；启动时先回收过期的 running 任务。
+// Runner 从 export_jobs 领取任务（FOR UPDATE SKIP LOCKED + 租约 + 围栏令牌）并执行：心跳续租，租约被回收、作业被取消、
+// 任务被暂停或截止时间已到时取消本次执行；完成 / 失败写入必须携带当前令牌（被拒绝时清理本次产物）；启动时先回收过期的 running 任务。
 
 import (
 	"context"
@@ -16,13 +16,15 @@ import (
 
 // Runner 从 export_jobs 领取并执行任务。
 type Runner struct {
-	Service  *Service
-	Owner    string
-	Workers  int
-	Lease    time.Duration
-	Poll     time.Duration
-	Logger   *slog.Logger
-	OnChange func(job *db.ExportJob, summary string)
+	Service *Service
+	Owner   string
+	Workers int
+	Lease   time.Duration
+	Poll    time.Duration
+	// Heartbeat 是续租间隔（默认 min(Lease/3, 5s)）：取消、暂停在数据库内立即生效，执行者最迟一个间隔后停止刷新。
+	Heartbeat time.Duration
+	Logger    *slog.Logger
+	OnChange  func(job *db.ExportJob, summary string)
 	// TaskID > 0 时只领取该任务的导出（测试与单任务调试），0 表示全部任务。
 	TaskID int64
 
@@ -40,6 +42,9 @@ func (r *Runner) init() {
 		}
 		if r.Poll <= 0 {
 			r.Poll = 3 * time.Second
+		}
+		if r.Heartbeat <= 0 {
+			r.Heartbeat = min(r.Lease/3, 5*time.Second)
 		}
 		if r.Logger == nil {
 			r.Logger = slog.Default()
@@ -101,14 +106,20 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 	}
 	job := ref.ExportJob
 	r.notify(job, fmt.Sprintf("导出任务 #%d（%s）开始第 %d 次执行", job.ID, job.Format, job.Attempts))
-	jobCtx, cancel := context.WithCancel(ctx)
+	var jobCtx context.Context
+	var cancel context.CancelFunc
+	if job.DeadlineAt != nil { // 截止时间在首次提交时固定，回收重试不延长
+		jobCtx, cancel = context.WithDeadline(ctx, *job.DeadlineAt)
+	} else {
+		jobCtx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 	var lost sync.WaitGroup
 	lost.Add(1)
 	stop := make(chan struct{})
-	go func() { // 心跳：租约被回收给其他执行者时取消本次执行
+	go func() { // 心跳：租约被回收、作业被取消或任务被暂停时取消本次执行（文档引擎进程随 ctx 结束）
 		defer lost.Done()
-		t := time.NewTicker(r.Lease / 3)
+		t := time.NewTicker(r.Heartbeat)
 		defer t.Stop()
 		for {
 			select {
@@ -141,8 +152,14 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 		return true, fmt.Errorf("export job %d: lease lost: %w", job.ID, execErr)
 	}
 	var perm permanentError
-	retry := !errors.As(execErr, &perm)
-	if err := r.Service.DB.FailExportJob(ctx, job.ID, job.LeaseToken, execErr.Error(), retry); err != nil {
+	retry, code := !errors.As(execErr, &perm), db.JobErrExportFailed
+	if !retry {
+		code = perm.code
+	}
+	if err := r.Service.DB.FailExportJobCode(ctx, job.ID, job.LeaseToken, code, execErr.Error(), retry); err != nil {
+		if errors.Is(err, db.ErrLeaseLost) {
+			r.Service.removeAttempt(ref.Tenant, job)
+		}
 		return true, err
 	}
 	r.Service.removeAttempt(ref.Tenant, job)

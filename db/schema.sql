@@ -1732,7 +1732,7 @@ CREATE TABLE IF NOT EXISTS export_jobs (
     outline_id      BIGINT NOT NULL,
     outline_version INT NOT NULL CHECK (outline_version > 0),
     format          TEXT NOT NULL CHECK (format IN ('docx','pdf')),
-    status          TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','succeeded','failed')),
+    status          TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','succeeded','failed','cancelled')),
     template_id     BIGINT,
     template_key    TEXT NOT NULL DEFAULT 'default',
     template_hash   TEXT NOT NULL DEFAULT '',
@@ -1775,14 +1775,21 @@ CREATE TRIGGER trg_export_jobs_upd BEFORE UPDATE ON export_jobs
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- 导出快照不可篡改：导出后再编辑章节、重绘图表或重新核验矩阵都不影响已创建任务的快照。
+-- S4 起同样冻结请求组、严格策略、执行版本、截止时间与尝试预算（列见文末 S4 段），终态之后状态不再变化：
+-- 取消或失败后迟到的成功、失败与心跳都不能改写作业。
 CREATE OR REPLACE FUNCTION export_jobs_immutable() RETURNS trigger AS $$
 BEGIN
     IF (NEW.tenant_id, NEW.task_id, NEW.outline_id, NEW.outline_version, NEW.format, NEW.template_id, NEW.template_key, NEW.template_hash,
-        NEW.rev_snapshot, NEW.chart_snapshot, NEW.matrix_snapshot, NEW.doc_snapshot, NEW.gate, NEW.created_by, NEW.created_at)
+        NEW.rev_snapshot, NEW.chart_snapshot, NEW.matrix_snapshot, NEW.doc_snapshot, NEW.gate, NEW.created_by, NEW.created_at,
+        NEW.export_request_id, NEW.strict_runtime, NEW.executor, NEW.deadline_at, NEW.max_attempts)
        IS DISTINCT FROM
        (OLD.tenant_id, OLD.task_id, OLD.outline_id, OLD.outline_version, OLD.format, OLD.template_id, OLD.template_key, OLD.template_hash,
-        OLD.rev_snapshot, OLD.chart_snapshot, OLD.matrix_snapshot, OLD.doc_snapshot, OLD.gate, OLD.created_by, OLD.created_at) THEN
+        OLD.rev_snapshot, OLD.chart_snapshot, OLD.matrix_snapshot, OLD.doc_snapshot, OLD.gate, OLD.created_by, OLD.created_at,
+        OLD.export_request_id, OLD.strict_runtime, OLD.executor, OLD.deadline_at, OLD.max_attempts) THEN
         RAISE EXCEPTION 'export job % snapshot is immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    IF OLD.status IN ('succeeded','failed','cancelled') AND NEW.status IS DISTINCT FROM OLD.status THEN
+        RAISE EXCEPTION 'export job % is already %', OLD.id, OLD.status USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
 END;
@@ -2893,7 +2900,8 @@ CREATE TRIGGER trg_agent_job_events_immutable BEFORE UPDATE ON agent_job_events
 
 -- Terminal outcome of one job, shared by subscribe-after-terminal (Go) and the
 -- terminal triggers below; terminal_status is NULL while the job is active.
--- Export results stay preview_only until S4 adds the strict final-draft policy.
+-- S4: a succeeded export is final_ready only under the strict final-draft policy
+-- with a refreshed TOC and a recorded document engine; everything else is preview_only.
 CREATE OR REPLACE FUNCTION agent_job_outcome(k TEXT, jid BIGINT, OUT terminal_status TEXT, OUT business_state TEXT, OUT payload JSONB) AS $$
 BEGIN
     IF k = 'tender_parse' THEN
@@ -2909,10 +2917,15 @@ BEGIN
          WHERE j.id = jid AND j.status IN ('succeeded','failed','cancelled');
     ELSIF k = 'proposal_export' THEN
         SELECT j.status,
-               CASE j.status WHEN 'succeeded' THEN 'preview_only' ELSE j.status END,
+               CASE j.status
+                   WHEN 'succeeded' THEN CASE WHEN j.strict_runtime AND j.toc_refreshed AND j.office_engine <> '' THEN 'final_ready'
+                                              ELSE 'preview_only' END
+                   ELSE j.status END,
                jsonb_build_object('status', j.status, 'attempts', j.attempts, 'max_attempts', j.max_attempts, 'format', j.format,
+                   'export_request_id', j.export_request_id, 'strict_runtime', j.strict_runtime,
                    'outline_version', j.outline_version, 'toc_refreshed', j.toc_refreshed, 'artifact_hash', j.artifact_hash,
-                   'artifact_size', j.artifact_size, 'error', left(j.error, 500))
+                   'artifact_size', j.artifact_size, 'office_engine', j.office_engine, 'office_version', j.office_version,
+                   'error_code', j.error_code, 'error', left(j.error, 500))
           INTO terminal_status, business_state, payload
           FROM export_jobs j
          WHERE j.id = jid AND j.status IN ('succeeded','failed','cancelled');
@@ -3051,3 +3064,95 @@ CREATE TRIGGER trg_chart_render_jobs_agent_terminal AFTER UPDATE OF status ON ch
 ALTER TABLE agent_job_subscriptions DROP CONSTRAINT IF EXISTS ck_agent_job_subscriptions_kind;
 ALTER TABLE agent_job_subscriptions ADD CONSTRAINT ck_agent_job_subscriptions_kind
     CHECK (job_kind IN ('tender_parse','proposal_export','chart_render'));
+
+-- ---------------------------------------------------------------------------
+-- S4 (AGENT_TOOL_SKILLS_PLAN 4.1 / 4.3 / 5.1~5.2): export request groups and the strict final-draft policy,
+-- export attachment domain.
+--   export_requests  one client export request. request_key is unique for the request's whole life (terminal replays
+--                    return the original group); request_hash is the normalised client input, snapshot_hash the
+--                    snapshot frozen at first submission (template, locked revisions, charts, deviation matrix).
+--                    strict_runtime, the policy version, the document-engine executor and the deadline are fixed at
+--                    first submission. A request, all its per-format jobs and their subscriptions commit together.
+--   export_jobs      gains export_request_id (NULL for pre-S4 rows), strict_runtime, deadline_at, executor,
+--                    error_code, office_engine / office_version (the engine that refreshed this artifact) and the
+--                    cancelled status. A strict job can only succeed with a refreshed TOC and a recorded engine.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS export_requests (
+    id                       BIGSERIAL PRIMARY KEY,
+    tenant_id                TEXT NOT NULL DEFAULT 'default',
+    task_id                  BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    request_key              TEXT NOT NULL CHECK (request_key <> '' AND length(request_key) <= 200),
+    request_hash             TEXT NOT NULL CHECK (request_hash <> ''),
+    snapshot_hash            TEXT NOT NULL CHECK (snapshot_hash <> ''),
+    formats                  JSONB NOT NULL CHECK (jsonb_typeof(formats) = 'array' AND jsonb_array_length(formats) BETWEEN 1 AND 2),
+    template_id              BIGINT,
+    template_key             TEXT NOT NULL,
+    template_hash            TEXT NOT NULL DEFAULT '',
+    bidder                   TEXT NOT NULL DEFAULT '',
+    expected_outline_version INT CHECK (expected_outline_version > 0),
+    outline_id               BIGINT NOT NULL,
+    outline_version          INT NOT NULL CHECK (outline_version > 0),
+    strict_runtime           BOOLEAN NOT NULL,
+    policy_version           TEXT NOT NULL CHECK (policy_version <> ''),
+    executor                 TEXT NOT NULL DEFAULT '',
+    deadline_at              TIMESTAMPTZ NOT NULL,
+    created_by               TEXT NOT NULL DEFAULT '',
+    updated_by               TEXT NOT NULL DEFAULT '',
+    approved_by              TEXT NOT NULL DEFAULT '',
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_export_requests_request UNIQUE (tenant_id, task_id, request_key),
+    CONSTRAINT uq_export_requests_task_id UNIQUE (tenant_id, task_id, id),
+    CONSTRAINT ck_export_requests_strict CHECK (NOT strict_runtime OR executor <> ''),
+    CONSTRAINT fk_export_requests_outline FOREIGN KEY (tenant_id, task_id, outline_id)
+        REFERENCES proposal_outlines(tenant_id, task_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_export_requests_template FOREIGN KEY (tenant_id, template_id)
+        REFERENCES export_templates(tenant_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_export_requests_task ON export_requests(tenant_id, task_id, id DESC);
+DROP TRIGGER IF EXISTS trg_export_requests_upd ON export_requests;
+CREATE TRIGGER trg_export_requests_upd BEFORE UPDATE ON export_requests
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE OR REPLACE FUNCTION export_requests_immutable() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.tenant_id, NEW.task_id, NEW.request_key, NEW.request_hash, NEW.snapshot_hash, NEW.formats, NEW.template_id, NEW.template_key,
+        NEW.template_hash, NEW.bidder, NEW.expected_outline_version, NEW.outline_id, NEW.outline_version, NEW.strict_runtime,
+        NEW.policy_version, NEW.executor, NEW.deadline_at, NEW.created_by, NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.tenant_id, OLD.task_id, OLD.request_key, OLD.request_hash, OLD.snapshot_hash, OLD.formats, OLD.template_id, OLD.template_key,
+        OLD.template_hash, OLD.bidder, OLD.expected_outline_version, OLD.outline_id, OLD.outline_version, OLD.strict_runtime,
+        OLD.policy_version, OLD.executor, OLD.deadline_at, OLD.created_by, OLD.created_at) THEN
+        RAISE EXCEPTION 'export request % input is immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_export_requests_immutable ON export_requests;
+CREATE TRIGGER trg_export_requests_immutable BEFORE UPDATE ON export_requests
+    FOR EACH ROW EXECUTE FUNCTION export_requests_immutable();
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS export_request_id BIGINT,
+    ADD COLUMN IF NOT EXISTS strict_runtime BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS executor TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS office_engine TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS office_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE export_jobs DROP CONSTRAINT IF EXISTS fk_export_jobs_request;
+ALTER TABLE export_jobs ADD CONSTRAINT fk_export_jobs_request FOREIGN KEY (tenant_id, task_id, export_request_id)
+    REFERENCES export_requests(tenant_id, task_id, id) ON DELETE CASCADE;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_export_jobs_request_format ON export_jobs(tenant_id, task_id, export_request_id, format)
+    WHERE export_request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_export_jobs_request ON export_jobs(tenant_id, export_request_id, id) WHERE export_request_id IS NOT NULL;
+-- Old databases created the inline status CHECK without cancelled (PostgreSQL named it export_jobs_status_check).
+ALTER TABLE export_jobs DROP CONSTRAINT IF EXISTS export_jobs_status_check;
+ALTER TABLE export_jobs DROP CONSTRAINT IF EXISTS ck_export_jobs_status;
+ALTER TABLE export_jobs ADD CONSTRAINT ck_export_jobs_status CHECK (status IN ('queued','running','succeeded','failed','cancelled'));
+ALTER TABLE export_jobs DROP CONSTRAINT IF EXISTS ck_export_jobs_strict;
+ALTER TABLE export_jobs ADD CONSTRAINT ck_export_jobs_strict
+    CHECK (NOT strict_runtime OR (executor <> '' AND export_request_id IS NOT NULL AND deadline_at IS NOT NULL));
+ALTER TABLE export_jobs DROP CONSTRAINT IF EXISTS ck_export_jobs_final;
+ALTER TABLE export_jobs ADD CONSTRAINT ck_export_jobs_final
+    CHECK (NOT strict_runtime OR status <> 'succeeded' OR (toc_refreshed AND office_engine <> ''));

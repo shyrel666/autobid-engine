@@ -55,6 +55,8 @@ func jobNextAction(status, businessState string) string {
 			return "await_human_adoption"
 		case "preview_only":
 			return "report_preview_only"
+		case "final_ready":
+			return "report_final_draft"
 		case "chart_stale":
 			return "resubmit_for_current_revision"
 		}
@@ -86,7 +88,7 @@ func AgentJobStatusTool(pg *db.DB, taskID int64) tool.CoreTool {
 		Name: ToolAgentJobStatus,
 		Description: "查询本任务的后台作业（tender_parse 招标解析、proposal_export 导出、chart_render 图表渲染）及 Agent 订阅状态：给出 job_ref 查单个作业，" +
 			"否则分页列出订阅（Worker 只看当前意图）。status 为 queued / running / succeeded / failed / cancelled；business_state 区分" +
-			"候选待人工采用（candidate_pending_review）、已采用、仅预览（preview_only）等。等待中的作业完成后会自动唤醒提交它的意图，无需轮询。",
+			"候选待人工采用（candidate_pending_review）、已采用、严格最终稿（final_ready）、仅预览（preview_only）、图表已就绪 / 已过期等。等待中的作业完成后会自动唤醒提交它的意图，无需轮询。",
 		Schema: obj(map[string]any{
 			"job_ref": obj(map[string]any{
 				"kind": map[string]any{"type": "string", "enum": kinds},

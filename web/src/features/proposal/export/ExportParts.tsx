@@ -1,4 +1,5 @@
-// Phase 6B：章节写作视图中的「章节图表」卡片（S3 起经图表渲染作业异步生成、取消与重试），以及「⑥ 导出成稿」视图（门禁明细、格式与模板、发起导出、任务进度、历史与下载）。
+// Phase 6B：章节写作视图中的「章节图表」卡片（S3 起经图表渲染作业异步生成、取消与重试），以及「⑥ 导出成稿」视图
+// （门禁明细、最终稿 / 预览稿模式、格式与模板、S4 起以请求组提交并逐项显示格式作业、取消、历史与下载）。
 // 全部数据来自 server/export.go 的真实路由；门禁、快照固化与文档引擎（WPS / Word）/ mmdc 调用都在后端。
 
 import { useEffect, useRef, useState } from 'react'
@@ -7,15 +8,16 @@ import {
 } from 'lucide-react'
 import { api, errorText, ApiError, saveBlob } from '../../../api/client'
 import type {
-  ChartType, ExportFormat, ExportJob, ExportPreflight, ExportWarning, ProposalChart,
+  ChartType, ExportFormat, ExportJob, ExportMode, ExportPreflight, ExportRequest, ExportWarning, ProposalChart,
 } from '../../../api/types'
 import { Badge, Button, Card, Empty, ErrorBanner, Field, IconButton, Input, Modal, Notice, Pre, Select, Spinner, TextArea, cx, useConfirm, useToast } from '../../../components/ui'
 import BlockerList from '../../task-workspace/BlockerList'
 import { useTaskWorkspace, useTick } from '../../task-workspace/TaskWorkspaceProvider'
 import { chartStateView, keyForInput, retryRequestKey, splitCharts } from './chartJobs'
 import type { InputKey } from './chartJobs'
+import { exportInputSig, exportJobView, exportRequestView, groupExportJobs, keepKeyAfter } from './exportJobs'
+import type { ExportInput } from './exportJobs'
 import { RuntimeNotice } from '../../runtime/RuntimeStatus'
-import type { Tone } from '../../../components/ui'
 import { useAsync, useInterval } from '../../../hooks/useAsync'
 import {
   chartRenderLabel, chartTypeLabel, exportStatusLabel, exportWarningLabel, fmtBytes, fmtTime,
@@ -234,10 +236,6 @@ function ChartModal({ taskID, sectionID, revNo, onClose, onDone }: { taskID: num
 // ⑥ 导出成稿
 // ---------------------------------------------------------------------------
 
-function jobTone(s: string): Tone {
-  return s === 'succeeded' ? 'green' : s === 'failed' ? 'red' : s === 'running' ? 'blue' : 'slate'
-}
-
 function Warnings({ list }: { list: ExportWarning[] }) {
   if (!list.length) return null
   return (
@@ -252,38 +250,83 @@ function Warnings({ list }: { list: ExportWarning[] }) {
   )
 }
 
+const modeOptions: { mode: ExportMode; title: string; desc: string }[] = [
+  { mode: 'final', title: '最终稿（严格）', desc: '文档引擎（WPS / Word）真实刷新目录页码；图表必须已渲染，不插入源码占位框；成稿回读核对目录、图片与表格。引擎不可用时拒绝，不降级。' },
+  { mode: 'preview', title: '预览稿', desc: '用于内部审阅：引擎不可用时 DOCX 目录页码不刷新，未渲染图表为源码占位框；结果标为“仅预览稿”，不作为最终交付。' },
+]
+
+// S4：导出以请求组提交（同一输入的重复点击 / 响应丢失后重发复用请求键，服务器返回原请求组），作业状态与“最终稿 / 仅预览稿”分开显示；
+// 有排队或执行中的作业时每 2 秒刷新，SSE 的 export 活动同样触发重读；刷新页面后以 /export-requests 恢复。
 export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick: number; onCreated?: () => void }) {
   const toast = useToast()
+  const confirm = useConfirm()
   const [refresh, setRefresh] = useState(0)
-  const pre = useAsync(() => api.exportPreflight(taskID), [taskID, tick, refresh])
+  const [mode, setMode] = useState<ExportMode>('final')
+  const pre = useAsync(() => api.exportPreflight(taskID, mode), [taskID, tick, refresh, mode])
+  const reqs = useAsync(() => api.exportRequests(taskID), [taskID, tick, refresh])
   const jobs = useAsync(() => api.exportJobs(taskID), [taskID, tick, refresh])
   const [formats, setFormats] = useState<Record<ExportFormat, boolean>>({ docx: true, pdf: true })
   const [template, setTemplate] = useState(0)
   const [bidder, setBidder] = useState('')
   const [busy, setBusy] = useState('')
   const [blocked, setBlocked] = useState<ExportPreflight>()
-  const [detail, setDetail] = useState<ExportJob>()
+  const [detail, setDetail] = useState<{ job: ExportJob; request?: ExportRequest }>()
+  // 同一输入的请求键：服务器已明确答复后清空，再次点击即新的执行。
+  const key = useRef<InputKey>(undefined)
   const p = pre.data
-  const list = jobs.data?.jobs ?? []
-  const active = list.some((j) => j.status === 'queued' || j.status === 'running')
-  useInterval(() => { void jobs.reload() }, active ? 2000 : null)
+  const groups = groupExportJobs(reqs.data?.requests ?? [], jobs.data?.jobs ?? [])
+  const active = groups.some((g) => g.jobs.some((j) => exportJobView(j).active))
+  useInterval(() => { void reqs.reload(); void jobs.reload() }, active ? 2000 : null)
+  const reloadAll = () => { setBlocked(undefined); setRefresh((n) => n + 1) }
 
+  const r = blocked?.readiness ?? p?.readiness
   const create = async () => {
     const fs = (Object.keys(formats) as ExportFormat[]).filter((f) => formats[f])
     if (!fs.length) { toast('error', '至少选择一种格式'); return }
+    const input: ExportInput = { formats: fs, template_id: template || undefined, bidder, mode, expected_outline_version: r?.outline_version || undefined }
+    key.current = keyForInput(key.current, exportInputSig(input),
+      () => `ui-export-${taskID}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
     setBusy('create'); setBlocked(undefined)
     try {
-      const r = await api.createExport(taskID, { formats: fs, template_id: template || undefined, bidder })
-      toast('ok', `已创建导出任务 ${r.jobs.map((j) => `#${j.id} ${j.format.toUpperCase()}`).join('、')}，已锁定 ${Object.keys(r.jobs[0].rev_snapshot).length} 个章节修订`)
+      const res = await api.createExport(taskID, { ...input, request_key: key.current.key })
+      key.current = undefined
+      const q = res.request
+      toast(res.replayed ? 'info' : 'ok', res.replayed
+        ? `该请求已提交过，返回原导出请求组 #${q?.id}（${q ? exportRequestView(q).label : ''}）`
+        : `已提交${mode === 'final' ? '最终稿' : '预览稿'}导出请求组 #${q?.id}：${res.jobs.map((j) => j.format.toUpperCase()).join('、')}，已锁定 ${Object.keys(res.jobs[0]?.rev_snapshot ?? {}).length} 个章节修订`)
       setRefresh((n) => n + 1)
       onCreated?.()
     } catch (e) {
+      if (!keepKeyAfter(e)) key.current = undefined
       if (e instanceof ApiError && e.status === 422 && e.code === 'export_blocked') {
         setBlocked((e.data as { preflight: ExportPreflight }).preflight)
         toast('error', '导出门禁未通过，明细见上方')
         void pre.reload()
+      } else if (e instanceof ApiError && e.code === 'stale_revision') {
+        toast('error', '批准大纲版本已变化：已刷新导出门禁，请确认后重新导出')
+        void pre.reload()
+      } else if (e instanceof ApiError && e.code === 'runtime_unavailable') {
+        toast('error', `文档引擎不可用，不能生成最终稿（${e.message}）；可改为导出预览稿`)
+      } else if (e instanceof ApiError && e.code === 'precondition_failed') {
+        toast('error', /paused/.test(e.message) ? '项目已暂停：恢复项目后才能提交新的导出（已提交的导出可以查看与取消）' : `暂不能导出：${e.message}`)
       } else toast('error', errorText(e))
     } finally { setBusy('') }
+  }
+  const cancelGroup = async (q: ExportRequest) => {
+    if (!await confirm({ title: `取消导出请求组 #${q.id}？`, message: '排队或执行中的格式立即停止，已完成的格式保留；取消后迟到的执行结果不会写回。', confirmLabel: '取消导出', danger: true })) return
+    setBusy(`g${q.id}`)
+    try {
+      const res = await api.cancelExportRequest(taskID, q.id)
+      const n = res.results.filter((x) => x.cancelled).length
+      toast(n ? 'ok' : 'info', n ? `已取消 ${n} 个作业` : '组内作业均已结束，没有可取消的作业')
+    } catch (e) { toast('error', errorText(e)) } finally { setBusy(''); setRefresh((x) => x + 1) }
+  }
+  const cancelJob = async (j: ExportJob) => {
+    setBusy(`c${j.id}`)
+    try {
+      const res = await api.cancelExport(taskID, j.id)
+      toast(res.cancelled ? 'ok' : 'info', res.cancelled ? `已取消导出作业 #${j.id}` : `作业 #${j.id} 已结束（${exportStatusLabel[res.job.status] ?? res.job.status}）`)
+    } catch (e) { toast('error', errorText(e)) } finally { setBusy(''); setRefresh((x) => x + 1) }
   }
   const download = async (j: ExportJob) => {
     setBusy(`dl${j.id}`)
@@ -304,29 +347,29 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
     try { const { blob } = await api.defaultTemplate(); saveBlob(blob, 'autobid-default-template.docx') } catch (e) { toast('error', errorText(e)) }
   }
 
-  const r = blocked?.readiness ?? p?.readiness
   const warnings = blocked?.warnings ?? p?.warnings ?? []
+  const finalMode = mode === 'final'
   return (
     <div className="space-y-4">
       <Card title={<>导出门禁 {r && (r.ready
-        ? <Badge tone="green"><CheckCircle2 className="size-3" />可以导出</Badge>
-        : <Badge tone="red"><ShieldAlert className="size-3" />{r.blockers.length} 项阻止导出</Badge>)}
-        {r && <span className="text-xs font-normal text-slate-400">大纲 v{r.outline_version || '—'} · 检查于 {fmtTime(r.checked_at)}</span>}</>}
-        subtitle="以服务器 exports/preflight 结果为准；创建导出时服务端会在锁定快照时再次校验"
-        actions={<IconButton label="刷新导出门禁" onClick={() => { setBlocked(undefined); setRefresh((n) => n + 1) }}><RefreshCw className="size-4" /></IconButton>}>
+        ? <Badge tone="green"><CheckCircle2 className="size-3" />{finalMode ? '可以导出最终稿' : '可以导出预览稿'}</Badge>
+        : <Badge tone="red"><ShieldAlert className="size-3" />{r.blockers.length} 项阻止{finalMode ? '最终稿' : '导出'}</Badge>)}
+        {r && <span className="text-xs font-normal text-slate-400">大纲 v{r.outline_version || '—'} · {finalMode ? '严格最终稿策略' : '预览稿策略'} · 检查于 {fmtTime(r.checked_at)}</span>}</>}
+        subtitle="以服务器 exports/preflight 结果为准；提交时服务端会在锁定快照的同一事务内再次校验，预检不承诺提交成功"
+        actions={<IconButton label="刷新导出门禁" onClick={reloadAll}><RefreshCw className="size-4" /></IconButton>}>
         <ErrorBanner error={pre.error} onRetry={pre.reload} />
-        {blocked && <Notice tone="danger" className="mb-3">创建导出被拒绝：服务端在锁定快照时重新校验发现阻断，下方已改用服务器返回的最新门禁；已选格式与模板保留，未生成导出任务。</Notice>}
+        {blocked && <Notice tone="danger" className="mb-3">提交被拒绝：服务端在锁定快照时重新校验发现阻断，下方已改用服务器返回的最新门禁；已选格式与模板保留，未生成导出作业。</Notice>}
         {!r ? <Spinner /> : (
           <div className="space-y-3">
             {r.ready
-              ? <p className="text-sm text-emerald-700">全部章节已批准当前修订，响应矩阵全部实质响应且未失效，最新一致性核验无待处理结论，证据均有效。
-                创建导出时在同一数据库事务内固化章节修订、图表与偏离表快照，之后再编辑不影响该次导出。</p>
+              ? <p className="text-sm text-emerald-700">全部章节已批准当前修订，响应矩阵全部实质响应且未失效，最新一致性核验无待处理结论，证据均有效{finalMode ? '，纳入导出的图表均已渲染，文档引擎可用' : ''}。
+                提交时在同一数据库事务内固化章节修订、图表与偏离表快照，之后再编辑不影响该次导出。</p>
               : <BlockerList taskId={taskID} blockers={r.blockers} />}
             <Warnings list={warnings} />
             <RuntimeNotice capabilities={['office', 'mermaid']} />
             {p && <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
-              <span>文档引擎：{p.status.office ? <span className="text-emerald-700">{p.status.office_version || p.status.office_engine}</span> : <span className="text-red-600">不可用（PDF 将失败，DOCX 目录页码不刷新）</span>}</span>
-              <span>mermaid-cli：{p.status.renderer ? <span className="text-emerald-700">可用</span> : <span className="text-amber-700">不可用（图表为源码占位）</span>}</span>
+              <span>文档引擎：{p.status.office ? <span className="text-emerald-700">{p.status.office_version || p.status.office_engine}</span> : <span className="text-red-600">不可用（最终稿与 PDF 被拒绝，预览稿 DOCX 目录页码不刷新）</span>}</span>
+              <span>mermaid-cli：{p.status.renderer ? <span className="text-emerald-700">可用</span> : <span className="text-amber-700">不可用（已有渲染图仍可用于最终稿）</span>}</span>
               <span>纳入导出的图表 {p.charts} 张</span>
             </div>}
           </div>
@@ -334,6 +377,15 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
       </Card>
 
       <Card title="发起导出" bodyClassName="p-4 space-y-3">
+        <div role="radiogroup" aria-label="导出模式" className="grid gap-2 md:grid-cols-2">
+          {modeOptions.map((o) => (
+            <label key={o.mode} className={cx('flex cursor-pointer gap-2 rounded-md border p-3 text-sm',
+              mode === o.mode ? 'border-blue-400 bg-blue-50/50' : 'border-slate-200 hover:bg-slate-50')}>
+              <input type="radio" name="export-mode" aria-label={o.title} className="mt-1" checked={mode === o.mode} onChange={() => { setMode(o.mode); setBlocked(undefined) }} />
+              <span><span className="font-medium text-slate-800">{o.title}</span><span className="mt-0.5 block text-xs text-slate-500">{o.desc}</span></span>
+            </label>
+          ))}
+        </div>
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="格式">
             <div className="flex gap-4 pt-1.5 text-sm">
@@ -353,7 +405,8 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
           <Field label="封面投标人（可选）"><Input value={bidder} onChange={(e) => setBidder(e.target.value)} placeholder="如：某某科技有限公司" /></Field>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="primary" icon={<Lock className="size-4" />} loading={busy === 'create'} disabled={!r?.ready} onClick={create}>锁定版本并导出</Button>
+          <Button variant="primary" icon={<Lock className="size-4" />} loading={busy === 'create'} disabled={!r?.ready} onClick={create}>
+            {finalMode ? '锁定版本并导出最终稿' : '锁定版本并导出预览稿'}</Button>
           <label className={cx('inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50',
             busy === 'upload' && 'opacity-50')}>
             <Upload className="size-4" />上传 .docx 模板
@@ -377,49 +430,76 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
           标题按样式名「heading 1~6」匹配。目录与页码由文档引擎（WPS / Word）刷新，打开时无需手动更新域。</p>
       </Card>
 
-      <Card title="导出任务" subtitle={active ? '有排队或执行中的任务，每 2 秒刷新；全部结束后停止轮询' : '导出成功只表示产物已生成，不代表已签章或已被交易平台接收'}
-        actions={<IconButton label="刷新导出任务" onClick={() => void jobs.reload()}><RefreshCw className="size-4" /></IconButton>}>
-        <ErrorBanner error={jobs.error} onRetry={jobs.reload} />
-        {jobs.loading && !jobs.data ? <Spinner /> : list.length === 0 ? <Empty>尚无导出任务</Empty> : (
-          <table className="w-full text-sm">
-            <thead><tr className="border-b border-slate-200 text-left text-xs text-slate-500">
-              <th className="py-2 pr-2">任务</th><th className="pr-2">状态</th><th className="pr-2">快照</th><th className="pr-2">目录</th><th className="pr-2">发起 / 完成</th><th className="pr-2">提示</th><th />
-            </tr></thead>
-            <tbody>{list.map((j) => (
-              <tr key={j.id} className="border-b border-slate-100 align-top">
-                <td className="py-2 pr-2 font-medium">#{j.id} {j.format.toUpperCase()}<div className="text-xs font-normal text-slate-400">{j.template_key === 'default' ? '默认模板' : j.template_key}</div></td>
-                <td className="pr-2"><Badge tone={jobTone(j.status)}>{exportStatusLabel[j.status]}</Badge>
-                  {j.attempts > 1 && <div className="text-xs text-slate-400">第 {j.attempts} 次执行</div>}
-                  {j.error && <div className="max-w-xs text-xs text-red-600">{j.error}</div>}</td>
-                <td className="pr-2 text-xs text-slate-500">大纲 v{j.outline_version} · {Object.keys(j.rev_snapshot).length} 章 · {j.chart_snapshot.length} 图 · 偏离表 {j.matrix_snapshot.length} 行</td>
-                <td className="pr-2 text-xs">{j.status === 'succeeded' ? (j.toc_refreshed ? <span className="text-emerald-700">页码已刷新</span> : <span className="text-amber-700">页码未刷新</span>) : '—'}</td>
-                <td className="pr-2 text-xs text-slate-500">{j.created_by || '—'} · {fmtTime(j.created_at)}{j.finished_at && <div>{fmtTime(j.finished_at)}</div>}</td>
-                <td className="pr-2 text-xs">{j.warnings.length ? <Badge tone="amber">{j.warnings.length} 项</Badge> : '—'}</td>
-                <td className="whitespace-nowrap">
-                  <Button size="sm" variant="ghost" onClick={() => setDetail(j)}>详情</Button>
-                  {j.status === 'succeeded' && <Button size="sm" variant="primary" icon={<Download className="size-3.5" />} loading={busy === `dl${j.id}`}
-                    onClick={() => download(j)}>{fmtBytes(j.artifact_size)}</Button>}
-                </td>
-              </tr>
-            ))}</tbody>
-          </table>
+      <Card title="导出请求" subtitle={active ? '有排队或执行中的作业，每 2 秒刷新；全部结束后停止轮询' : '导出成功只表示产物已生成，不代表已签章、已被交易平台接收或已通过外部评审'}
+        actions={<IconButton label="刷新导出请求" onClick={() => { void reqs.reload(); void jobs.reload() }}><RefreshCw className="size-4" /></IconButton>}>
+        <ErrorBanner error={reqs.error ?? jobs.error} onRetry={() => { void reqs.reload(); void jobs.reload() }} />
+        {(reqs.loading && !reqs.data) || (jobs.loading && !jobs.data) ? <Spinner /> : groups.length === 0 ? <Empty>尚无导出请求</Empty> : (
+          <div className="space-y-3">
+            {groups.map((g) => {
+              const q = g.request
+              const gv = q ? exportRequestView(q) : undefined
+              return (
+                <section key={g.key} aria-label={q ? `导出请求组 #${q.id}` : `导出任务 #${g.jobs[0].id}`} className="rounded-md border border-slate-200">
+                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/60 px-3 py-2 text-xs text-slate-500">
+                    <span className="text-sm font-medium text-slate-800">{q ? `请求组 #${q.id}` : '旧导出任务'}</span>
+                    {q ? <Badge tone={q.strict_runtime ? 'purple' : 'slate'}>{q.strict_runtime ? '最终稿（严格）' : '预览稿'}</Badge>
+                      : <Badge tone="slate" title="S4 之前创建的导出没有请求组，按预览稿对待">预览稿（旧）</Badge>}
+                    {gv && <Badge tone={gv.tone}>{gv.active && <Loader2 className="size-3 animate-spin" aria-hidden />}{gv.label}</Badge>}
+                    <span>大纲 v{q?.outline_version ?? g.jobs[0].outline_version}</span>
+                    {q && <span title={q.snapshot_hash}>快照 {q.snapshot_hash.slice(0, 10)}</span>}
+                    {q?.executor && <span>执行版本 {q.executor}</span>}
+                    <span>{(q?.created_by ?? g.jobs[0].created_by) || '—'} · {fmtTime(g.createdAt)}</span>
+                    {q && gv?.active && <Button size="sm" icon={<XCircle className="size-3.5" />} loading={busy === `g${q.id}`} onClick={() => cancelGroup(q)}>取消整组</Button>}
+                  </div>
+                  <table className="w-full text-sm">
+                    <tbody>{g.jobs.map((j) => {
+                      const v = exportJobView(j)
+                      return (
+                        <tr key={j.id} className="border-b border-slate-100 align-top last:border-0">
+                          <td className="w-28 px-3 py-2 font-medium">#{j.id} {j.format.toUpperCase()}<div className="text-xs font-normal text-slate-400">{j.template_key === 'default' ? '默认模板' : j.template_key}</div></td>
+                          <td className="pr-2 py-2"><Badge tone={v.tone}>{v.active && <Loader2 className="size-3 animate-spin" aria-hidden />}{v.label}</Badge>
+                            {v.note && <div className={cx('max-w-md text-xs', v.tone === 'red' ? 'text-red-600' : v.tone === 'amber' ? 'text-amber-700' : 'text-slate-500')}>{v.note}</div>}</td>
+                          <td className="pr-2 py-2 text-xs text-slate-500">{Object.keys(j.rev_snapshot).length} 章 · {j.chart_snapshot.length} 图 · 偏离表 {j.matrix_snapshot.length} 行
+                            {j.finished_at && <div>完成 {fmtTime(j.finished_at)}</div>}</td>
+                          <td className="pr-2 py-2 text-xs">{j.warnings.length ? <Badge tone="amber">{j.warnings.length} 项提示</Badge> : ''}</td>
+                          <td className="whitespace-nowrap py-2 pr-3 text-right">
+                            <Button size="sm" variant="ghost" onClick={() => setDetail({ job: j, request: q })}>详情</Button>
+                            {v.active && <Button size="sm" icon={<XCircle className="size-3.5" />} loading={busy === `c${j.id}`} onClick={() => cancelJob(j)}>取消</Button>}
+                            {v.canDownload && <Button size="sm" variant={v.final ? 'primary' : 'secondary'} icon={<Download className="size-3.5" />} loading={busy === `dl${j.id}`}
+                              title={v.final ? '严格最终稿' : '仅预览稿，不作为最终交付'} onClick={() => download(j)}>{v.final ? '最终稿' : '预览稿'} {fmtBytes(j.artifact_size)}</Button>}
+                          </td>
+                        </tr>
+                      )
+                    })}</tbody>
+                  </table>
+                </section>
+              )
+            })}
+          </div>
         )}
       </Card>
-      {detail && <JobModal job={detail} onClose={() => setDetail(undefined)} />}
+      {detail && <JobModal job={detail.job} request={detail.request} onClose={() => setDetail(undefined)} />}
     </div>
   )
 }
 
-function JobModal({ job, onClose }: { job: ExportJob; onClose: () => void }) {
+function JobModal({ job, request, onClose }: { job: ExportJob; request?: ExportRequest; onClose: () => void }) {
+  const v = exportJobView(job)
   return (
-    <Modal open wide title={`导出任务 #${job.id}（${job.format.toUpperCase()}）`} onClose={onClose}>
+    <Modal open wide title={`导出作业 #${job.id}（${job.format.toUpperCase()}）`} onClose={onClose}>
       <div className="space-y-4 text-sm">
-        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
-          <span>状态 {exportStatusLabel[job.status]}</span><span>执行 {job.attempts}/{job.max_attempts} 次</span>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-slate-500">
+          <Badge tone={v.tone}>{v.label}</Badge>
+          <span>作业状态 {exportStatusLabel[job.status] ?? job.status}</span><span>执行 {job.attempts}/{job.max_attempts} 次</span>
+          <span>策略 {request?.policy_version ?? (job.strict_runtime ? '最终稿' : '预览稿（S4 之前）')}</span>
+          {job.executor && <span>固定执行版本 {job.executor}</span>}
+          {job.office_version && <span>实际刷新引擎 {job.office_version}</span>}
+          {job.deadline_at && <span>截止 {fmtTime(job.deadline_at)}</span>}
           <span>模板 {job.template_key}（{job.template_hash.slice(0, 12)}）</span>
           {job.artifact_hash && <span>产物 SHA-256 {job.artifact_hash.slice(0, 16)}…</span>}
+          {request && <span title={request.snapshot_hash}>请求键 {request.request_key} · 快照 {request.snapshot_hash.slice(0, 16)}…</span>}
         </div>
-        {job.error && <p className="text-red-600">{job.error}</p>}
+        {v.note && <p className={v.tone === 'red' ? 'text-red-600' : 'text-slate-600'}>{v.note}</p>}
         <Warnings list={job.warnings} />
         <div>
           <div className="mb-1 text-xs font-medium text-slate-500">锁定的章节修订（rev_snapshot）</div>

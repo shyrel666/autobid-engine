@@ -48,6 +48,8 @@ type Kit struct {
 	research  *retrieval.Coordinator
 	charts    *export.Service
 	runtime   *toolhealth.Registry
+	// exportSubmit 是宿主（服务器配置）授予的任务导出能力，不来自模型或 Planner mandate。
+	exportSubmit bool
 }
 
 func (k *Kit) WithRetrieval(s *retrieval.Service) *Kit { k.retrieval = s; return k }
@@ -74,7 +76,7 @@ func (k *Kit) ResidentTools() []tool.CoreTool {
 func (k *Kit) DeferredTools() []tool.CoreTool {
 	return append([]tool.CoreTool{k.queryCredentialsTool(), k.simulateScoringTool(), k.verifyCommercialTool(),
 		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool(), k.chartGenerateTool()},
-		append(append(append(k.proposalTools(), k.reviewTools()...), k.retrievalTools()...), k.ChartJobTools()...)...)
+		append(append(append(append(k.proposalTools(), k.reviewTools()...), k.retrievalTools()...), k.ChartJobTools()...), k.ExportJobTools()...)...)
 }
 
 // SectionWriterTools 返回单次技术标章节撰写（HTTP 派发）可用的辅助工具集（不含 section_write_draft，写回由派发门禁统一执行）。

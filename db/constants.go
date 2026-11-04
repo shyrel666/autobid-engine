@@ -139,6 +139,8 @@ type IntentMandate struct {
 	AllowedJobKinds []string `json:"allowed_job_kinds,omitempty"`
 	// RequiredJobKinds 要求完成前每类至少有一个本意图订阅的作业成功且结果仍有效。
 	RequiredJobKinds []string `json:"required_job_kinds,omitempty"`
+	// AllowedTemplateIDs 收窄导出可用的上传模板（内置默认模板不受限）；RestrictObjects 为真时空列表表示只能用默认模板。
+	AllowedTemplateIDs []int64 `json:"allowed_template_ids,omitempty"`
 }
 
 // IsEmpty 判断 Mandate 是否未设置任何约束条件。
@@ -156,7 +158,8 @@ func (m *IntentMandate) IsEmpty() bool {
 		len(m.ForbiddenTools) == 0 &&
 		!m.RequireWriteback &&
 		len(m.AllowedJobKinds) == 0 &&
-		len(m.RequiredJobKinds) == 0
+		len(m.RequiredJobKinds) == 0 &&
+		len(m.AllowedTemplateIDs) == 0
 }
 
 // NodeMandate 从节点 payload 中解析可选的 IntentMandate。

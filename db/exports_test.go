@@ -171,14 +171,23 @@ func TestExportJobLeaseFencing(t *testing.T) {
 	if j, _ := f.d.GetExportJob(ctx, DefaultTenant, f.task.ID, c.ID); j.Status != ExportFailed || j.FinishedAt == nil {
 		t.Fatalf("permanent failure = %+v", j)
 	}
-	if _, err := f.d.ExecContext(ctx, `UPDATE export_jobs SET status = 'running', attempts = max_attempts, lease_until = now() - interval '1 second' WHERE id = $1`, c.ID); err != nil {
+	// 终态不可改写：已失败的作业不能被改回运行中（迟到的执行结果同样无法写回）。
+	if _, err := f.d.ExecContext(ctx, `UPDATE export_jobs SET status = 'running', lease_until = now() + interval '1 minute' WHERE id = $1`, c.ID); err == nil || !strings.Contains(err.Error(), "already failed") {
+		t.Fatalf("terminal status rewrite: %v", err)
+	}
+	// 用尽次数的过期任务在领取时以 BUDGET_EXHAUSTED 结束，保留最后一次失败原因。
+	jobs, _, _ = f.export(t, ExportPDF)
+	d, _ := f.d.ClaimExportJob(ctx, "w", time.Minute, f.task.ID)
+	if d == nil || d.ID != jobs[0].ID {
+		t.Fatalf("claim = %+v", d)
+	}
+	if _, err := f.d.ExecContext(ctx, `UPDATE export_jobs SET attempts = max_attempts, error = '文档引擎崩溃', lease_until = now() - interval '1 second' WHERE id = $1`, d.ID); err != nil {
 		t.Fatal(err)
 	}
 	if x, _ := f.d.ClaimExportJob(ctx, "w", time.Minute, f.task.ID); x != nil {
 		t.Fatalf("exhausted job claimed: %+v", x)
 	}
-	if j, _ := f.d.GetExportJob(ctx, DefaultTenant, f.task.ID, c.ID); j.Status != ExportFailed || !strings.Contains(j.Error, "文档引擎") {
-		t.Fatalf("exhausted job = %s %q", j.Status, j.Error)
+	if j, _ := f.d.GetExportJob(ctx, DefaultTenant, f.task.ID, d.ID); j.Status != ExportFailed || j.ErrorCode != JobErrBudgetExhausted || !strings.Contains(j.Error, "文档引擎") {
+		t.Fatalf("exhausted job = %s %s %q", j.Status, j.ErrorCode, j.Error)
 	}
-	_ = jobs
 }

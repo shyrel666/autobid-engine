@@ -11,7 +11,8 @@ import type {
   ExtractRequirementsResp, RFPGoalDecompResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
   RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionDetail, BidScopeInput, VetoStatus, SectionWriteJob,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
-  ChartJobReq, ChartJobResp, ChartRenderJob, ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
+  ChartJobReq, ChartJobResp, ChartRenderJob, ChartReq, CreateExportReq, ExportCancelResult, ExportJob, ExportMode, ExportPreflight, ExportRequest,
+  ExportStatus, ExportSubmitResp, ExportTemplate, ProposalChart,
   RuntimeCapability, RuntimeCapabilityStatus, AgentJob,
   LLMSettings, LLMPoolStatus, LLMProfileInput, LLMTestResult, LLMRecordDetail, LLMRecordsResp, SystemCatalog, AgentRoleKey, TaskGraph,
   CompanyPerformance, EvidenceOriginal, EvidenceBinding, AdmissibilityRun, AdmissibilityDecision,
@@ -366,9 +367,15 @@ export const api = {
     get<{ jobs: ChartRenderJob[]; renderer: ExportStatus }>(`${t(id)}/chart-jobs${qs(f)}`),
   chartJob: (id: number, jobID: number) => get<ChartJobResp>(`${t(id)}/chart-jobs/${jobID}`),
   cancelChartJob: (id: number, jobID: number) => post<ChartJobResp>(`${t(id)}/chart-jobs/${jobID}/cancel`),
-  exportPreflight: (id: number) => get<ExportPreflight>(`${t(id)}/exports/preflight`),
-  createExport: (id: number, req: CreateExportReq) => post<{ jobs: ExportJob[]; warnings: ExportWarning[] }>(`${t(id)}/exports`, req),
+  exportPreflight: (id: number, mode?: ExportMode) => get<ExportPreflight>(`${t(id)}/exports/preflight${qs({ mode })}`),
+  createExport: (id: number, req: CreateExportReq) => post<ExportSubmitResp>(`${t(id)}/exports`, req),
   exportJobs: (id: number) => get<{ jobs: ExportJob[] }>(`${t(id)}/exports`),
+  cancelExport: (id: number, jobID: number) => post<{ job: ExportJob; cancelled: boolean }>(`${t(id)}/exports/${jobID}/cancel`),
+  exportRequests: (id: number, f: { before?: number; limit?: number } = {}) =>
+    get<{ requests: ExportRequest[]; status: ExportStatus }>(`${t(id)}/export-requests${qs(f)}`),
+  exportRequest: (id: number, requestID: number) => get<ExportRequest>(`${t(id)}/export-requests/${requestID}`),
+  cancelExportRequest: (id: number, requestID: number) =>
+    post<{ request: ExportRequest; results: ExportCancelResult[] }>(`${t(id)}/export-requests/${requestID}/cancel`),
   downloadExport: (id: number, jobID: number) => blob(`${t(id)}/exports/${jobID}/download`),
   exportTemplates: () => get<{ templates: ExportTemplate[]; default_template_hash: string }>('/api/export/templates'),
   runtimeTools: (capability?: RuntimeCapability) =>

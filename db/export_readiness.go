@@ -55,6 +55,9 @@ const (
 	BlockWritingVerificationStale  = "writing_verification_stale"
 	BlockWritingVerificationFailed = "writing_verification_failed"
 	BlockSectionSelfApproved       = "section_self_approved"
+
+	// S4 严格最终稿策略：纳入导出的图表没有可用渲染图（只在 strict_runtime 预检 / 提交时出现）。
+	BlockChartNotFinal = "chart_not_final"
 )
 
 // ExportBlocker 是一条阻止导出的原因。

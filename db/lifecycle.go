@@ -60,6 +60,11 @@ func (d *DB) SetTaskPaused(ctx context.Context, id int64, paused bool) error {
 			// attempt's write-back; attempts and the original deadline are kept.
 			_, err = tx.ExecContext(ctx, `UPDATE chart_render_jobs SET status='queued',lease_token=lease_token+1,lease_until=NULL,lease_owner='',error='项目已暂停，等待恢复',updated_by='task-pause' WHERE task_id=$1 AND status='running'`, id)
 		}
+		if err == nil && paused {
+			// S4: revoke in-flight exports the same way; attempts, the deadline fixed at
+			// submission and the snapshot are kept, the token bump rejects the old write-back.
+			_, err = tx.ExecContext(ctx, `UPDATE export_jobs SET status='queued',lease_token=lease_token+1,lease_until=NULL,lease_owner='',error='项目已暂停，等待恢复',updated_by='task-pause' WHERE task_id=$1 AND status='running'`, id)
+		}
 		return err
 	})
 }

@@ -4,12 +4,16 @@ package export
 //   - PDF：从目录页读出每个条目的页码，在正文页中定位同名标题实际所在的页，二者必须一致；页脚「第 N 页」与物理页序一致；
 //     版芯外没有正文文字与图片（页眉 / 页脚带的文字只允许在页眉页脚区域内、左右不越出版芯），图片互不重叠、不压正文；
 //     没有只含页眉页脚的空白页；
-//   - DOCX：TOC 域存在，缓存结果非空且不是「请更新域」类占位文字，条目带页码；读出标题与表格。
-// Runner 在导出成功后执行自检并把问题记为提示；验收测试直接断言报告为空。
+//   - DOCX：TOC 域存在，缓存结果非空且不是「请更新域」类占位文字，条目带页码；读出标题、表格与正文图片数。
+// Runner 在导出成功后执行自检并把问题记为提示；严格最终稿另把目录结构问题与图片 / 表格缺失判为失败（exec.go readback）。
+// 验收测试直接断言报告为空。
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"strconv"
@@ -279,4 +283,31 @@ func CheckDOCX(ctx context.Context, data []byte) (*DOCXReport, error) {
 		}
 	}
 	return r, nil
+}
+
+// reBlip 匹配图片引用元素（文档引擎另存时可能改写命名空间前缀）。
+var reBlip = regexp.MustCompile(`<(?:\w+:)?blip[\s/>]`)
+
+// DOCXBodyImages 统计正文（word/document.xml）中嵌入的图片数（a:blip 引用），页眉页脚中的图片不计入。
+func DOCXBodyImages(data []byte) (int, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return 0, err
+	}
+	for _, f := range zr.File {
+		if f.Name != "word/document.xml" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return 0, err
+		}
+		body, err := io.ReadAll(io.LimitReader(rc, 256<<20))
+		rc.Close()
+		if err != nil {
+			return 0, err
+		}
+		return len(reBlip.FindAllIndex(body, -1)), nil
+	}
+	return 0, fmt.Errorf("word/document.xml not found")
 }

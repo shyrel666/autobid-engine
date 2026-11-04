@@ -67,6 +67,11 @@
 
 - `AUTOBID_OFFICE_ENGINE`：`auto`（默认，WPS 优先、Word 备选）、`wps` 或 `word`。
 - `AUTOBID_OFFICE_TIMEOUT_SECONDS`：单次刷新超时，默认 180 秒。
+- `AUTOBID_EXPORT_WORKERS`：导出作业执行者数，默认 2；引擎内仍串行。
+- `AUTOBID_EXPORT_JOB_DEADLINE_SECONDS`：导出作业从首次提交起的截止时长，默认 1800 秒（S4）；回收、暂停恢复与重试都不延长。
+- `AUTOBID_AGENT_EXPORT_ENABLED`：为 `1/true` 时允许 Worker 经 `proposal_export_submit` 提交严格最终稿（S4），默认关闭。这是高影响入口，R2 可信身份完成前保持关闭；关闭时页面导出不受影响。
+
+最终稿（严格策略）在提交时固定当时的引擎版本标签（如 `WPS 12.1.0.29161`）。之后升级或切换引擎，按原版本提交的作业会以 `RUNTIME_UNAVAILABLE` 失败，需要用新的请求键重新提交；预览稿不受影响。
 
 注意事项：
 

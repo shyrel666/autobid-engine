@@ -213,7 +213,7 @@ type AgentJobFilter struct {
 const agentJobCols = `s.id, s.task_id, s.intent_id, s.created_intent_epoch, s.job_kind, s.job_id, s.target_ref, s.expected_version, s.required,
 	s.state, s.created_by, s.created_at, s.updated_at,
 	COALESCE(f.status, x.status, c.status, ''), COALESCE(f.attempts, x.attempts, c.attempts, 0),
-	COALESCE(f.max_attempts, x.max_attempts, c.max_attempts, 0), COALESCE(f.deadline_at, c.deadline_at),
+	COALESCE(f.max_attempts, x.max_attempts, c.max_attempts, 0), COALESCE(f.deadline_at, x.deadline_at, c.deadline_at),
 	COALESCE(f.error, x.error, c.error, ''),
 	e.id, e.terminal_status, e.business_state, e.payload, e.state, e.delivery_epoch, e.delivered_at, e.acknowledged_at, e.created_at`
 
@@ -319,13 +319,9 @@ func (d *DB) GetAgentJobSnapshot(ctx context.Context, tenant string, taskID int6
 	if err := d.checkJobOwnedByIntent(ctx, tenant, taskID, ref); err != nil {
 		return nil, err
 	}
-	deadline := "NULL::timestamptz"
-	if ref.Kind == JobKindTenderParse || ref.Kind == JobKindChartRender {
-		deadline = "deadline_at"
-	}
 	snap := &AgentJobSnapshot{Job: ref}
 	var dl sql.NullTime
-	err := d.QueryRowContext(ctx, `SELECT status, attempts, max_attempts, `+deadline+`, error FROM `+table+` WHERE tenant_id = $1 AND task_id = $2 AND id = $3`,
+	err := d.QueryRowContext(ctx, `SELECT status, attempts, max_attempts, deadline_at, error FROM `+table+` WHERE tenant_id = $1 AND task_id = $2 AND id = $3`,
 		tenantOr(tenant), taskID, ref.ID).Scan(&snap.Status, &snap.Attempts, &snap.MaxAttempts, &dl, &snap.Error)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s #%d", ErrNotFound, ref.Kind, ref.ID)
@@ -588,9 +584,9 @@ func (d *DB) checkJobDeliverables(ctx context.Context, taskID int64, n *Node, m 
 	return nil
 }
 
-// agentJobResultValid 校验成功作业的结果版本仍有效：解析候选就绪且未被新解析修订取代（或已采用）；导出产物已登记；
-// 图表与作业源码一致、绑定章节当前修订且有真实产物（PNG 已登记哈希，或设备表原生表格）。
-// 严格最终稿策略（S4）落地前，导出结果一律按 preview_only 对待。
+// agentJobResultValid 校验成功作业的结果版本仍有效：解析候选就绪且未被新解析修订取代（或已采用）；导出须是严格最终稿
+// （文档引擎已刷新目录并记录引擎，产物已登记，preview_only 不算交付）；图表与作业源码一致、绑定章节当前修订且有真实产物
+// （PNG 已登记哈希，或设备表原生表格）。
 func (d *DB) agentJobResultValid(ctx context.Context, taskID int64, ref JobRef) (bool, error) {
 	var ok bool
 	var err error
@@ -602,7 +598,8 @@ func (d *DB) agentJobResultValid(ctx context.Context, taskID int64, ref JobRef) 
 			  AND (r.status = 'adopted' OR (r.status = 'ready' AND (r.operation = 'import' OR td.parse_revision = r.expected_revision))))`,
 			ref.ID, taskID).Scan(&ok)
 	case JobKindProposalExport:
-		err = d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM export_jobs WHERE id = $1 AND task_id = $2 AND status = 'succeeded' AND artifact_hash <> '')`,
+		err = d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM export_jobs WHERE id = $1 AND task_id = $2 AND status = 'succeeded' AND artifact_hash <> ''
+			AND strict_runtime AND toc_refreshed AND office_engine <> '')`,
 			ref.ID, taskID).Scan(&ok)
 	case JobKindChartRender:
 		err = d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM chart_render_jobs j

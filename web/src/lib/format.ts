@@ -150,6 +150,7 @@ export const exportBlockerLabel: Record<string, string> = {
   section_not_approved: '章节未定稿', matrix_stale: '响应核验失效', matrix_failed: '响应核验未通过', matrix_unverified: '尚未核验',
   consistency_not_run: '未做一致性核验', consistency_stale: '一致性核验过期', finding_open: '一致性结论待处理', evidence_invalid: '证据失效',
   veto_pending: '否决项待核对', veto_failed: '否决项不通过', no_bid_decision: '已决策放弃投标', requirement_superseded: '章节仍引用已覆盖旧要求',
+  chart_not_final: '图表未渲染（最终稿）', office_unavailable: '文档引擎不可用（最终稿）',
 }
 
 // D1：否决项与招标包
@@ -167,7 +168,7 @@ export const chartTypeLabel: Record<string, string> = {
 
 export const chartRenderLabel: Record<string, string> = { pending: '待渲染', rendered: '已渲染', unrendered: '未渲染（mmdc 不可用）', failed: '渲染失败' }
 
-export const exportStatusLabel: Record<string, string> = { queued: '排队中', running: '执行中', succeeded: '已生成', failed: '失败' }
+export const exportStatusLabel: Record<string, string> = { queued: '排队中', running: '执行中', succeeded: '已生成', failed: '失败', cancelled: '已取消', partial: '部分完成' }
 
 export const exportWarningLabel: Record<string, string> = {
   chart_unrendered: '图表未渲染', chart_failed: '图表渲染失败', chart_stale: '图表已过期', toc_not_refreshed: '目录页码未刷新',

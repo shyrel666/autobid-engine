@@ -31,6 +31,8 @@ type Service struct {
 	Health         *toolhealth.Registry
 	// ChartWake 在新图表渲染作业登记后加速执行者领取（作业已持久化，为 nil 时等待执行者轮询）。
 	ChartWake func()
+	// ExportWake 在新导出请求组登记后加速导出执行者领取（同上）。
+	ExportWake func()
 }
 
 // WakeChartRunner 非阻塞地唤醒图表渲染执行者。

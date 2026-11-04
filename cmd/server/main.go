@@ -13,6 +13,8 @@
 //	AUTOBID_FILEWORK_DIR   原件内容寻址存储目录，默认 data/filework（已加入 .gitignore）
 //	AUTOBID_OFFICE_ENGINE  导出文档引擎：auto（默认，WPS 优先、Word 备选）/ wps / word；启动时用小样本实际刷新自检
 //	AUTOBID_OFFICE_TIMEOUT_SECONDS  文档引擎单次刷新超时（默认 180）；同一引擎同一时间只处理一个文档
+//	AUTOBID_EXPORT_JOB_DEADLINE_SECONDS  导出作业从首次提交起的截止时长（默认 1800），重试与暂停恢复不延长
+//	AUTOBID_AGENT_EXPORT_ENABLED  为 1/true 时允许 Worker 提交严格最终稿导出（proposal_export_submit）；默认关闭，R2 可信身份完成前保持关闭
 //	AUTOBID_MMDC_PATH      mermaid-cli（mmdc 或其 cli.js）路径；未设置时查 PATH，均不可用或自检失败时图表为 unrendered
 //	AUTOBID_MMDC_BROWSER   mmdc 使用的本机 Chrome / Chromium 可执行文件（puppeteer executablePath）
 //	AUTOBID_MMDC_TIMEOUT_SECONDS / AUTOBID_MMDC_CONCURRENCY  单次渲染超时（默认 90）与并发上限（默认 2）
@@ -128,6 +130,7 @@ func run(logger *slog.Logger) error {
 		MultiRetrieval: envBool("AUTOBID_RETRIEVAL_MULTI_AGENT"),
 		Retrieval:      retriever,
 		Charts:         exporter,
+		AgentExport:    envBool("AUTOBID_AGENT_EXPORT_ENABLED"),
 		Runtime:        runtimeHealth,
 		OnActivity:     func(_ int64, a db.Activity) { hub.Publish(a) },
 		OnLedgerErr:    func(err error) { logger.Warn("llm ledger write failed", "err", err) },
@@ -196,7 +199,7 @@ func run(logger *slog.Logger) error {
 			hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "chart-render", Kind: "state", At: time.Now(), Summary: summary})
 			e.WakeAgentJobs()
 		}}
-	exporter.ChartWake = chartRunner.Wake
+	exporter.ChartWake, exporter.ExportWake = chartRunner.Wake, runner.Wake
 	chartRunner.Start(engineCtx)
 	var fileStore *filework.Store
 	if envBool("AUTOBID_FILE_PROCESSING_ENABLED") {

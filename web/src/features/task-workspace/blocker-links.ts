@@ -47,6 +47,12 @@ export function blockerLink(taskId: number, b: ExportBlocker): BlockerLink | nul
     case 'consistency_stale':
     case 'finding_open':
       return { href: taskUrl(taskId, 'consistency', { query: { finding: pos(b.finding_id) } }), label: '去一致性核验' }
+    case 'chart_not_final':
+      return sec
+        ? { href: taskUrl(taskId, 'writing', { sectionId: sec }), label: '去渲染章节图表' }
+        : { href: taskUrl(taskId, 'writing'), label: '去章节列表' }
+    case 'office_unavailable':
+      return { href: taskUrl(taskId, 'export'), label: '查看运行能力' }
     case 'evidence_invalid':
       if (sec) return { href: taskUrl(taskId, 'writing', { sectionId: sec, query: { panel: 'evidence', evidence: pos(b.evidence_id) } }), label: '去章节证据' }
       if (req) return { href: taskUrl(taskId, 'requirements', { query: { requirement: req } }), label: '去相关要求' }

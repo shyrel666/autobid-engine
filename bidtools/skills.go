@@ -11,6 +11,7 @@ const (
 	SkillProposalWriting    = "proposal-writing"
 	SkillProposalReview     = "proposal-review"
 	SkillDiagramGeneration  = "diagram-generation"
+	SkillProposalExport     = "proposal-export"
 )
 
 // Skills 返回内置招投标专业技能；每个技能解锁其所属的延迟工具（§4.3 阶段 B）。
@@ -120,6 +121,27 @@ func Skills() []tool.Skill {
    failed 时 record_fact 记录失败原因与 error_code。
 6. 查询单个作业：SearchExtraTools("select:chart_render_status") 后调用 chart_render_status（或公共工具 agent_job_status）；
    不再需要排队或执行中的作业时，SearchExtraTools("select:chart_render_cancel") 后调用 chart_render_cancel 取消，取消后迟到的结果不会写回。`,
+		},
+		{
+			Name:        SkillProposalExport,
+			Description: "技术标合稿导出：按严格最终稿策略预检导出门禁，提交锁定版本的 DOCX / PDF 导出请求组（文档引擎 WPS / Word 真实刷新目录、图表已渲染、产物回读），查询或取消；结果以作业事件唤醒当前意图。",
+			Tools:       []string{ToolProposalExportCheck, ToolProposalExportSubmit, ToolProposalExportStatus, ToolProposalExportCancel},
+			Body: `# 技术标合稿导出
+
+1. 先 SearchExtraTools("select:proposal_export_check") 取 Schema，调用 proposal_export_check（formats 为 ["docx","pdf"] 的子集，可选 template_id）。
+   ready=false 时不要提交：blockers 指向未批准章节、失效的响应矩阵 / 一致性核验、未渲染图表（chart_not_final）或文档引擎不可用（office_unavailable），
+   用对应技能处理或 record_fact 记录缺口并交由人工处理；不要改写核验结论来“通过”门禁。
+2. ready=true 后 SearchExtraTools("select:proposal_export_submit") 取 Schema，调用 proposal_export_submit：
+   expected_outline_version 填预检返回的 outline_version；request_key 自己生成（如 "export-final-v3-1"），同一次提交重发时复用，改变格式、模板或投标人时换新键。
+   导出一律是严格最终稿，模型不能选择预览稿；服务器未开放 Agent 导出时返回 FEATURE_DISABLED，此时 record_fact 说明需由人工在导出页导出，不要反复重试。
+3. accepted=true 后各格式作业在服务器后台执行；当前意图会在作业结束后被自动唤醒并收到作业事件：期间不要轮询，也不要以相同参数重复提交，本轮总结后即可结束。
+4. 被拒绝（accepted=false）时按 error_code 处理：PRECONDITION_FAILED 看 blockers；CONFLICT_STALE_REVISION 重新预检后以新键提交；
+   RUNTIME_UNAVAILABLE 表示没有可用的文档引擎；IDEMPOTENCY_KEY_CONFLICT 换新键；CAPACITY_BUSY 稍后重试；SCOPE_VIOLATION 表示模板或作业超出当前意图范围。
+5. 收到作业事件后：business_state=final_ready 表示该格式的严格最终稿已生成（目录已由文档引擎刷新，sha256 与下载路由见 proposal_export_status）；
+   failed 时 record_fact 记录 error_code（READBACK_FAILED 为成稿回读未通过，RUNTIME_UNAVAILABLE 为引擎不可用或与提交时固定的版本不符）。
+   导出成功只表示产物已生成，不代表已签章或已被交易平台接收，也不代表内容已通过外部评审。
+6. 查询：SearchExtraTools("select:proposal_export_status") 后按 job_ref 或 export_request_id 调用；不再需要排队或执行中的导出时，
+   SearchExtraTools("select:proposal_export_cancel") 后调用 proposal_export_cancel，整组取消会逐项返回已取消或已终态。`,
 		},
 		{
 			Name:        SkillProposalReview,

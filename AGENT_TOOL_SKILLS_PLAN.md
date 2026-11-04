@@ -28,7 +28,13 @@
   - 存储与执行：`db/chart_jobs.go`（提交 / 领取 / 心跳 / 写回 / 取消，暂停退回 queued 并推进令牌）、`export/chart_jobs.go`（服务层校验与规范化请求哈希、`ChartRunner` 事务外渲染并按作业 + 令牌隔离产物）。
   - 两条写作路径：Worker 经新技能 `diagram-generation`（`chart_render_submit` / `chart_render_status` / `chart_render_cancel`）提交并订阅；HTTP 章节 Writer 草稿的 `charts` 计划与修订在同一事务登记。
   - HTTP `/api/tasks/{id}/chart-jobs*`；前端章节图表卡片改为异步生成、取消、重试与旧修订分组。
-- **尚未实施**：S4~S7。代码与 schema 中仍不存在本文其余拟新增的表（`export_requests`）、导出与解析的提交类工具、路由与字段，也没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
+- **S4 已 E 收口（2026-11-04，本机验证，见第 9 节与 12.8）**：
+  - 导出请求组 `export_requests`（请求键全生命周期幂等、`snapshot_hash` 首次冻结、请求组与全部格式作业 / 订阅同事务创建）；`export_jobs` 增加请求组外键、`strict_runtime`、执行版本、首次提交固定的截止时间、错误码、实际文档引擎与 `cancelled` 终态。
+  - 显式版本化导出策略：最终稿 `export-final/v1`（文档引擎真实刷新目录、图表须已渲染、产物回读目录 / 图片 / 表格，引擎不可用拒绝而不降级），预览稿 `export-preview/v1` 保持旧行为且只能是 `preview_only`。
+  - 取消、暂停、截止与尝试预算围栏：`db/export_requests.go`、`db/exports.go`、`export/export_jobs.go`、`export/exec.go`、`export/runner.go`。
+  - 新技能 `proposal-export`（`proposal_export_check` / `submit` / `status` / `cancel`），`proposal_export_check` 同时装配给 Planner；Agent 提交须服务器授予任务导出能力（`AUTOBID_AGENT_EXPORT_ENABLED`，默认关闭，R2 可信身份完成前保持关闭）。
+  - HTTP `request_key` / `mode` / `expected_outline_version`、`/exports/{jobID}/cancel` 与 `/export-requests*`；导出页按请求组展示最终稿 / 预览稿、逐格式状态、取消与下载。
+- **尚未实施**：S5~S7。代码与 schema 中仍不存在解析的提交类工具及其路由与字段，也没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
 
 适用项目：AutoBid Engine。本文中的 Skill 指项目提供给 Agent 的业务技能（`bidtools.Skills()`），不是 Codex 桌面插件。
 
@@ -74,8 +80,8 @@
 | 文档 | `filework.Processor.process` 首次导入直接 PersistTender；reparse 将完整 PreparedTender 存入 FileProcessingRecord.Payload，Preview 仅为差异摘要；Adopt 目前只支持 reparse；固定队列已有幂等/租约/取消 | Agent 首次导入候选模式、人工采用 import 分支、解析后端与结果分页 |
 | 检索 | `retrieval/providers.go`、版本化索引、核验与 knowledge-reuse 已有 | 健康探测、版本回显与可选模型部署，不重写协议 |
 | 图表 | `export.BuildChartSource` 支持 architecture/gantt/org/equipment_table；`export.Renderer.RenderPNG` 与 `export.MMDC`；proposal_charts 已有 source_hash、pending、修订绑定、产物路径/哈希 | 期望修订围栏、持久化渲染作业、幂等取消、结构化图表计划（**S3 已实现**：`db/chart_jobs.go`、`export/chart_jobs.go`，见 12.7） |
-| 导出 | `db.CreateExportJobs` 冻结快照；**CompleteExportJob、FailExportJob、Heartbeat 已检查 lease_token + running**；export/runner.go 异步执行 | 全生命周期请求幂等、cancelled、严格最终稿策略与完成通知；复用已有围栏，没有 FinishExportJob 这个待修补接口 |
-| 导出引擎 | **2026-11-03 已实现**：`export.Service.Office` 是文档引擎接口（`export/office.go`，含按 `AUTOBID_OFFICE_ENGINE` 探测与启动自检），实现为 WPS/Word COM 自动化（`office_windows.go` + `office_com.ps1`）；`Execute` 在引擎为 nil 时 PDF 永久失败，DOCX 只写 updateFields 占位；`/api/export/status` 返回 `office_engine` / `office_version` | 作业结果记录引擎名与版本（需 `export_jobs` 新列，S4）；多作业排队已在 S1 验证（引擎固定串行） |
+| 导出 | `db.CreateExportJobs` 冻结快照；**CompleteExportJob、FailExportJob、Heartbeat 已检查 lease_token + running**；export/runner.go 异步执行 | 全生命周期请求幂等、cancelled、严格最终稿策略与完成通知；复用已有围栏，没有 FinishExportJob 这个待修补接口（**S4 已实现**：`db/export_requests.go`、`export/export_jobs.go`，见 12.8） |
+| 导出引擎 | **2026-11-03 已实现**：`export.Service.Office` 是文档引擎接口（`export/office.go`，含按 `AUTOBID_OFFICE_ENGINE` 探测与启动自检），实现为 WPS/Word COM 自动化（`office_windows.go` + `office_com.ps1`）；`Execute` 在引擎为 nil 时 PDF 永久失败，DOCX 只写 updateFields 占位；`/api/export/status` 返回 `office_engine` / `office_version` | 作业结果记录引擎名与版本（**S4 已实现**：`export_jobs.office_engine` / `office_version`）；多作业排队已在 S1 验证（引擎固定串行） |
 | HTTP 章节 Writer | `server/proposal.go:llmSectionWriter.WriteSection` 已调用 harness.Run（最多 6 轮工具调用，再解析 JSON）；SectionWriterTools 包含证据绑定，非纯只读；`server/section_jobs.go:executeSectionJob` 调 FinishSectionWriteJob 原子保存修订/结果 | 增加图表计划，并在修订提交事务内登记渲染作业；不改回单次 LLM 调用 |
 | Intent | intent_completion.go 校验产物；intent_inputs.go 持久化 Hint；runIntent 正常回合校验后 ACK；终态触发器和函数尾部均退回 Hint | 持久化作业事件、原子回合收尾与等待恢复、Hint 等待态兼容（**S2 已实现**：`db/agent_jobs.go`，见 12.6） |
 
@@ -113,7 +119,7 @@ Skill 描述步骤，Tool 调应用内业务服务，不经 HTTP 回环重复实
 
 - 在 LLMService.Resolve 注入工具，沿用 Skill → SearchExtraTools → 执行。提交业务作业与订阅须同事务。
 - 现有 `db.WithIntentExecution/WithExecutionScope` 注入执行身份和范围。原稿所称 IntentExecutionFromContext/ExecutionScopeFromContext **目前不存在**。S2 在 db 内新增校验/提交方法，使用现有私有 Context 值并在事务内校验活租约；不必向模型开放身份读取接口。（S2 已实现：`LockSubmittingIntent`、`SubscribeAgentJob`、`CheckJobKindScope`。）
-- Planner 新增可选 `ExtraTools []tool.CoreTool`，仅装配 tool_runtime_status、proposal_export_check、agent_job_status。解析/图表/导出由 add_intent 派发 Worker，人工采用不派发为 Agent 操作。（现已装配 tool_runtime_status 与 agent_job_status；proposal_export_check 随 S4。）
+- Planner 新增可选 `ExtraTools []tool.CoreTool`，仅装配 tool_runtime_status、proposal_export_check、agent_job_status。解析/图表/导出由 add_intent 派发 Worker，人工采用不派发为 Agent 操作。（三者均已装配：tool_runtime_status、agent_job_status 随 S1/S2，proposal_export_check 随 S4。）
 - `agent.WorkerWritebackTools` 是收尾白名单；`server/watchdog.go:isWatchdogWritebackTool` 是另一套写回识别。修改前者不会自动改变后者。**submit 不是交付物**：S2 为 Watchdog Stop 和 runIntent 增加“持久化订阅允许释放本轮槽位”分支，done 仍校验真实结果。不得添加工具名称后就绕过完成门禁。
 
 ### 3.2 HTTP Writer 与图表原子登记
@@ -217,6 +223,15 @@ S3 落地说明（2026-11-04）：
 - `agent_job_outcome('chart_render')` 的业务状态：成功且图表仍与作业源码一致、绑定章节当前修订并已渲染为 `chart_ready`，否则 `chart_stale`；载荷含图表、修订、尺寸、产物哈希与错误码。
 - `proposal_charts.plan_code`（每修订部分唯一）与 `section_write_jobs.chart_plans` 为 `ADD COLUMN IF NOT EXISTS`；HTTP Writer 计划的请求键为服务端保留前缀 `sys:section-job:<作业>:rev:<修订>:chart:<编号>`，客户端请求键不得以 `sys:` 开头。
 
+S4 落地说明（2026-11-04）：
+
+- `export_requests` 按上表建立：`UNIQUE(tenant_id,task_id,request_key)`、`UNIQUE(tenant_id,task_id,id)`；另有 `template_key/template_hash/bidder/outline_id/outline_version`、`policy_version`（`export-final/v1` / `export-preview/v1`）、`executor`（严格最终稿必填，`ck_export_requests_strict`）与首次提交固定的 `deadline_at`；复合 FK 关联批准大纲（级联）与上传模板（RESTRICT，被请求引用的模板不能删）；触发器 `export_requests_immutable` 冻结全部输入。
+- `export_jobs` 以 `ADD COLUMN IF NOT EXISTS` 增加 `export_request_id`（旧行为空）、`strict_runtime`、`deadline_at`、`executor`、`error_code`、`office_engine`、`office_version`；复合 FK `(tenant_id,task_id,export_request_id)` 级联；部分唯一索引 `(tenant_id,task_id,export_request_id,format)`。
+- 旧库内联 CHECK 按 5.1 的写法替换：先 `DROP CONSTRAINT IF EXISTS export_jobs_status_check`，再加 `ck_export_jobs_status`（含 `cancelled`）；`ck_export_jobs_strict` 要求严格作业有执行版本、请求组与截止时间，`ck_export_jobs_final` 要求严格作业只有目录已刷新并记录引擎时才能成功。
+- `export_jobs_immutable` 扩展冻结列（请求组、严格策略、执行版本、截止时间、尝试预算），并拒绝终态之后的任何状态变化。
+- `agent_job_outcome('proposal_export')`：成功且严格、目录已刷新、记录了引擎为 `final_ready`，其余成功为 `preview_only`；载荷增加请求组、策略、引擎与错误码。
+- 不带请求键的旧 HTTP 调用（`CreateExportJobs`）以保留前缀 `sys:legacy:` 生成一次性请求键，按预览稿策略登记请求组。
+
 迁移验证覆盖新库、旧库升级、再次执行、旧 CHECK 替换及历史查询；原稿错误 FK 与不完整索引已改为上述约束，不把未运行的 DDL 当验收。
 
 DDL 落地补充（三轮核对）：
@@ -311,7 +326,7 @@ S1 接线注意：
   - 启动时用内置两章小样本实际跑一遍“刷新目录 + DOCX + PDF + 回读自检”，通过才启用；自检单次上限至少 2 分钟，不受很短的作业超时影响（故障演练可把作业超时设为 1 秒）。
   - 运行中引擎失败不自动换成另一个引擎来生成最终稿。
   - 版本标签由引擎名加程序 Build 组成（如 `WPS 12.1.0.29161`）。WPS 的 `Application.Name` 会报成 “Microsoft Word”，不能直接用。
-  - **待补**：作业结果记录实际引擎与版本，需要 `export_jobs` 新列（并入 S4）。
+  - **已补（S4）**：作业结果记录实际引擎与版本（`export_jobs.office_engine` / `office_version`）；严格最终稿另在首次提交时固定执行版本 `executor`，执行时不符即失败。
 - **配置项**：
   - `AUTOBID_OFFICE_TIMEOUT_SECONDS` 单次超时，默认 180，导出 Runner 租约随之为“超时 + 60 秒”。
   - 同一引擎同一时间只处理一个文档（固定并发 1），提高并发须先完成多作业验证。
@@ -381,7 +396,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 | S1 运行能力 | `features/task-workspace/TaskHeader.tsx` 及解析/导出入口展示相关能力状态，必要时复用能力提示组件；导出页 `features/proposal/export/ExportParts.tsx` 已显示文档引擎（WPS/Word）版本（2026-11-03） | 依赖未配置、自检失败、检查中分别可见；显示影响和下一步，不泄漏宿主路径/密钥；已有有效图表时不因渲染器离线误禁导出 |
 | S2 作业等待 | `features/execution/ExecutionPage.tsx`、`features/task-workspace/TaskWorkspaceProvider.tsx`、`resources.ts` 接入等待原因与作业事件；按当前用户权限读取业务作业 | “等待后台处理”与执行失败分开；刷新/断线重连恢复状态；Agent 提交的作业同样可见，不只显示页面提交的作业 |
 | S3 图表（2026-11-04 已交付，见 12.7） | `features/proposal/export/ExportParts.tsx` 的 ChartsCard 与 `features/proposal/writing/SectionWorkspace.tsx` 接入异步生成、取消、失败重试和修订标记 | 两条写作路径产图自动刷新；旧修订图不显示为当前图；取消后迟到响应不恢复成功；重试按新请求语义提交 |
-| S4 导出 | `features/proposal/export/ExportPage.tsx`、`ExportParts.tsx` 接入预检阻断、请求组、各格式状态、取消与下载 | 明确区分预览/最终稿；多格式部分失败逐项展示；提交响应丢失后同键重发不重复生成；权限不足/版本冲突有明确提示 |
+| S4 导出（2026-11-04 已交付，见 12.8） | `features/proposal/export/ExportPage.tsx`、`ExportParts.tsx` 接入预检阻断、请求组、各格式状态、取消与下载 | 明确区分预览/最终稿；多格式部分失败逐项展示；提交响应丢失后同键重发不重复生成；权限不足/版本冲突有明确提示 |
 | S5a 解析 | `features/proposal/documents/FixedWorkflow.tsx` 接入解析能力、候选模式、分页对照、人工采用及作业控制 | 区分处理中、候选待确认、已采用、失败/取消；不将 OCR 完成标成证据已核验；采用后刷新文档、要求、大纲及导出门禁 |
 | S5b/S5c 条件扩展 | `pages/KnowledgePage.tsx` 及企业证据对应页面随分域协议一起设计，页面落点在该阶段确认 | 知识候选、索引生效与企业证据核验分开；未实现来源类型不出现在可提交选项中 |
 | S6 检索 | `pages/KnowledgePage.tsx`、`pages/task/ResearchTab.tsx` 显示当前索引/模型状态、检索降级原因与证据状态 | 模型故障不冒充正常语义检索，模型切换不混用索引；技术信息只在诊断详情中展示 |
@@ -397,7 +412,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 
 ## 9. 分阶段实施与退出标准
 
-S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2、S3 外均未验收。
+S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2、S3、S4 外均未验收。
 
 各阶段的工作与退出标准同时包含第 8.1 节对应的前端交付及第 8.2 节联调要求，按“后端服务 → API/类型 → 页面接入 → 联调验收”闭环推进。
 
@@ -407,7 +422,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 | [x] E S1 运行包、文档引擎与自检（2026-11-03） | WPS/Word 文档引擎、自检校准与 ★ 字体（6.1）；本机运行依赖登记（`docs/LOCAL_RUNTIME.md`）；mmdc（`tools/mermaid-cli`）；健康 Tool/API（`toolhealth`、`GET /api/runtime/tools`、`tool_runtime_status`）及前端能力提示 | 本机上，WPS（及配置时的 Word）真实刷新目录，DOCX/PDF 回读通过，交付 DOCX 换软件打开目录页码零误差；mmdc 真实 PNG；超时后无残留进程且不误杀用户进程；本机依赖版本已登记。**结果**见 12.5 末尾“S1 收口复验” |
 | [x] E S2 订阅与回合状态机（2026-11-03） | schema、db/agent_jobs.go、engine/watchdog/intent_completion/intent_inputs；`agent_job_status`、`GET /api/tasks/{id}/agent-jobs` 与执行页等待状态 | 原子提交/等待、恢复扫描、ACK、Hint 保留、范围授权；故障注入无丢唤醒/重复应用；测试作业可验证框架，不代表真实工具交付。**结果**见 12.6 |
 | [x] E S3 图表 Skill（2026-11-04） | chart_render_jobs、服务/Tool/HTTP、SectionDraft.Charts 与章节事务 | 两条写作路径生成真实图；修订+图表入队崩溃恢复；取消/旧修订/兼容入口不覆盖新图。**结果**见 12.7 |
-| [ ] E S4 合稿 Skill | export_requests、组幂等、严格策略、取消/暂停与完成事件 | 终态重发复用，同键异参拒绝，真实目录/图片/表格回读，无迟到发布；高影响入口符合 R2 |
+| [x] E S4 合稿 Skill（2026-11-04） | export_requests、组幂等、严格策略、取消/暂停与完成事件 | 终态重发复用，同键异参拒绝，真实目录/图片/表格回读，无迟到发布；高影响入口符合 R2。**结果**见 12.8（Agent 导出入口默认关闭，R2 完成前不开放） |
 | [ ] E S5a 招标解析 Skill | tender_file、candidate_only、人工 import 采用、原生解析/PaddleOCR | 真实 OCR、完整候选、原件定位、幂等采用、source_epoch 失效通过；不开放知识/企业来源 |
 | [ ] E S5b 知识库增强解析（条件阶段） | 先设计知识原件/候选/采用/索引失效，再实现；MinerU 按评测决定 | 分域表/API 设计与实现验收，不能借用招标表或改写已激活索引 |
 | [ ] E S5c 企业证据 OCR（条件阶段） | 先设计原件版本/页级候选/采用/可采性失效，再实现 | OCR 仅产待核验结果，原件变化传播失效，不声称业务可采性已通过 |
@@ -524,7 +539,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 **仍需外部输入**：以下几项需要用户或环境提供，写代码替代不了：
 
 - **S1 运行验收**：（已完成，2026-11-03）以本机为准，mmdc 已在本机安装；真实企业模板仍需用户提供。
-- **S4 最终稿提交**：属于高影响入口，依赖 R2 的显式质量策略与可信身份，这两项都尚未实施。S4 可以先编码，但开放前须完成 R2。
+- **S4 最终稿提交**：属于高影响入口，依赖 R2 的显式质量策略与可信身份，这两项都尚未实施。S4 可以先编码，但开放前须完成 R2。（2026-11-04 S4 已编码收口：导出策略已显式版本化；可信身份仍未实施，Agent 导出入口由 `AUTOBID_AGENT_EXPORT_ENABLED` 控制且默认关闭，见 12.8。）
 - **真实导出回归**：（已由 12.5 更新）真实导出用例已改为依赖 WPS/Word 引擎，R1 的 E 收口以新引擎的全量回归为准。
 
 ### 12.5 导出引擎对比验证与决策（2026-11-03）
@@ -681,6 +696,57 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 - 引擎内 mmdc 并发仍由 `AUTOBID_MMDC_CONCURRENCY` 限制；未做数小时级运行与大批量图表的排队测量。
 - 页面上的作业列表只在章节图表卡片与执行页呈现，没有单独的任务级图表作业页；Planner 仍不能直接提交图表（经 `add_intent` 派发 Worker）。
 - 身份仍为宿主注入的执行身份与 `X-Autobid-User` 审计声明，不是 R2 可信身份；导出（S4）、解析（S5a）的提交类工具尚未实施，导出结果仍为 preview_only。
+
+### 12.8 S4 收口记录（2026-11-04，E 级，本机）
+
+**交付内容**（对应 3.1、4.1~4.3、5.1~5.3、7、8、8.1 S4 行、11）：
+
+| 落点 | 实现 |
+| --- | --- |
+| schema | `export_requests`（请求键全生命周期唯一、输入不可改）；`export_jobs` 新列与 `cancelled`，旧库 CHECK 以 DROP/ADD 替换，`ck_export_jobs_strict` / `ck_export_jobs_final`；`export_jobs_immutable` 冻结新输入并拒绝终态后的状态变化；`agent_job_outcome` 区分 `final_ready` / `preview_only`（细节见 5.1 S4 落地说明） |
+| db | `db/export_requests.go`：`SubmitExport`（REPEATABLE READ 事务；先查原请求比哈希，相同则重放原请求组含终态，新键才检查暂停 / 容量 / 期望大纲版本 / 门禁并冻结快照；同键并发撞唯一键后重试一次即重放；宿主绑定 Intent 须宿主授予任务导出能力并同事务订阅全部作业）、`GetExportRequest` / `ListExportRequests` / `GetExportJobScoped` / `CancelExportJob` / `CancelExportRequest`（任务行共享锁 → 作业按 ID 升序）；`db/exports.go`：`ExportPreflightPolicy(strict)`（`chart_not_final`）、领取跳过暂停任务并以 `BUDGET_EXHAUSTED` 结束耗尽 / 过期作业、租约不超过截止时间、心跳与写回在任务共享锁下校验令牌 / 未暂停 / 未过期、`FailExportJobCode`；`CreateExportJobs` 改为预览稿兼容入口；`SetTaskPaused` 撤销在途导出；`agentJobResultValid('proposal_export')` 只认严格最终稿；`CheckTemplateScope` / `WithTaskExportGrant` |
+| export | `export/export_jobs.go`：`Service.SubmitExport`（规范化后求请求哈希，策略版本计入；只有新的最终稿请求检查文档引擎并固定 `executor`）；`export/exec.go`：严格作业要求引擎可用且与 `executor` 一致（`RUNTIME_UNAVAILABLE`），快照 PNG 可读且哈希一致，生成时不得有图表降级，回读目录结构问题为零、图片与表格不少于快照（`READBACK_FAILED`），结果记录实际引擎与版本；`export/verify.go`：`DOCXBodyImages`；`export/runner.go`：以首次提交的截止时间为执行期限，心跳默认 `min(租约/3, 5s)`，写回被拒时清理本次产物 |
+| Tool / Skill | 新技能 `proposal-export`（`bidtools/export_jobs.go`）：`proposal_export_check`（只读，Planner `ExtraTools` 同时装配）、`proposal_export_submit`（强制 `mode=final`，模型不能选预览稿；未授予时 `FEATURE_DISABLED`）、`proposal_export_status`、`proposal_export_cancel`；错误码 `INVALID_ARGUMENT` / `PRECONDITION_FAILED`（附 blockers）/ `RUNTIME_UNAVAILABLE` / `IDEMPOTENCY_KEY_CONFLICT` / `CONFLICT_STALE_REVISION` / `CAPACITY_BUSY` / `SCOPE_VIOLATION`；`agent_job_status` 识别 `final_ready`；`add_intent` mandate 增加 `allowed_template_ids`；Planner / Worker 提示词说明导出方向与 `required_job_kinds=proposal_export` |
+| HTTP | `POST /exports`：带 `request_key`（或 `Idempotency-Key` 头）时登记请求组 202（重放 `replayed=true`），`mode=final|preview` 缺省预览稿，最终稿必须带键；不带键的旧调用 201 预览稿；`GET /exports/preflight?mode=final`（另把文档引擎不可用列为阻断）；`POST /exports/{jobID}/cancel`；`GET /export-requests[/{id}]`、`POST /export-requests/{id}/cancel`；下载头 `X-Export-Business-State`；状态码 400 / 404 / 409（`idempotency_conflict`、`stale_revision`）/ 422（`export_blocked`、`precondition_failed`）/ 429 / 503（`runtime_unavailable`） |
+| 运行 | `AUTOBID_EXPORT_JOB_DEADLINE_SECONDS`（默认 1800）、`AUTOBID_AGENT_EXPORT_ENABLED`（默认关闭），登记在 `docs/LOCAL_RUNTIME.md` 3.1；`cmd/server` 把导出执行者的 `Wake` 接到 `Service.ExportWake` |
+| 前端 | `api/types.ts` / `client.ts` 的请求组、取消与 `mode` 预检；`features/proposal/export/exportJobs.ts`（作业 / 请求组展示、请求键规则，单测）；导出页增加最终稿 / 预览稿模式、按请求组逐格式展示（最终稿 / 仅预览稿 / 排队 / 执行中 / 失败原因 / 已取消 / 部分完成）、单项与整组取消、活跃时 2 秒轮询、`export` 活动重读门禁与作业；`chart_not_final` / `office_unavailable` 阻断的跳转与文案；执行页作业卡片显示“严格最终稿已生成” |
+
+**实施时选定的细节**：
+
+- **最终稿与预览稿**：HTTP 由用户在页面选择，缺省预览稿（旧兼容结果不默认为最终稿）；Agent 工具只能提交最终稿。预览稿在引擎可用时同样刷新目录，但业务状态仍是 `preview_only`。
+- **重放不受运行能力影响**：同键同参的重放直接返回原请求组，不检查当前文档引擎；只有新请求检查并固定执行版本。
+- **图表**：严格策略只认已登记哈希的 PNG 或原生设备选型表；已有合格 PNG 时即使重新渲染作业仍在进行或 mmdc 临时离线也不阻断。
+- **暂停**：暂停拒绝新的导出请求，已提交的作业可以查看与取消；暂停撤销在途执行（令牌推进、文档引擎进程随 Context 结束），恢复后不延长原截止时间，被撤销的那次执行计入尝试次数。
+- **作业错误信息**：严格最终稿的 PNG 问题只写原因分类（文件缺失 / 内容哈希与登记不符），不把受管目录或宿主路径写进作业错误（浏览器验收中发现后修正，见下）。
+- **高影响入口与 R2**：导出策略已显式版本化（`export-final/v1` / `export-preview/v1`），但 R2 的可信身份尚未实施，因此 Agent 提交由服务器配置授予且默认关闭；Planner mandate 只能收窄（`allowed_job_kinds`、`allowed_template_ids`），不能自授。页面导出仍以 `X-Autobid-User` 作审计声明。
+
+**验证结果**：
+
+- `go vet ./...` 通过；真实 PostgreSQL 下 `go test -race -count=1 ./...`：377 条测试/子测试通过，26 个包通过，0 失败，0 竞态报告；4 项可选跳过（真实模型契约、两个浏览器用例、文档引擎长稳用例，需显式环境变量开启）。配置了本机 WPS 与 mmdc，真实组件用例实际执行。
+- 新增 S4 用例：
+  - `db/export_requests_test.go`：同键同参重放（含终态后）、同键异参冲突、快照变化后重放仍返回原请求组、保留前缀拒绝、6 路并发同键只建一组；严格策略下未渲染图表阻断、`ck_export_jobs_final` 拒绝未刷新目录的严格成功；取消写终态并推进令牌，迟到的成功 / 失败 / 心跳被拒；暂停撤销在途写回、恢复后截止时间与尝试次数不变；截止时间耗尽以 `BUDGET_EXHAUSTED` 结束；未授予任务导出能力、模板越界、作业类型越界拒绝，授予后同事务订阅、重放复用订阅、终态事件 `final_ready`；第二个格式作业插入失败时整组回滚。
+  - `export/export_jobs_test.go`：**真实 WPS + mmdc 严格最终稿端到端**（DOCX / PDF 目录已刷新、记录 `WPS 12.1.0.29161`、回读目录 / 图片 / 表格，终态后重放不重新生成、同键异参冲突）；替身引擎下提交时无引擎拒绝、重放不受运行能力影响、执行时引擎缺失 / 版本不符、目录未刷新的回读失败、PNG 哈希不符与文件缺失均失败且不留产物、作业错误不含路径，预览稿保持 `preview_only`。
+  - `export/export_cancel_windows_test.go`：真实 WPS 刷新进行中取消；无论心跳先失去租约而中止刷新，还是刷新先完成而写回被拒，作业都保持已取消、不登记产物、不留本次尝试的文件，调用前已存在的进程不受影响。
+  - `bidtools/export_jobs_integration_test.go`：`FEATURE_DISABLED`、无宿主意图 / 模板越界 `SCOPE_VIOLATION`、参数错误、`CONFLICT_STALE_REVISION`、`IDEMPOTENCY_KEY_CONFLICT`、`RUNTIME_UNAVAILABLE`、门禁未过 `PRECONDITION_FAILED` 附 blockers；受理后订阅当前意图、重放、状态与取消的意图范围。
+  - `server/export_requests_test.go`：HTTP 请求组 202 / 重放 / 409 两类冲突 / 503 / 旧调用 201 预览稿 / 列表与取消 / 下载业务状态头；**Worker 路径**：经 `proposal_export_submit` 提交并订阅 → 意图 `blocked + waiting_job` → 真实 WPS 执行后唤醒 → 校验 `required_job_kinds=proposal_export`（严格最终稿）后 done，Planner 未收到“已结束”。
+- 前端 `npm --prefix web run build` 通过（保留既有 bundle 大于 500 kB 提示）；`test:unit` 33/33 通过（S4 新增 5 条：最终稿与预览稿分开、活跃可取消与失败原因、部分完成与旧作业分组、请求键复用与换新、导出活动重读与阻断跳转；暂停说明不显示为“上次失败”）。
+- 浏览器验收（本机服务二进制 + 隔离库 `autobid_s4check` + 真实 WPS 与 mmdc；种子数据经 `db/dbtest` 公开 API 构造两份可导出标书，临时种子代码已删除）：
+  - 图表渲染中途暂停项目，图表仍待渲染：最终稿模式门禁显示“图表未渲染（最终稿）· 渲染作业 #2 仍在进行”并提供“去渲染章节图表”跳转，预览稿模式只显示提示、可以导出；暂停时提交导出提示“项目已暂停：恢复项目后才能提交新的导出”。
+  - 恢复后图表渲染完成，最终稿模式可导出；模拟首次提交响应丢失（请求已到服务器、页面收到网络错误）后再次点击，两次使用同一请求键，服务器只登记一个请求组，DOCX / PDF 均为“最终稿 · 目录已由 WPS 12.1.0.29161 刷新，产物已回读核对”。
+  - 提交后立即暂停，在途作业退回排队（页面显示截止时间与暂停说明），页面取消 PDF 后恢复：DOCX 成为最终稿，请求组显示“部分完成”，PDF 显示“已取消”；整组取消（确认框）后恢复项目，作业保持已取消，无迟到执行。
+  - 磁盘上的图表 PNG 被改动后提交最终稿：两种格式都失败并逐项显示原因，产物不登记；预览稿请求显示“仅预览稿”，下载头 `X-Export-Business-State` 分别为 `preview_only` / `final_ready`。
+  - 另一份标书打开导出页后，由另一进程批准新大纲版本：点击导出返回 409 `stale_revision`，提示“批准大纲版本已变化：已刷新导出门禁”，门禁自动刷新为 v2 与新阻断项，未登记请求组。
+  - 以 `AUTOBID_OFFICE_ENGINE=none` 重启服务：最终稿模式门禁显示“文档引擎不可用（最终稿）”、按钮禁用，新的最终稿请求 503 `runtime_unavailable`；已有请求键的重放仍返回原请求组 #1；预览稿受理并标为“目录页码未刷新，不作为最终交付”。
+  - 整页刷新后 7 个请求组及其状态由接口恢复；验收结束后没有残留的 WPS / Word 自动化进程；控制台只有刻意触发的 4xx / 503 与重启期间的连接错误，服务日志的 WARN 均对应上述刻意场景。
+  - **验收中发现并修正**：严格最终稿遇到不可读 PNG 时，作业错误带出了受管目录的相对路径（文件缺失时会是宿主绝对路径）。已改为只写原因分类，并在 `TestStrictExportRefusesDegradedRuntime` 中断言不含路径；暂停退回排队的说明原先显示为“上次失败”，已改为只有带错误码的失败才这样显示。
+- 原始日志与截图在 Git 忽略的 `data/s4-checks/`（`vet.log`、`race.jsonl`、`race.exit`、`web-build.log`、`web-tests.log`、`browser-server.log`、`export-requests.jpg`）。
+
+**边界（未包含在 S4）**：
+
+- R2 可信身份未实施：Agent 导出入口默认关闭，开放前须完成 R2；页面导出的操作人仍是 `X-Autobid-User` 审计声明。浏览器验收未开启 Agent 导出，Worker 路径由 `server/export_requests_test.go` 的替身模型用例覆盖。
+- 真实企业投标模板、交易平台投标文件制作工具的导入、签章与评分索引表（页码定位得分点）未验证；导出成功只表示产物已生成并通过本机回读，不代表外部评审通过（V/P 待验证）。
+- 引擎内并发仍为 1，未做数小时级运行与大批量导出排队测量；部分失败的浏览器演示用的是取消（一个格式成功、一个取消）和 PNG 改动（两个格式都失败），没有构造“同一请求组内一个格式成功、另一个格式真实执行失败”的样本。
+- 页面上请求组列表最多读取最近 30 组；更早的请求组需要分页读取，页面尚未提供翻页。
 
 ## 13. 上游参考与版本核对入口
 

@@ -1207,18 +1207,28 @@ export interface ExportTemplate {
   created_by: string; created_at: string
 }
 
+/** strict_runtime=true 时按严格最终稿策略判定（mode=final）：未渲染图表与文档引擎不可用另记为阻断。 */
 export interface ExportPreflight {
   readiness: ExportReadiness; warnings: ExportWarning[]; charts: number; status: ExportStatus
   templates: ExportTemplate[]; default_template_hash: string
+  strict_runtime?: boolean; policy_version?: string
 }
 
 export type ExportFormat = 'docx' | 'pdf'
-export type ExportJobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+/** S4 起增加 cancelled；终态之后状态不再变化。 */
+export type ExportJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+/** 导出模式：最终稿强制严格运行策略（文档引擎刷新目录、图表已渲染、产物回读），预览稿保持旧行为。 */
+export type ExportMode = 'final' | 'preview'
+/** 业务状态：成功作业只有严格最终稿才是 final_ready，其余成功产物为 preview_only；未成功时与作业状态相同。 */
+export type ExportBusinessState = 'final_ready' | 'preview_only' | ExportJobStatus
 
 export interface SnapshotSection { section_id: number; section_code: string; title: string; level: number; seq: number; rev_no: number; rev_id: number }
 
 export interface ExportJob {
   id: number; task_id: number; outline_id: number; outline_version: number; format: ExportFormat; status: ExportJobStatus
+  /** S4：所属请求组（旧作业为空）、严格策略、首次提交固定的执行版本与截止时间、错误码与实际文档引擎。 */
+  export_request_id?: number; strict_runtime: boolean; business_state: ExportBusinessState
+  executor?: string; deadline_at?: string; error_code?: string; office_engine?: string; office_version?: string
   template_id?: number; template_key: string; template_hash: string
   rev_snapshot: Record<string, number>
   chart_snapshot: { chart_id: number; section_id: number; rev_no: number; chart_type: ChartType; title: string; render_status: ChartRenderStatus }[]
@@ -1230,7 +1240,28 @@ export interface ExportJob {
   created_by: string; created_at: string; updated_at: string
 }
 
-export interface CreateExportReq { formats: ExportFormat[]; template_id?: number; bidder?: string }
+/** request_key 同一次提交的重发（含响应丢失后）复用；改变输入或明确重新执行时换新键。不带键的旧调用按预览稿兼容。 */
+export interface CreateExportReq {
+  formats: ExportFormat[]; template_id?: number; bidder?: string
+  request_key?: string; mode?: ExportMode; expected_outline_version?: number
+}
+
+/** S4：导出请求组（server/export.go /export-requests）。status 由组内作业汇总，partial 表示部分格式成功。 */
+export interface ExportRequest {
+  id: number; task_id: number; request_key: string; snapshot_hash: string; formats: ExportFormat[]
+  template_id?: number; template_key: string; template_hash: string; bidder?: string
+  expected_outline_version?: number; outline_id: number; outline_version: number
+  strict_runtime: boolean; policy_version: string; executor?: string; deadline_at: string
+  created_by: string; created_at: string; updated_at: string
+  status: ExportJobStatus | 'partial'; business_state: ExportBusinessState | 'partial'
+  jobs: ExportJob[]
+}
+
+export interface ExportSubmitResp {
+  accepted?: boolean; replayed?: boolean; request?: ExportRequest; jobs: ExportJob[]; warnings: ExportWarning[]
+}
+
+export interface ExportCancelResult { job_id: number; format: ExportFormat; status: ExportJobStatus; cancelled: boolean }
 
 // ---------------------------------------------------------------------------
 // D2：企业证据可采性、承诺台账与最小报价门禁

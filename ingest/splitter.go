@@ -27,6 +27,8 @@ type Section struct {
 	Tables []*Table
 	// Boxes 是版面坐标溯源（PDF / OCR 每页一条外接矩形）。
 	Boxes []BBox
+	// OCRLines 是逐行 OCR 识别框（像素坐标、置信度与图像尺寸，S5a），供对照原件定位；每段最多 maxOCRLineBoxes 条。
+	OCRLines []BBox
 	// BlockStart~BlockEnd 为来源文档中的块序号范围（文本行号、DOCX 段落/表格序号、PDF/OCR 版面行序号），-1 表示未知。
 	BlockStart, BlockEnd int
 }
@@ -39,7 +41,18 @@ type BBox struct {
 	X1   float64 `json:"x1"`
 	Y1   float64 `json:"y1"`
 	Conf float64 `json:"confidence,omitempty"`
+	// Coord 为空表示 PDF 页面坐标（点，原点左下）；"ocr_px" 表示 OCR 输入图像的像素坐标（原点左上），
+	// ImgW / ImgH 是该图像尺寸，供对照原件定位（S5a）。
+	Coord string  `json:"coord,omitempty"`
+	ImgW  float64 `json:"img_w,omitempty"`
+	ImgH  float64 `json:"img_h,omitempty"`
 }
+
+// CoordOCRPixels 标记 OCR 图像像素坐标。
+const CoordOCRPixels = "ocr_px"
+
+// maxOCRLineBoxes 是每段保留的逐行 OCR 识别框上限。
+const maxOCRLineBoxes = 400
 
 // Line 是切分器的输入行。纯文本按行生成；DOCX/PDF/OCR 解析器按段落/版面行生成。
 type Line struct {
@@ -318,7 +331,7 @@ func trimBlankLines(body []Line) []Line {
 func (s *Section) fill(body []Line) {
 	texts := make([]string, 0, len(body))
 	s.PageStart, s.PageEnd, s.BlockStart, s.BlockEnd = 0, 0, -1, -1
-	s.Tables, s.Boxes = nil, nil
+	s.Tables, s.Boxes, s.OCRLines = nil, nil, nil
 	boxes := map[int]*BBox{}
 	var pages []int
 	for _, l := range body {
@@ -338,6 +351,9 @@ func (s *Section) fill(body []Line) {
 			s.BlockEnd = l.Block
 		}
 		for _, lb := range l.Boxes {
+			if lb.Coord == CoordOCRPixels && len(s.OCRLines) < maxOCRLineBoxes {
+				s.OCRLines = append(s.OCRLines, lb)
+			}
 			b, ok := boxes[lb.Page]
 			if !ok {
 				cp := lb

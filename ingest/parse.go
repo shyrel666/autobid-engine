@@ -63,6 +63,59 @@ type ParseMeta struct {
 	// Sheets 是表格类文档的工作表覆盖清单；PDF/DOCX 为空。
 	Sheets   []SheetCoverage `json:"sheets,omitempty"`
 	Warnings []string        `json:"warnings,omitempty"`
+	// Profile 是本次解析的路由（auto / native / ocr_only，S5a）；旧解析结果为空。
+	Profile string `json:"profile,omitempty"`
+	// Gaps 是结构化缺口：无文本层且未 OCR 的页、OCR 失败或为空的页、低置信度识别行等，不以空白冒充已解析。
+	Gaps []ParseGap `json:"gaps,omitempty"`
+}
+
+// 解析路由（S5a，与 db.ParserProfile* 取值一致）。
+const (
+	ProfileAuto    = "auto"
+	ProfileNative  = "native"
+	ProfileOCROnly = "ocr_only"
+)
+
+// 缺口类型。
+const (
+	GapOCRUnavailable   = "ocr_unavailable"            // 页面无文本层，解析路由没有可用 OCR
+	GapOCRNotRequested  = "ocr_not_requested"          // native 路由不调用 OCR
+	GapOCRFailed        = "ocr_failed"                 // OCR 调用失败
+	GapOCREmpty         = "ocr_empty"                  // OCR 没有识别出文字
+	GapOCRLowConfidence = "ocr_low_confidence"         // 存在低置信度识别行，须人工核对
+	GapImageUnsupported = "image_encoding_unsupported" // 扫描图像编码（CCITT / JBIG2 等）无法送 OCR
+	GapNoPageImage      = "no_page_image"              // ocr_only 路由下页面没有可识别的图像
+)
+
+// OCRLowConfidence 低于该置信度的识别行计入 ocr_low_confidence 缺口。
+const OCRLowConfidence = 0.6
+
+// ParseGap 是一处解析缺口；Page 为物理页码（1 基），整份文件的缺口为 0。
+type ParseGap struct {
+	Page   int    `json:"page,omitempty"`
+	Kind   string `json:"kind"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func (m *ParseMeta) gap(page int, kind, detail string) {
+	m.Gaps = append(m.Gaps, ParseGap{Page: page, Kind: kind, Detail: detail})
+}
+
+// ocrPageGaps 记录一页 OCR 结果的缺口：没有文字，或存在低置信度行。
+func (m *ParseMeta) ocrPageGaps(page int, p *OCRPage) {
+	if p == nil || len(p.Lines) == 0 {
+		m.gap(page, GapOCREmpty, "OCR 没有识别出文字")
+		return
+	}
+	low := 0
+	for _, l := range p.Lines {
+		if l.Confidence > 0 && l.Confidence < OCRLowConfidence {
+			low++
+		}
+	}
+	if low > 0 {
+		m.gap(page, GapOCRLowConfidence, fmt.Sprintf("%d 行识别置信度低于 %.1f，须对照原件核对", low, OCRLowConfidence))
+	}
 }
 
 // Parsed 是解析结果：Lines 供切分，Text 为纯文本渲染（页间以 \f 分隔、表格渲染为 Markdown），写入 raw_text。
@@ -99,8 +152,10 @@ func (p *Parsed) Sections() []Section {
 }
 
 // ParseOptions 配置解析器；OCR 为 nil 时扫描件解析返回 ErrOCRUnavailable。
+// Profile 为空等同 auto；native 不调用 OCR（扫描页记为缺口）；ocr_only 忽略 PDF 文本层，每页由页面图像 OCR。
 type ParseOptions struct {
-	OCR OCRProvider
+	OCR     OCRProvider
+	Profile string
 }
 
 // DetectFormat 依据扩展名、MIME 与文件头判定格式；无法判定时返回 ""。
@@ -241,9 +296,9 @@ func Parse(ctx context.Context, f File, opt ParseOptions) (*Parsed, error) {
 	case FormatDOCX:
 		p, err = parseDOCX(f.Data)
 	case FormatPDF:
-		p, err = parsePDF(ctx, f.Data, opt.OCR)
+		p, err = parsePDF(ctx, f.Data, opt.OCR, opt.Profile)
 	case FormatImage:
-		p, err = parseImage(ctx, f.Data, f.MIME, opt.OCR)
+		p, err = parseImage(ctx, f.Data, f.MIME, opt.OCR, opt.Profile)
 	case FormatXLSX:
 		p, err = parseXLSX(f)
 	case FormatCSV, FormatTSV:
@@ -255,6 +310,9 @@ func Parse(ctx context.Context, f File, opt ParseOptions) (*Parsed, error) {
 		return nil, err
 	}
 	p.Format = format
+	if opt.Profile != "" {
+		p.Meta.Profile = opt.Profile
+	}
 	if p.MIME == "" {
 		p.MIME = formatMIME[format]
 	}
@@ -387,9 +445,12 @@ func parseText(data []byte, format string) (*Parsed, error) {
 }
 
 // parseImage 用 OCR 识别单张扫描图片。
-func parseImage(ctx context.Context, data []byte, mime string, ocr OCRProvider) (*Parsed, error) {
+func parseImage(ctx context.Context, data []byte, mime string, ocr OCRProvider, profile string) (*Parsed, error) {
 	if m := imageMIME(data); m != "" {
 		mime = m
+	}
+	if profile == ProfileNative {
+		return nil, fmt.Errorf("%w: 图片文件只能经 OCR 识别，native 解析配置不调用 OCR", ErrNoText)
 	}
 	if ocr == nil {
 		return nil, ErrOCRUnavailable
@@ -399,6 +460,7 @@ func parseImage(ctx context.Context, data []byte, mime string, ocr OCRProvider) 
 		return nil, err
 	}
 	p := &Parsed{MIME: mime, Meta: ParseMeta{Parser: "ocr", OCR: ocr.Name(), OCRPages: []int{1}, Pages: 1}}
+	p.Meta.ocrPageGaps(1, page)
 	p.Lines = ocrLines(page, 1, 0)
 	return p, nil
 }
@@ -414,7 +476,8 @@ func ocrLines(page *OCRPage, pageNo, block int) []Line {
 		if text == "" || rePageMark.MatchString(text) {
 			continue
 		}
-		box := BBox{Page: pageNo, X0: l.BBox[0], Y0: l.BBox[1], X1: l.BBox[2], Y1: l.BBox[3], Conf: l.Confidence}
+		box := BBox{Page: pageNo, X0: l.BBox[0], Y0: l.BBox[1], X1: l.BBox[2], Y1: l.BBox[3], Conf: l.Confidence,
+			Coord: CoordOCRPixels, ImgW: page.Width, ImgH: page.Height}
 		out = append(out, Line{Text: text, Page: pageNo, Boxes: []BBox{box}, Block: block + i})
 	}
 	return out

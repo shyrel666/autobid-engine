@@ -15,6 +15,7 @@ import (
 	"github.com/autobid/autobid-engine/bidtools"
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/export"
+	"github.com/autobid/autobid-engine/filework"
 	"github.com/autobid/autobid-engine/internal/llm"
 	"github.com/autobid/autobid-engine/internal/llm/anthropic"
 	"github.com/autobid/autobid-engine/internal/llm/openai"
@@ -103,7 +104,11 @@ type LLMServiceConfig struct {
 	// 未授予时 proposal_export_submit 返回 FEATURE_DISABLED，Planner mandate 不能自行授予。
 	AgentExport bool
 	// Runtime 是本机运行能力状态；非 nil 时 Planner 与 Worker 常驻 tool_runtime_status。
-	Runtime     *toolhealth.Registry
+	Runtime *toolhealth.Registry
+	// Files / FileJobs 是招标解析处理器与固定执行器（S5a document-processing，AUTOBID_FILE_PROCESSING_ENABLED 时注入）；
+	// 为 nil 时 document_parse_* 工具返回 FEATURE_DISABLED。
+	Files       *filework.Processor
+	FileJobs    bidtools.FileJobControl
 	Factory     ProviderFactory
 	Retry       RetryConfig
 	Planner     agent.PlannerConfig // Provider / KillWork / SteerWork 由服务注入
@@ -346,6 +351,9 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 		kit.WithResearch(&retrieval.Coordinator{Service: s.cfg.Retrieval, Reasoner: &agent.RetrievalReasoner{Planner: b.plannerRuntime, Worker: b.workerRuntime}, MultiEnabled: s.cfg.MultiRetrieval})
 	}
 	kit.WithRuntime(s.cfg.Runtime).WithExportSubmit(s.cfg.AgentExport)
+	if s.cfg.Files != nil {
+		kit.WithFileProcessing(s.cfg.Files, s.cfg.FileJobs)
+	}
 	pc.ExtraTools = append(append(append(append([]tool.CoreTool(nil), pc.ExtraTools...), kit.RuntimeTools()...), kit.AgentJobTools()...), kit.ExportCheckTools()...)
 	wc.ExtraTools = append(append(append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...), kit.RuntimeTools()...), kit.AgentJobTools()...)
 	wc.Deferred = append(append([]tool.CoreTool(nil), wc.Deferred...), kit.DeferredTools()...)

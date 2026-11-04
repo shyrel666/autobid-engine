@@ -697,6 +697,55 @@ CREATE TABLE IF NOT EXISTS file_processing_records (
 CREATE INDEX IF NOT EXISTS idx_file_processing_records_task ON file_processing_records(tenant_id, task_id, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_file_processing_records_task_id ON file_processing_records(tenant_id,task_id,id);
 
+-- S5a (AGENT_TOOL_SKILLS_PLAN 4.1 / 4.3 / 5.1): tender parse candidates.
+--   candidate_only  an import that only saves the full PreparedTender candidate (payload); a person adopts it later
+--                   (PersistTender in the adoption transaction). Agent submissions are always candidate_only.
+--   parser_profile  auto / native / ocr_only, fixed at submission; parser_version is the executor that produced it
+--                   (fixed parser version plus the pinned OCR service version when OCR was part of the route).
+--   rejected        a person rejected the candidate (who / why / when); adopted candidates cannot be rejected and
+--                   rejected ones cannot be adopted. Candidate input and payload never change after insertion.
+ALTER TABLE file_processing_records
+    ADD COLUMN IF NOT EXISTS candidate_only BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS parser_profile TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS parser_version TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS rejected_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS reject_reason TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ;
+-- Old databases created the inline status CHECK without rejected (PostgreSQL named it file_processing_records_status_check).
+ALTER TABLE file_processing_records DROP CONSTRAINT IF EXISTS file_processing_records_status_check;
+ALTER TABLE file_processing_records DROP CONSTRAINT IF EXISTS ck_file_processing_records_status;
+ALTER TABLE file_processing_records ADD CONSTRAINT ck_file_processing_records_status
+    CHECK (status IN ('ready','adopted','failed','rejected'));
+ALTER TABLE file_processing_records DROP CONSTRAINT IF EXISTS ck_file_processing_records_rejected;
+ALTER TABLE file_processing_records ADD CONSTRAINT ck_file_processing_records_rejected
+    CHECK (status <> 'rejected' OR (rejected_at IS NOT NULL AND reject_reason <> '' AND rejected_by <> ''));
+ALTER TABLE file_processing_records DROP CONSTRAINT IF EXISTS ck_file_processing_records_profile;
+ALTER TABLE file_processing_records ADD CONSTRAINT ck_file_processing_records_profile
+    CHECK (parser_profile IN ('','auto','native','ocr_only'));
+CREATE OR REPLACE FUNCTION file_processing_records_guard() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.tenant_id, NEW.task_id, NEW.file_id, NEW.operation, NEW.request_key, NEW.fingerprint, NEW.source_hash,
+        NEW.target_document_id, NEW.expected_revision, NEW.payload, NEW.preview, NEW.candidate_only, NEW.parser_profile,
+        NEW.parser_version, NEW.created_by, NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.tenant_id, OLD.task_id, OLD.file_id, OLD.operation, OLD.request_key, OLD.fingerprint, OLD.source_hash,
+        OLD.target_document_id, OLD.expected_revision, OLD.payload, OLD.preview, OLD.candidate_only, OLD.parser_profile,
+        OLD.parser_version, OLD.created_by, OLD.created_at) THEN
+        RAISE EXCEPTION 'file processing record % candidate is immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    IF OLD.status <> 'ready' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        RAISE EXCEPTION 'file processing record % is already %', OLD.id, OLD.status USING ERRCODE = 'check_violation';
+    END IF;
+    IF OLD.status = 'ready' AND NEW.status NOT IN ('ready','adopted','rejected') THEN
+        RAISE EXCEPTION 'file processing record % cannot move from ready to %', OLD.id, NEW.status USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_file_processing_records_guard ON file_processing_records;
+CREATE TRIGGER trg_file_processing_records_guard BEFORE UPDATE ON file_processing_records
+    FOR EACH ROW EXECUTE FUNCTION file_processing_records_guard();
+
 -- F3a+: fixed processing only. No user scripts or sandbox executor.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS file_gate_version BIGINT NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS task_materials (
@@ -750,6 +799,14 @@ CREATE TABLE IF NOT EXISTS fixed_file_jobs (
 CREATE INDEX IF NOT EXISTS idx_fixed_file_jobs_queue ON fixed_file_jobs(status, id);
 CREATE INDEX IF NOT EXISTS idx_fixed_file_jobs_task ON fixed_file_jobs(tenant_id, task_id, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fixed_file_jobs_task_id ON fixed_file_jobs(tenant_id,task_id,id);
+-- S5a: executor is the parse route fixed at first submission (fixed parser version, plus the pinned OCR service
+-- version when the route uses OCR); a later configuration change never changes how a queued job runs. error_code is
+-- the structured failure (RUNTIME_UNAVAILABLE, BUDGET_EXHAUSTED, PARSE_FAILED, ...); retry_after delays the next claim
+-- after a transient runtime failure within the original deadline and attempt budget.
+ALTER TABLE fixed_file_jobs
+    ADD COLUMN IF NOT EXISTS executor TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ;
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_fixed_file_job_record' AND conrelid='fixed_file_jobs'::regclass) THEN
         ALTER TABLE fixed_file_jobs ADD CONSTRAINT fk_fixed_file_job_record FOREIGN KEY (tenant_id,task_id,record_id)
@@ -766,9 +823,13 @@ CREATE TABLE IF NOT EXISTS fixed_file_job_events (
 );
 CREATE OR REPLACE FUNCTION fixed_file_job_audit() RETURNS trigger AS $$
 BEGIN
-    IF TG_OP = 'UPDATE' AND (NEW.input, NEW.fingerprint, NEW.source_hash, NEW.file_id, NEW.request_key, NEW.tenant_id, NEW.task_id, NEW.deadline_at, NEW.max_attempts)
-        IS DISTINCT FROM (OLD.input, OLD.fingerprint, OLD.source_hash, OLD.file_id, OLD.request_key, OLD.tenant_id, OLD.task_id, OLD.deadline_at, OLD.max_attempts) THEN
+    IF TG_OP = 'UPDATE' AND (NEW.input, NEW.fingerprint, NEW.source_hash, NEW.file_id, NEW.request_key, NEW.tenant_id, NEW.task_id, NEW.deadline_at, NEW.max_attempts, NEW.executor)
+        IS DISTINCT FROM (OLD.input, OLD.fingerprint, OLD.source_hash, OLD.file_id, OLD.request_key, OLD.tenant_id, OLD.task_id, OLD.deadline_at, OLD.max_attempts, OLD.executor) THEN
         RAISE EXCEPTION 'fixed processing input is immutable' USING ERRCODE = 'check_violation';
+    END IF;
+    -- S5a: a terminal job never changes status again (late success, failure or heartbeat cannot rewrite it).
+    IF TG_OP = 'UPDATE' AND OLD.status IN ('succeeded','failed','cancelled') AND NEW.status IS DISTINCT FROM OLD.status THEN
+        RAISE EXCEPTION 'fixed processing job % is already %', OLD.id, OLD.status USING ERRCODE = 'check_violation';
     END IF;
     IF TG_OP = 'INSERT' OR (NEW.status, NEW.lease_token) IS DISTINCT FROM (OLD.status, OLD.lease_token) THEN
         INSERT INTO fixed_file_job_events(job_id, tenant_id, task_id, status, attempt, lease_token, error, created_by)
@@ -2905,13 +2966,20 @@ CREATE TRIGGER trg_agent_job_events_immutable BEFORE UPDATE ON agent_job_events
 CREATE OR REPLACE FUNCTION agent_job_outcome(k TEXT, jid BIGINT, OUT terminal_status TEXT, OUT business_state TEXT, OUT payload JSONB) AS $$
 BEGIN
     IF k = 'tender_parse' THEN
+        -- S5a: a succeeded parse is only a candidate until a person adopts it; rejected candidates stay rejected.
         SELECT j.status,
                CASE j.status
                    WHEN 'succeeded' THEN CASE r.status WHEN 'ready' THEN 'candidate_pending_review' WHEN 'adopted' THEN 'adopted'
-                                                       WHEN 'failed' THEN 'failed' ELSE 'completed' END
+                                                       WHEN 'rejected' THEN 'rejected' WHEN 'failed' THEN 'failed' ELSE 'completed' END
                    ELSE j.status END,
                jsonb_build_object('status', j.status, 'attempts', j.attempts, 'max_attempts', j.max_attempts,
-                   'record_id', j.record_id, 'record_status', r.status, 'error', left(j.error, 500))
+                   'record_id', j.record_id, 'record_status', r.status, 'operation', r.operation,
+                   'candidate_only', r.candidate_only, 'parser_profile', r.parser_profile, 'parser_version', r.parser_version,
+                   'executor', j.executor, 'file_id', j.file_id, 'source_hash', j.source_hash,
+                   'target_document_id', r.target_document_id, 'expected_revision', r.expected_revision,
+                   'gaps', COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(r.payload->'summary'->'gaps') = 'array'
+                                                            THEN r.payload->'summary'->'gaps' END), 0),
+                   'error_code', j.error_code, 'error', left(j.error, 500))
           INTO terminal_status, business_state, payload
           FROM fixed_file_jobs j LEFT JOIN file_processing_records r ON r.id = j.record_id
          WHERE j.id = jid AND j.status IN ('succeeded','failed','cancelled');

@@ -113,6 +113,10 @@ func TestRuntimeToolsFallback(t *testing.T) {
 // ProbeRuntime：已配置的 OCR / 重排模型在后台实际自检，未配置的立即标为 unconfigured。
 func TestProbeRuntime(t *testing.T) {
 	ocrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet { // S5a protocol: GET reports the execution version pinned by parse jobs
+			_ = json.NewEncoder(w).Encode(map[string]string{"engine": "fake", "version": "fake-ocr 1"})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(ingest.OCRPage{Width: 720, Height: 200, Lines: []ingest.OCRLine{{Text: "招标文件自检 2026", BBox: [4]float64{40, 30, 380, 90}}}})
 	}))
 	defer ocrSrv.Close()
@@ -128,7 +132,7 @@ func TestProbeRuntime(t *testing.T) {
 	for (reg.Get(toolhealth.OCR).State == toolhealth.Starting || reg.Get(toolhealth.Reranker).State == toolhealth.Starting) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if st := reg.Get(toolhealth.OCR); st.State != toolhealth.Healthy || st.Provider != "http" {
+	if st := reg.Get(toolhealth.OCR); st.State != toolhealth.Healthy || st.Provider != "http" || st.Version != "fake-ocr 1" {
 		t.Fatalf("ocr = %+v", st)
 	}
 	if st := reg.Get(toolhealth.Reranker); st.State != toolhealth.SelfTestFailed || st.Version != "inverted@1" {

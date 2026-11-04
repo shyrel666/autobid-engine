@@ -53,6 +53,8 @@ func jobNextAction(status, businessState string) string {
 		switch businessState {
 		case "candidate_pending_review":
 			return "await_human_adoption"
+		case "rejected":
+			return "replan_if_still_needed"
 		case "preview_only":
 			return "report_preview_only"
 		case "final_ready":

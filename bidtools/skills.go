@@ -12,6 +12,7 @@ const (
 	SkillProposalReview     = "proposal-review"
 	SkillDiagramGeneration  = "diagram-generation"
 	SkillProposalExport     = "proposal-export"
+	SkillDocumentProcessing = "document-processing"
 )
 
 // Skills 返回内置招投标专业技能；每个技能解锁其所属的延迟工具（§4.3 阶段 B）。
@@ -142,6 +143,31 @@ func Skills() []tool.Skill {
    导出成功只表示产物已生成，不代表已签章或已被交易平台接收，也不代表内容已通过外部评审。
 6. 查询：SearchExtraTools("select:proposal_export_status") 后按 job_ref 或 export_request_id 调用；不再需要排队或执行中的导出时，
    SearchExtraTools("select:proposal_export_cancel") 后调用 proposal_export_cancel，整组取消会逐项返回已取消或已终态。`,
+		},
+		{
+			Name:        SkillDocumentProcessing,
+			Description: "招标文件解析：对本任务留存的招标原件或 ZIP 子文件提交后台解析（固定解析器，扫描页 / 图片经本机 OCR），只生成待人工采用的候选，分页读取候选正文、原件定位与缺口；结果以作业事件唤醒当前意图。",
+			Tools:       []string{ToolDocumentParseSubmit, ToolDocumentParseStatus, ToolDocumentParseResult, ToolDocumentParseCancel},
+			Body: `# 招标文件解析
+
+1. 只处理本任务的招标来源文件（source_kind=tender_file）：材料处理页留存的原件或 ZIP 子文件。知识库资料与企业证明材料不走这里（尚未开放，会返回 FEATURE_DISABLED）。
+   file_id、document_id 与 parse_revision 以宿主给出的范围和 document_outline 等只读结果为准，不要猜测。
+2. SearchExtraTools("select:document_parse_submit") 取 Schema，再调用 document_parse_submit：
+   - 新文件 operation=import + file_id；招标编号默认取本任务已有正式文档的编号。返回 HUMAN_ACTION_REQUIRED（missing_fields 含 tender_no 等）时，
+     record_fact 记录缺项并交由人工在材料处理页导入，不要自己编造招标编号或日期；
+   - 已有文档 operation=reparse + document_id + expected_parse_revision（文档当前的 parse_revision 整数）；
+   - parser_profile 默认 auto（文本层 + 扫描页 OCR）；扫描件文本层错乱时用 ocr_only；只想要文本层时用 native；enhanced_pdf 尚未交付。
+   - request_key 自己生成（如 "parse-file-12-auto-1"），同一次提交重发时复用，改变输入或重新执行时换新键。
+3. accepted=true 后作业在服务器后台执行，当前意图会在作业结束后被自动唤醒并收到作业事件：期间不要轮询，也不要以相同参数重复提交，本轮总结后即可结束。
+4. 被拒绝（accepted=false）时按 error_code 处理：RUNTIME_UNAVAILABLE 表示本机 OCR 不可用（记录缺口，不要盲目重试）；CONFLICT_STALE_REVISION 重新读取文档后以新键提交；
+   INVALID_ARGUMENT 修正参数；PRECONDITION_FAILED 表示原件不可用、哈希不符或项目已暂停；CAPACITY_BUSY 稍后重试；IDEMPOTENCY_KEY_CONFLICT 换新键；SCOPE_VIOLATION 表示超出当前意图范围。
+5. 收到作业事件后：business_state=candidate_pending_review 表示候选已就绪、等待人工采用。用 SearchExtraTools("select:document_parse_result") 后调用
+   document_parse_result（record_ref 取自事件或 document_parse_status）按 next_cursor 分页核对：页码、版面框与 OCR 置信度用于对照原件，gaps 列出未识别的扫描页、
+   OCR 失败或低置信度行。record_fact 写明候选覆盖的页码范围与缺口，提示人工到材料处理页对照原件采用或拒绝。
+6. 不要把候选当作正式招标文档：采用前 search_document / read_chunk 读不到它，要求提取与写作也不会使用它。OCR 文字是机器识别结果，未经人工核验，
+   不能作为“已核验证据”；采用后原文变化会推进来源 epoch，要求清单须重新提取并复核后才能确认、导出。
+7. 查询单个作业：SearchExtraTools("select:document_parse_status") 后调用 document_parse_status（或公共工具 agent_job_status）；
+   不再需要排队或执行中的作业时，SearchExtraTools("select:document_parse_cancel") 后调用 document_parse_cancel。取消作业不等于拒绝候选。`,
 		},
 		{
 			Name:        SkillProposalReview,

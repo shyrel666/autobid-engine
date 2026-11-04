@@ -145,6 +145,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/file-processing-records", a.withTask(a.listProcessingRecords))
 	mux.HandleFunc("GET /api/tasks/{id}/file-processing-records/{recordID}", a.withTask(a.getProcessingRecord))
 	mux.HandleFunc("POST /api/tasks/{id}/file-processing-records/{recordID}/adopt", a.withTask(a.adoptProcessingRecord))
+	mux.HandleFunc("POST /api/tasks/{id}/file-processing-records/{recordID}/reject", a.withTask(a.rejectProcessingRecord))
 	mux.HandleFunc("GET /api/tasks/{id}/documents", a.withTask(a.listDocuments))
 	mux.HandleFunc("POST /api/company/credentials", a.upsertCredentials)
 	mux.HandleFunc("GET /api/company/credentials", a.listCredentials)
@@ -294,7 +295,7 @@ func errorStatus(err error) int {
 		return http.StatusUnprocessableEntity
 	}
 	switch {
-	case errors.Is(err, db.ErrInvalidMaterial):
+	case errors.Is(err, db.ErrInvalidMaterial), errors.Is(err, db.ErrInvalidReview):
 		return http.StatusBadRequest
 	case errors.Is(err, db.ErrParseRevisionConflict), errors.Is(err, db.ErrFileProcessingConflict):
 		return http.StatusConflict

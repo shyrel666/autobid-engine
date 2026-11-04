@@ -31,6 +31,8 @@ type Input struct {
 	PublishedAt *time.Time
 	// OriginalFileID 是 task_file_objects 中留存的原件/文本快照；旧调用方可留空。
 	OriginalFileID *int64
+	// Profile 是解析路由（auto / native / ocr_only，S5a）；为空等同 auto。
+	Profile string
 }
 
 func displayNameFromInput(in Input) string {
@@ -49,14 +51,16 @@ type Result struct {
 	PageCount     int                `json:"page_count"`
 	Format        string             `json:"format"`
 	Warnings      []string           `json:"warnings,omitempty"`
+	Gaps          []ParseGap         `json:"gaps,omitempty"`
+	OCRPages      []int              `json:"ocr_pages,omitempty"`
 	TenderAssetID int64              `json:"tender_asset_id"`
 	LotAssetID    int64              `json:"lot_asset_id,omitempty"`
 }
 
 // parsedInput 解析文件或文本，返回段落与解析元数据；纯文本沿用 Split 规则。
-func parsedInput(ctx context.Context, text string, f *File, ocr OCRProvider) (*Parsed, []Section, error) {
+func parsedInput(ctx context.Context, text string, f *File, opt ParseOptions) (*Parsed, []Section, error) {
 	if f != nil {
-		p, err := Parse(ctx, *f, ParseOptions{OCR: ocr})
+		p, err := Parse(ctx, *f, opt)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -84,6 +88,9 @@ func sectionJSON(s Section, format string) (tables, bbox json.RawMessage) {
 	}
 	if len(s.Boxes) > 0 {
 		meta["boxes"] = s.Boxes
+	}
+	if len(s.OCRLines) > 0 {
+		meta["ocr_lines"] = s.OCRLines
 	}
 	// 表格类文档没有物理页码：显式标记，禁止下游把它当 PDF 页码核验。
 	if (format == FormatXLSX || format == FormatCSV || format == FormatTSV) && len(s.Tables) > 0 {
@@ -131,7 +138,7 @@ func PrepareTender(ctx context.Context, taskID int64, in Input) (*PreparedTender
 	if taskID <= 0 {
 		return nil, errors.New("ingest: a task-bound asset store is required")
 	}
-	parsed, sections, err := parsedInput(ctx, in.Text, in.File, in.OCR)
+	parsed, sections, err := parsedInput(ctx, in.Text, in.File, ParseOptions{OCR: in.OCR, Profile: in.Profile})
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +151,8 @@ func PrepareTender(ctx context.Context, taskID int64, in Input) (*PreparedTender
 	if in.Title == "" && in.File != nil {
 		in.Title = in.File.Name
 	}
-	res := &Result{Format: parsed.Format, PageCount: parsed.PageCount, Tables: len(parsed.Tables), Warnings: parsed.Meta.Warnings}
+	res := &Result{Format: parsed.Format, PageCount: parsed.PageCount, Tables: len(parsed.Tables), Warnings: parsed.Meta.Warnings,
+		Gaps: parsed.Meta.Gaps, OCRPages: parsed.Meta.OCRPages}
 
 	chunks := make([]db.DocumentChunk, 0, len(sections))
 	for i, s := range sections {
@@ -283,7 +291,7 @@ func IngestKnowledge(ctx context.Context, pg *db.DB, in KnowledgeInput, emb db.E
 	if !db.ValidKnowledgeCategory(in.Category) {
 		return nil, fmt.Errorf("%w: category must be one of %s", ErrInvalidInput, strings.Join(db.KnowledgeCategories, ", "))
 	}
-	parsed, sections, err := parsedInput(ctx, in.Text, in.File, in.OCR)
+	parsed, sections, err := parsedInput(ctx, in.Text, in.File, ParseOptions{OCR: in.OCR})
 	if err != nil {
 		return nil, err
 	}

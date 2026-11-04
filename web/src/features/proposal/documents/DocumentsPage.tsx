@@ -36,7 +36,7 @@ export default function DocumentsPage() {
       <div className="mx-auto max-w-4xl space-y-3">
         <Notice tone="info">尚未导入招标文件。导入原招标文件后，再导入更正、澄清或答疑公告（后发布的文件优先，例如顺延的投标截止时间）。</Notice>
         <UploadCard taskID={taskId} onUploaded={onUploaded} />
-        <ProcessingPanel key={taskId} documents={list} />
+        <ProcessingPanel key={`processing-${taskId}`} documents={list} />
       </div>
     )
   }
@@ -74,8 +74,8 @@ export default function DocumentsPage() {
         {docParam !== undefined && !selected && <Notice tone="danger">本项目中没有文件 #{String(params.get('doc'))}，已显示文件列表；请从左侧选择。</Notice>}
         {selected && chunkParam !== undefined && (Number.isNaN(chunkParam) || !selected.chunks.some((c) => c.id === chunkParam)) &&
           <Notice tone="warn">该文件中没有解析片段 #{String(params.get('chunk'))}：原文可能已重新解析或属于其他文件。</Notice>}
-        {selected && <DocumentTree key={selected.id} doc={selected} focusChunk={chunkParam && !Number.isNaN(chunkParam) ? chunkParam : undefined} />}
-        <ProcessingPanel key={taskId} documents={list} selected={selected} />
+        {selected && <DocumentTree key={`doc-${selected.id}`} doc={selected} focusChunk={chunkParam && !Number.isNaN(chunkParam) ? chunkParam : undefined} />}
+        <ProcessingPanel key={`processing-${taskId}`} documents={list} selected={selected} />
       </div>
       <Modal open={importing} wide title="导入招标文件" dirty={() => importDirty.current} onClose={() => { setImporting(false); importDirty.current = false }}>
         <UploadCard bare taskID={taskId} dirtyRef={importDirty} onUploaded={onUploaded} />

@@ -38,6 +38,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/autobid/autobid-engine/bidtools"
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/export"
 	"github.com/autobid/autobid-engine/filework"
@@ -62,6 +63,14 @@ func envInt(key string, def int) int {
 		return v
 	}
 	return def
+}
+
+// fileJobControl avoids handing a nil *filework.Runner to the tools as a non-nil interface.
+func fileJobControl(r *filework.Runner) bidtools.FileJobControl {
+	if r == nil {
+		return nil
+	}
+	return r
 }
 
 func envBool(key string) bool {
@@ -126,17 +135,65 @@ func run(logger *slog.Logger) error {
 	// 图表保持 unrendered。OCR / embedding / reranker 在后台自检（见下方 ProbeRuntime）。
 	runtimeHealth := toolhealth.New()
 	exporter := export.NewServiceFromEnv(pg, exportDir, logger, runtimeHealth)
+	hostname, _ := os.Hostname()
+	// 扫描件 OCR：AUTOBID_OCR_URL（本机 OCR 服务，如 tools/paddleocr）→ PATH 中的 tesseract → 不可用（扫描件上传返回 422）。
+	ocr := ingest.DefaultOCR()
+	// 招标原件存储与固定解析（AUTOBID_FILE_PROCESSING_ENABLED）：处理器与执行器先于 LLM 服务创建，
+	// 启动恢复的任务在首次装配 Worker 工具时即可拿到 document-processing（S5a）；执行器在第 4 步开始领取作业。
+	var fileStore *filework.Store
+	if envBool("AUTOBID_FILE_PROCESSING_ENABLED") {
+		dir := os.Getenv("AUTOBID_FILEWORK_DIR")
+		if dir == "" {
+			dir = filework.DefaultDir
+		}
+		fs, err := filework.NewStore(pg, dir)
+		if err != nil {
+			logger.Warn("file processing disabled: filework store unavailable", "err", err)
+		} else {
+			fileStore = fs
+			logger.Info("file processing enabled", "dir", fs.Root())
+			// 延迟 GC：只清理 24 小时前、且没有任何 task_file_objects 行引用的孤立对象。
+			go func() {
+				prune := func() {
+					n, err := fs.Cleanup(engineCtx, db.DefaultTenant, time.Now().Add(-24*time.Hour))
+					if err != nil {
+						logger.Warn("filework cleanup failed", "err", err)
+					} else if n > 0 {
+						logger.Info("filework orphan objects removed", "count", n)
+					}
+				}
+				prune()
+				ticker := time.NewTicker(6 * time.Hour)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-engineCtx.Done():
+						return
+					case <-ticker.C:
+						prune()
+					}
+				}
+			}()
+		}
+	}
+	var fileRunner *filework.Runner
+	var fileProcessor *filework.Processor
+	if fileStore != nil {
+		fileProcessor = &filework.Processor{DB: pg, Store: fileStore, OCR: ocr, Runtime: runtimeHealth}
+		fileRunner = &filework.Runner{Processor: fileProcessor, Owner: fmt.Sprintf("%s/%d/files", hostname, os.Getpid()), Workers: envInt("AUTOBID_FILE_WORKERS", 2)}
+	}
 	svc := server.NewLLMService(pg, server.LLMServiceConfig{
 		MultiRetrieval: envBool("AUTOBID_RETRIEVAL_MULTI_AGENT"),
 		Retrieval:      retriever,
 		Charts:         exporter,
 		AgentExport:    envBool("AUTOBID_AGENT_EXPORT_ENABLED"),
 		Runtime:        runtimeHealth,
+		Files:          fileProcessor,
+		FileJobs:       fileJobControl(fileRunner),
 		OnActivity:     func(_ int64, a db.Activity) { hub.Publish(a) },
 		OnLedgerErr:    func(err error) { logger.Warn("llm ledger write failed", "err", err) },
 		RecordBodies:   recordBodies.Load,
 	})
-	hostname, _ := os.Hostname()
 	ic := intercept.New(pg, intercept.Options{
 		Reviewer:   svc.Reviewer(),
 		Waiter:     fmt.Sprintf("%s/%d", hostname, os.Getpid()),
@@ -179,8 +236,6 @@ func run(logger *slog.Logger) error {
 	logger.Info("engine started", "resumed_tasks", resumed)
 
 	// 4. HTTP/SSE 控制面。WriteTimeout 为 0：SSE 是长连接，单个处理器自行控制生命周期。
-	// 扫描件 OCR：AUTOBID_OCR_URL（HTTP 服务）→ PATH 中的 tesseract → 不可用（扫描件上传返回 422）。
-	ocr := ingest.DefaultOCR()
 	server.ProbeRuntime(engineCtx, runtimeHealth, ocr, embedding, reranker)
 	// 导出执行者：先回收租约已过期的 running 任务（上次进程中断），再轮询 queued 任务。
 	runner := &export.Runner{Service: exporter, Owner: fmt.Sprintf("%s/%d", hostname, os.Getpid()), Logger: logger,
@@ -201,50 +256,12 @@ func run(logger *slog.Logger) error {
 		}}
 	exporter.ChartWake, exporter.ExportWake = chartRunner.Wake, runner.Wake
 	chartRunner.Start(engineCtx)
-	var fileStore *filework.Store
-	if envBool("AUTOBID_FILE_PROCESSING_ENABLED") {
-		dir := os.Getenv("AUTOBID_FILEWORK_DIR")
-		if dir == "" {
-			dir = filework.DefaultDir
-		}
-		fs, err := filework.NewStore(pg, dir)
-		if err != nil {
-			logger.Warn("file processing disabled: filework store unavailable", "err", err)
-		} else {
-			fileStore = fs
-			logger.Info("file processing enabled", "dir", fs.Root())
-			// 延迟 GC：只清理 24 小时前、且没有任何 task_file_objects 行引用的孤立对象。
-			go func() {
-				prune := func() {
-					n, err := fs.Cleanup(engineCtx, db.DefaultTenant, time.Now().Add(-24*time.Hour))
-					if err != nil {
-						logger.Warn("filework cleanup failed", "err", err)
-					} else if n > 0 {
-						logger.Info("filework orphan objects removed", "count", n)
-					}
-				}
-				prune()
-				ticker := time.NewTicker(6 * time.Hour)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-engineCtx.Done():
-						return
-					case <-ticker.C:
-						prune()
-					}
-				}
-			}()
-		}
-	}
-	var fileRunner *filework.Runner
 	fileRunnerDone := make(chan struct{})
-	if fileStore != nil {
-		fileRunner = &filework.Runner{Processor: &filework.Processor{DB: pg, Store: fileStore, OCR: ocr}, Owner: fmt.Sprintf("%s/%d/files", hostname, os.Getpid()), Workers: envInt("AUTOBID_FILE_WORKERS", 2),
-			OnChange: func(j *db.FixedFileJob) {
-				hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "file-processing", Kind: "state", At: time.Now(), Summary: fmt.Sprintf("材料处理 #%d：%s", j.ID, j.Status)})
-				e.WakeAgentJobs()
-			}}
+	if fileRunner != nil {
+		fileRunner.OnChange = func(j *db.FixedFileJob) {
+			hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "file-processing", Kind: "state", At: time.Now(), Summary: fmt.Sprintf("材料处理 #%d：%s", j.ID, j.Status)})
+			e.WakeAgentJobs()
+		}
 		go func() { defer close(fileRunnerDone); fileRunner.Run(engineCtx) }()
 	} else {
 		close(fileRunnerDone)

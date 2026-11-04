@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -70,7 +71,26 @@ func ProbeRuntime(ctx context.Context, reg *toolhealth.Registry, ocr ingest.OCRP
 		go reg.Probe(ctx, toolhealth.OCR, ocr.Name(), func(ctx context.Context) (toolhealth.Result, error) {
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			defer cancel()
-			return toolhealth.Result{}, ingest.OCRSelfTest(ctx, ocr)
+			// The local OCR service (tools/paddleocr) may still be loading its models when the server starts:
+			// a refused connection or 503 is retried until the self-test deadline instead of failing at once.
+			for {
+				err := ingest.OCRSelfTest(ctx, ocr)
+				if err == nil {
+					v, verr := ingest.OCRVersion(ctx, ocr)
+					if verr != nil {
+						return toolhealth.Result{}, fmt.Errorf("self-test passed but the OCR version is unavailable: %w", verr)
+					}
+					return toolhealth.Result{Version: v}, nil
+				}
+				if !errors.Is(err, ingest.ErrOCRTransient) {
+					return toolhealth.Result{}, err
+				}
+				select {
+				case <-ctx.Done():
+					return toolhealth.Result{}, err
+				case <-time.After(2 * time.Second):
+				}
+			}
 		})
 	}
 	if emb == nil {

@@ -6,6 +6,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path"
 	"strconv"
@@ -62,7 +63,7 @@ func (a *API) fixedProcessor(w http.ResponseWriter) *filework.Processor {
 		fail(w, &httpError{status: http.StatusServiceUnavailable, err: errFileProcessingDisabled})
 		return nil
 	}
-	return &filework.Processor{DB: a.pg, Store: a.cfg.FileStore, OCR: a.ocr()}
+	return &filework.Processor{DB: a.pg, Store: a.cfg.FileStore, OCR: a.ocr(), Runtime: a.cfg.Runtime}
 }
 
 func (a *API) listProcessingFiles(w http.ResponseWriter, r *http.Request, t *Task) {
@@ -199,8 +200,18 @@ func (a *API) getProcessingRecord(w http.ResponseWriter, r *http.Request, t *Tas
 	}
 	var payload ingest.PreparedTender
 	_ = json.Unmarshal(record.Payload, &payload)
+	// S5a: the full candidate is paged by section (cursor), each with its location in the retained original.
+	cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+	candidate, cerr := filework.Candidate(record, max(0, cursor), 20, 0, 12000)
+	if cerr != nil {
+		candidate = nil
+	}
 	record.Preview = json.RawMessage(`{}`)
 	stale := false
+	if record.TargetDocumentID == nil && record.Status == db.RecordReady {
+		obj, _, err := a.pg.GetTaskFileObject(r.Context(), db.DefaultTenant, t.ID, record.FileID)
+		stale = err != nil || obj.Availability != "available" || obj.SHA256 != record.SourceHash
+	}
 	if record.TargetDocumentID != nil && record.Status == "ready" {
 		doc, err := a.pg.GetTenderDocument(r.Context(), t.ID, *record.TargetDocumentID)
 		stale = err != nil || doc.ParseRevision != record.ExpectedRevision
@@ -212,7 +223,36 @@ func (a *API) getProcessingRecord(w http.ResponseWriter, r *http.Request, t *Tas
 		obj, _, err := a.pg.GetTaskFileObject(r.Context(), db.DefaultTenant, t.ID, record.FileID)
 		stale = stale || err != nil || obj.Availability != "available" || obj.SHA256 != record.SourceHash
 	}
-	writeJSON(w, 200, map[string]any{"record": record, "preview": preview, "total_changes": total, "offset": offset, "has_more": end < total, "stale": stale, "warnings": payload.Summary.Warnings})
+	writeJSON(w, 200, map[string]any{"record": record, "preview": preview, "total_changes": total, "offset": offset, "has_more": end < total, "stale": stale,
+		"warnings": payload.Summary.Warnings, "gaps": payload.Summary.Gaps, "candidate": candidate})
+}
+
+// rejectProcessingRecord 由人拒绝一份待采用候选（S5a）：持久化拒绝人、原因与时间；已采用的候选不能再拒绝。
+func (a *API) rejectProcessingRecord(w http.ResponseWriter, r *http.Request, t *Task) {
+	p := a.fixedProcessor(w)
+	if p == nil {
+		return
+	}
+	id, err := pathID(r, "recordID")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err = decodeBody(r, &req); err != nil {
+		fail(w, err)
+		return
+	}
+	record, err := p.Reject(r.Context(), t.ID, id, operator(r), req.Reason)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	record.Preview = json.RawMessage(`{}`)
+	a.e.emit(t, db.Activity{Worker: "file-processing", Kind: "state", Summary: fmt.Sprintf("解析候选 #%d 已拒绝", record.ID)})
+	writeJSON(w, 200, record)
 }
 func (a *API) adoptProcessingRecord(w http.ResponseWriter, r *http.Request, t *Task) {
 	p := a.fixedProcessor(w)

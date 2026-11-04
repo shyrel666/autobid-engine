@@ -33,7 +33,7 @@ func (m TaskMaterial) StateLabel() string {
 	case "processing":
 		return "正在处理"
 	case "review":
-		return "解析修订待核对采用"
+		return "解析候选或修订待核对采用"
 	case "not_imported":
 		return "尚未正式导入"
 	case "complete":
@@ -49,6 +49,10 @@ func listTaskMaterials(ctx context.Context, q queryer, tenant string, taskID int
         WHEN EXISTS (SELECT 1 FROM fixed_file_jobs j WHERE j.tenant_id=m.tenant_id AND j.task_id=m.task_id AND j.file_id=m.file_id AND j.status IN ('queued','running')) THEN 'processing'
         WHEN EXISTS (SELECT 1 FROM file_processing_records r JOIN tender_documents d ON d.id=r.target_document_id AND d.tenant_id=r.tenant_id AND d.task_id=r.task_id
           WHERE r.tenant_id=m.tenant_id AND r.task_id=m.task_id AND r.file_id=m.file_id AND r.status='ready' AND r.operation='reparse' AND r.expected_revision=d.parse_revision) THEN 'review'
+        -- S5a: an import candidate waiting for a person to adopt or reject it.
+        WHEN EXISTS (SELECT 1 FROM file_processing_records r WHERE r.tenant_id=m.tenant_id AND r.task_id=m.task_id AND r.file_id=m.file_id
+          AND r.status='ready' AND r.operation='import' AND r.source_hash=f.sha256)
+          AND NOT EXISTS (SELECT 1 FROM tender_documents d WHERE d.tenant_id=m.tenant_id AND d.task_id=m.task_id AND d.original_file_id=m.file_id AND d.content_hash=f.sha256) THEN 'review'
         WHEN NOT EXISTS (SELECT 1 FROM tender_documents d WHERE d.tenant_id=m.tenant_id AND d.task_id=m.task_id AND d.original_file_id=m.file_id AND d.content_hash=f.sha256) THEN 'not_imported'
         ELSE 'complete' END
       FROM task_materials m LEFT JOIN task_file_objects f ON f.tenant_id=m.tenant_id AND f.task_id=m.task_id AND f.id=m.file_id

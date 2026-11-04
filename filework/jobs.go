@@ -13,6 +13,7 @@ import (
 
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/ingest"
+	"github.com/autobid/autobid-engine/toolhealth"
 )
 
 func (p *Processor) Enqueue(ctx context.Context, taskID int64, in ProcessInput, actor string) (*db.FixedFileJob, error) {
@@ -21,15 +22,19 @@ func (p *Processor) Enqueue(ctx context.Context, taskID int64, in ProcessInput, 
 		return nil, ingest.ErrInvalidInput
 	}
 	fingerprint := db.ContentHash(string(marshal(in)))
+	// Replays (any state) return the original job before any capability check: the route was fixed then.
 	old, err := p.DB.FindFixedFileJob(ctx, db.DefaultTenant, taskID, in.RequestKey)
 	if err == nil {
 		if old.Fingerprint != fingerprint {
-			return nil, db.ErrFileProcessingConflict
+			return nil, fmt.Errorf("%w: %w", db.ErrFileProcessingConflict, db.ErrIdempotencyKeyConflict)
 		}
 		return old, nil
 	}
 	if !errors.Is(err, db.ErrNotFound) {
 		return nil, err
+	}
+	if in.Operation == "archive" && (in.CandidateOnly || in.ParserProfile != "") {
+		return nil, fmt.Errorf("%w: ZIP 展开不接受解析配置或候选模式", ingest.ErrInvalidInput)
 	}
 	if in.DocumentID > 0 {
 		doc, err := p.DB.GetTenderDocument(ctx, taskID, in.DocumentID)
@@ -48,6 +53,23 @@ func (p *Processor) Enqueue(ctx context.Context, taskID int64, in ProcessInput, 
 	} else if strings.TrimSpace(in.TenderNo) == "" && in.Operation != "archive" {
 		return nil, ingest.ErrInvalidInput
 	}
+	obj, err := p.checkJobFile(ctx, taskID, in)
+	if err != nil {
+		return nil, err
+	}
+	executor := ArchiveExecutor
+	if in.Operation != "archive" {
+		if _, executor, err = p.ResolveRoute(ctx, obj.Format, in.ParserProfile); err != nil {
+			return nil, err
+		}
+	}
+	return p.DB.EnqueueFixedFileJob(ctx, db.FixedFileJob{TenantID: db.DefaultTenant, TaskID: taskID, FileID: obj.ID, SourceHash: obj.SHA256, RequestKey: in.RequestKey,
+		Fingerprint: fingerprint, Input: marshal(in), Executor: executor, CreatedBy: actor})
+}
+
+// checkJobFile validates the file a fixed job will read: no scripts or unsupported formats, ZIP only for archive
+// expansion, and ZIP children only from a retained original ZIP.
+func (p *Processor) checkJobFile(ctx context.Context, taskID int64, in ProcessInput) (*db.TaskFileObject, error) {
 	obj, _, err := p.DB.GetTaskFileObject(ctx, db.DefaultTenant, taskID, in.FileID)
 	if err != nil {
 		return nil, err
@@ -73,7 +95,7 @@ func (p *Processor) Enqueue(ctx context.Context, taskID int64, in ProcessInput, 
 			return nil, db.ErrInvalidParseRevision
 		}
 	}
-	return p.DB.EnqueueFixedFileJob(ctx, db.FixedFileJob{TenantID: db.DefaultTenant, TaskID: taskID, FileID: obj.ID, SourceHash: obj.SHA256, RequestKey: in.RequestKey, Fingerprint: fingerprint, Input: marshal(in), CreatedBy: actor})
+	return obj, nil
 }
 
 type Runner struct {
@@ -83,10 +105,12 @@ type Runner struct {
 	Lease     time.Duration
 	Poll      time.Duration
 	TaskID    int64
-	OnChange  func(*db.FixedFileJob)
-	once      sync.Once
-	wake      chan struct{}
-	active    sync.Map // job ID -> fixedExecution
+	// RetryDelay is the wait before a job released after a transient OCR failure is claimed again (default 5s x attempts).
+	RetryDelay time.Duration
+	OnChange   func(*db.FixedFileJob)
+	once       sync.Once
+	wake       chan struct{}
+	active     sync.Map // job ID -> fixedExecution
 }
 
 type fixedExecution struct {
@@ -183,6 +207,15 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 	wg.Wait()
 }
+
+// retryDelay backs off after a transient runtime failure; RetryDelay overrides it (tests).
+func (r *Runner) retryDelay(j *db.FixedFileJob) time.Duration {
+	if r.RetryDelay > 0 {
+		return r.RetryDelay
+	}
+	return time.Duration(max(1, j.Attempts)) * 5 * time.Second
+}
+
 func (r *Runner) notify(j *db.FixedFileJob) {
 	if r.OnChange != nil {
 		r.OnChange(j)
@@ -236,14 +269,32 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 	}
 	close(stop)
 	<-done
+	if err == nil && r.Processor.Runtime != nil {
+		if _, ok := executorOCR(j.Executor); ok {
+			r.Processor.Runtime.Recover(toolhealth.OCR)
+		}
+	}
 	if err != nil && jobCtx.Err() == nil && !errors.Is(err, db.ErrLeaseLost) {
-		// Deterministic processing failures are terminal; explicit retry uses a new key.
-		saveErr := r.Processor.DB.Transaction(ctx, func(tx *db.DB) error {
-			if e := tx.LockFileProcessingTask(ctx, j.TenantID, j.TaskID); e != nil {
-				return e
+		var saveErr error
+		if errors.Is(err, ErrRuntimeTransient) {
+			// The local OCR service is restarting or busy: retry within the original deadline and attempt budget.
+			saveErr = r.Processor.DB.ReleaseFixedFileJob(ctx, j, db.JobErrRuntimeUnavailable, toolhealth.Sanitize(err.Error()), r.retryDelay(j))
+			if r.Processor.Runtime != nil {
+				r.Processor.Runtime.Degrade(toolhealth.OCR, err)
 			}
-			return tx.FinishFixedFileJob(ctx, j, nil, err.Error())
-		})
+		} else {
+			// Deterministic processing failures are terminal; explicit retry uses a new key.
+			code := db.JobErrParseFailed
+			if errors.Is(err, ErrRuntimeChanged) {
+				code = db.JobErrRuntimeUnavailable
+			}
+			saveErr = r.Processor.DB.Transaction(ctx, func(tx *db.DB) error {
+				if e := tx.LockFileProcessingTask(ctx, j.TenantID, j.TaskID); e != nil {
+					return e
+				}
+				return tx.FinishFixedFileJobCode(ctx, j, nil, code, toolhealth.Sanitize(err.Error()))
+			})
+		}
 		if saveErr != nil {
 			return true, saveErr
 		}

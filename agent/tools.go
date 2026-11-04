@@ -309,8 +309,9 @@ func (s *ToolSet) addIntentTool() tool.CoreTool {
 				"forbidden_tools":         map[string]any{"type": "array", "items": str("tool name")},
 				"require_writeback":       map[string]any{"type": "boolean", "description": "require at least one graph/proposal writeback before finishing"},
 				"allowed_job_kinds":       jobKinds("background job kinds the worker may submit, query or cancel (narrows host capability)"),
-				"required_job_kinds":      jobKinds("job kinds that must each have a successful, still-valid job of this intent before it may finish (e.g. chart_render for chart work, proposal_export for a final draft export)"),
+				"required_job_kinds":      jobKinds("job kinds that must each have a successful, still-valid job of this intent before it may finish (e.g. chart_render for chart work, proposal_export for a final draft export, tender_parse for a ready parse candidate)"),
 				"allowed_template_ids":    ids("uploaded export template ids the worker may export with (the built-in default template is always allowed); narrows host capability"),
+				"allowed_file_ids":        ids("task file ids (retained tender originals / ZIP children) the worker may submit for parsing, read candidates of or cancel; narrows host capability"),
 			}),
 		}, "summary"),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {

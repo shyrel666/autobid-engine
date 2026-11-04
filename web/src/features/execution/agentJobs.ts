@@ -9,11 +9,11 @@ const JOB_STATUS_LABEL: Record<string, string> = {
   queued: '排队中', running: '处理中', succeeded: '已成功', failed: '失败', cancelled: '已取消', superseded: '已被新修订取代',
 }
 const BUSINESS_LABEL: Record<string, string> = {
-  candidate_pending_review: '候选待人工采用', adopted: '已采用', preview_only: '仅预览稿，非最终稿', final_ready: '严格最终稿已生成', completed: '已完成',
+  candidate_pending_review: '候选待人工采用', adopted: '已采用', rejected: '候选已被人工拒绝', preview_only: '仅预览稿，非最终稿', final_ready: '严格最终稿已生成', completed: '已完成',
   chart_ready: '图表已绑定当前修订', chart_stale: '章节已更新，图表已过期',
 }
 // 成功但结果待人工处理或已不适用于当前修订的业务状态，不显示为最终成功。
-const PENDING_BUSINESS = new Set(['preview_only', 'candidate_pending_review', 'chart_stale'])
+const PENDING_BUSINESS = new Set(['preview_only', 'candidate_pending_review', 'rejected', 'chart_stale'])
 const SUBSCRIPTION_LABEL: Record<string, string> = {
   waiting: '等待结果', notified: '结果待送达工作', acknowledged: '结果已送达工作', cancelled: '任务结束，已取消等待',
 }

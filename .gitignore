@@ -46,3 +46,7 @@ Thumbs.db
 
 # Local runtime components (installed from the pinned manifests under tools/, see docs/LOCAL_RUNTIME.md)
 /tools/mermaid-cli/node_modules/
+/tools/paddleocr/.venv/
+/tools/paddleocr/models/
+/tools/paddleocr/.paddlex-cache/
+/tools/paddleocr/__pycache__/

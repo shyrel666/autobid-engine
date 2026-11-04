@@ -141,6 +141,8 @@ type IntentMandate struct {
 	RequiredJobKinds []string `json:"required_job_kinds,omitempty"`
 	// AllowedTemplateIDs 收窄导出可用的上传模板（内置默认模板不受限）；RestrictObjects 为真时空列表表示只能用默认模板。
 	AllowedTemplateIDs []int64 `json:"allowed_template_ids,omitempty"`
+	// AllowedFileIDs 收窄可提交解析、查询结果或取消的任务原件（task_file_objects）；RestrictObjects 为真时空列表表示无权限。
+	AllowedFileIDs []int64 `json:"allowed_file_ids,omitempty"`
 }
 
 // IsEmpty 判断 Mandate 是否未设置任何约束条件。
@@ -159,7 +161,8 @@ func (m *IntentMandate) IsEmpty() bool {
 		!m.RequireWriteback &&
 		len(m.AllowedJobKinds) == 0 &&
 		len(m.RequiredJobKinds) == 0 &&
-		len(m.AllowedTemplateIDs) == 0
+		len(m.AllowedTemplateIDs) == 0 &&
+		len(m.AllowedFileIDs) == 0
 }
 
 // NodeMandate 从节点 payload 中解析可选的 IntentMandate。

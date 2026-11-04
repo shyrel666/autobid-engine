@@ -592,10 +592,14 @@ func (d *DB) agentJobResultValid(ctx context.Context, taskID int64, ref JobRef) 
 	var err error
 	switch ref.Kind {
 	case JobKindTenderParse:
+		// S5a: a ready candidate only counts while its original is still available with the same hash and, for a
+		// reparse, the document is still at the revision it was parsed against; rejected candidates never count.
 		err = d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM fixed_file_jobs j JOIN file_processing_records r ON r.id = j.record_id
 			LEFT JOIN tender_documents td ON td.id = r.target_document_id
+			JOIN task_file_objects f ON f.tenant_id = r.tenant_id AND f.task_id = r.task_id AND f.id = r.file_id
 			WHERE j.id = $1 AND j.task_id = $2 AND j.status = 'succeeded' AND r.source_hash = j.source_hash
-			  AND (r.status = 'adopted' OR (r.status = 'ready' AND (r.operation = 'import' OR td.parse_revision = r.expected_revision))))`,
+			  AND (r.status = 'adopted' OR (r.status = 'ready' AND f.availability = 'available' AND f.sha256 = r.source_hash
+			       AND (r.operation = 'import' OR td.parse_revision = r.expected_revision))))`,
 			ref.ID, taskID).Scan(&ok)
 	case JobKindProposalExport:
 		err = d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM export_jobs WHERE id = $1 AND task_id = $2 AND status = 'succeeded' AND artifact_hash <> ''

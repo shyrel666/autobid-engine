@@ -133,6 +133,19 @@ if not defined AUTOBID_MMDC_PATH if exist "%AB_MMDC%" set "AUTOBID_MMDC_PATH=%AB
 if not defined AUTOBID_MMDC_BROWSER if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "AUTOBID_MMDC_BROWSER=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
 if not defined AUTOBID_MMDC_BROWSER if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" set "AUTOBID_MMDC_BROWSER=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
 
+rem 本机 OCR 服务（PaddleOCR，见 docs/LOCAL_RUNTIME.md 3.3）：已按 tools\paddleocr 安装且下载模型时，在独立的最小化窗口中启动，
+rem 只监听 127.0.0.1；服务端启动自检会等待它加载模型。已配置 AUTOBID_OCR_URL 或设置 AUTOBID_OCR_AUTOSTART=0 时不自动启动。
+set "AB_OCR_PY=%CD%\tools\paddleocr\.venv\Scripts\python.exe"
+if not defined AUTOBID_OCR_PORT set "AUTOBID_OCR_PORT=18765"
+if defined AUTOBID_OCR_URL goto ocr_done
+if "%AUTOBID_OCR_AUTOSTART%"=="0" goto ocr_done
+if not exist "%AB_OCR_PY%" goto ocr_done
+if not exist "%CD%\tools\paddleocr\models\PP-OCRv5_mobile_det\inference.pdiparams" goto ocr_done
+echo [autobid] 启动本机 OCR 服务（PaddleOCR），端口 %AUTOBID_OCR_PORT% ...
+start "autobid-ocr" /min "%AB_OCR_PY%" -X utf8 "%CD%\tools\paddleocr\service.py" --port %AUTOBID_OCR_PORT%
+set "AUTOBID_OCR_URL=http://127.0.0.1:%AUTOBID_OCR_PORT%/ocr"
+:ocr_done
+
 if not defined AUTOBID_HTTP_ADDR set "AUTOBID_HTTP_ADDR=127.0.0.1:8080"
 if not defined AUTOBID_WEB_DIR set "AUTOBID_WEB_DIR=%CD%\web\dist"
 if not exist "%AUTOBID_WEB_DIR%\index.html" (

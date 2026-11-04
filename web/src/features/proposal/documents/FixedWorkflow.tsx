@@ -4,9 +4,9 @@ import type { FixedJob, ProcessingFile, TaskMaterial } from '../../../api/proces
 import { Badge, Button, ErrorBanner, Field, Input, Notice, Select } from '../../../components/ui'
 import { useAsync } from '../../../hooks/useAsync'
 import { RuntimeNotice } from '../../runtime/RuntimeStatus'
+import { executorLabel, isAgentJob, parseJobView } from './parseJobs'
 
 const materialLabels = { missing: '尚未上传或绑定', unavailable: '原件不可用', processing: '正在处理', review: '待采用修订', not_imported: '尚未正式导入', complete: '已完成' }
-const jobLabels = { queued: '排队中', running: '处理中', succeeded: '处理完成', failed: '失败', cancelled: '已取消' }
 
 function MaterialRow({ material, files, save }: { material: TaskMaterial; files: ProcessingFile[]; save: (m: TaskMaterial) => Promise<void> }) {
   const [draft, setDraft] = useState(material)
@@ -79,13 +79,23 @@ export function FixedWorkflow({ taskId, files, tick, refresh, show }: { taskId: 
     <div className="space-y-2">
       <p className="font-medium">后台处理作业</p>
       {allJobs.length === 0 && <p className="text-sm text-muted">尚无后台作业。</p>}
-      {allJobs.map((j) => <div key={j.id} className="flex flex-wrap items-center gap-2 border-t border-line py-2 text-sm">
-        <span>作业 #{j.id} · 原件 #{j.file_id}</span><Badge tone={j.status === 'failed' ? 'red' : j.status === 'succeeded' ? 'green' : 'slate'}>{jobLabels[j.status]}</Badge><span className="text-xs text-muted">尝试 {j.attempts}/{j.max_attempts}</span>
-        {j.error && <span className="break-all text-xs text-red-600">{j.error}</span>}
-        {(j.status === 'queued' || j.status === 'running') && <Button size="sm" disabled={busy} onClick={() => run(async () => { await api.cancelFixedJob(taskId, j.id) })}>取消处理</Button>}
-        {(j.status === 'failed' || j.status === 'cancelled') && <Button size="sm" disabled={busy} onClick={() => run(async () => { await api.enqueueFixedJob(taskId, { ...j.input, request_key: crypto.randomUUID() }) })}>重新处理</Button>}
-        {j.status === 'succeeded' && j.record_id && j.input.document_id && <Button size="sm" onClick={() => void show(j.record_id!)}>查看候选修订</Button>}
-      </div>)}
+      {allJobs.map((j) => {
+        const v = parseJobView(j)
+        const archive = j.input.operation === 'archive'
+        return <div key={j.id} className="space-y-1 border-t border-line py-2 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <span>作业 #{j.id} · {archive ? 'ZIP 展开' : j.input.document_id ? `重新解析文档 #${j.input.document_id}` : '导入'} · 原件 #{j.file_id}</span>
+            <Badge tone={v.tone}>{archive && j.status === 'succeeded' ? '已展开' : v.label}</Badge>
+            {isAgentJob(j) && <Badge tone="blue">Agent 提交</Badge>}
+            <span className="text-xs text-muted">尝试 {j.attempts}/{j.max_attempts}</span>
+            {v.canCancel && <Button size="sm" disabled={busy} onClick={() => run(async () => { await api.cancelFixedJob(taskId, j.id) })}>取消处理</Button>}
+            {v.canRetry && <Button size="sm" disabled={busy} onClick={() => run(async () => { await api.enqueueFixedJob(taskId, { ...j.input, request_key: crypto.randomUUID() }) })}>重新处理</Button>}
+            {v.canReview && j.record_id && <Button size="sm" onClick={() => void show(j.record_id!)}>{j.record_status === 'ready' ? '核对候选' : '查看候选'}</Button>}
+          </div>
+          {!archive && <p className="text-xs text-muted" title={j.executor}>解析配置 {j.input.parser_profile || 'auto'}{j.input.candidate_only || j.input.document_id ? ' · 候选模式' : ' · 直接导入'} · {executorLabel(j.executor)}</p>}
+          {v.note && <p className={`break-all text-xs ${v.tone === 'red' ? 'text-red-600' : 'text-muted'}`}>{v.note}</p>}
+        </div>
+      })}
       {(more ?? jobs.data?.length === 50) && <Button size="sm" onClick={() => run(async () => { const next = await api.fixedJobs(taskId, allJobs.at(-1)?.id); setOlder((v) => [...v, ...next]); setMore(next.length === 50) })}>更早作业</Button>}
     </div>
   </div>

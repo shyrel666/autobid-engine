@@ -34,7 +34,13 @@
   - 取消、暂停、截止与尝试预算围栏：`db/export_requests.go`、`db/exports.go`、`export/export_jobs.go`、`export/exec.go`、`export/runner.go`。
   - 新技能 `proposal-export`（`proposal_export_check` / `submit` / `status` / `cancel`），`proposal_export_check` 同时装配给 Planner；Agent 提交须服务器授予任务导出能力（`AUTOBID_AGENT_EXPORT_ENABLED`，默认关闭，R2 可信身份完成前保持关闭）。
   - HTTP `request_key` / `mode` / `expected_outline_version`、`/exports/{jobID}/cancel` 与 `/export-requests*`；导出页按请求组展示最终稿 / 预览稿、逐格式状态、取消与下载。
-- **尚未实施**：S5~S7。代码与 schema 中仍不存在解析的提交类工具及其路由与字段，也没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
+- **S5a 已 E 收口（2026-11-04，本机验证，见第 9 节与 12.9）**：
+  - 解析候选模式：`file_processing_records` 增加 `candidate_only`、`parser_profile`、`parser_version` 与 `rejected` 状态（拒绝人 / 原因 / 时间），候选输入与 payload 不可改写；`fixed_file_jobs` 增加首次提交固定的 `executor`、`error_code`、`retry_after`，终态不可改写。
+  - 解析路由与执行版本锁定（`filework/route.go`）：auto / native / ocr_only，enhanced_pdf 未交付；OCR 版本变化以 `RUNTIME_UNAVAILABLE` 失败，OCR 暂时不可达在原期限与尝试预算内重试。
+  - 人工采用 import 候选（同事务 `PersistTender`）、拒绝候选、导入候选不推进 `source_epoch` 而采用后推进；结构化缺口与逐行 OCR 原件定位。
+  - 新技能 `document-processing`（`document_parse_submit` / `status` / `result` / `cancel`），只开放 `source_kind=tender_file`，强制候选模式并同事务订阅当前意图；宿主范围新增 `allowed_file_ids`。
+  - 本机 PaddleOCR 3.7.0 服务（`tools/paddleocr`），HTTP 协议增加请求 ID、内容哈希与执行版本；`/file-processing-records/{id}/reject` 与材料处理页的候选核对、采用、拒绝和作业控制。
+- **尚未实施**：S5b、S5c、S6、S7。没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
 
 适用项目：AutoBid Engine。本文中的 Skill 指项目提供给 Agent 的业务技能（`bidtools.Skills()`），不是 Codex 桌面插件。
 
@@ -77,7 +83,7 @@
 | 能力 | 已有实现 | 实施差集 |
 | --- | --- | --- |
 | Skills / Tools | `bidtools/skills.go` 有 **6** 个 Skill；`agent/worker.go` 经 `Skill` 解锁、`SearchExtraTools` 获取 Schema；`server/task_llm.go:LLMService.Resolve` 装配 Worker；Planner 尚未挂载业务工具 | 新增 3 个 Skill，复用 knowledge-reuse；Planner 只读注入、宿主授权 |
-| 文档 | `filework.Processor.process` 首次导入直接 PersistTender；reparse 将完整 PreparedTender 存入 FileProcessingRecord.Payload，Preview 仅为差异摘要；Adopt 目前只支持 reparse；固定队列已有幂等/租约/取消 | Agent 首次导入候选模式、人工采用 import 分支、解析后端与结果分页 |
+| 文档 | `filework.Processor.process` 首次导入直接 PersistTender；reparse 将完整 PreparedTender 存入 FileProcessingRecord.Payload，Preview 仅为差异摘要；Adopt 目前只支持 reparse；固定队列已有幂等/租约/取消 | Agent 首次导入候选模式、人工采用 import 分支、解析后端与结果分页（**S5a 已实现**：`filework/route.go`、`agent.go`、`candidate.go`、`bidtools/document_jobs.go`，见 12.9） |
 | 检索 | `retrieval/providers.go`、版本化索引、核验与 knowledge-reuse 已有 | 健康探测、版本回显与可选模型部署，不重写协议 |
 | 图表 | `export.BuildChartSource` 支持 architecture/gantt/org/equipment_table；`export.Renderer.RenderPNG` 与 `export.MMDC`；proposal_charts 已有 source_hash、pending、修订绑定、产物路径/哈希 | 期望修订围栏、持久化渲染作业、幂等取消、结构化图表计划（**S3 已实现**：`db/chart_jobs.go`、`export/chart_jobs.go`，见 12.7） |
 | 导出 | `db.CreateExportJobs` 冻结快照；**CompleteExportJob、FailExportJob、Heartbeat 已检查 lease_token + running**；export/runner.go 异步执行 | 全生命周期请求幂等、cancelled、严格最终稿策略与完成通知；复用已有围栏，没有 FinishExportJob 这个待修补接口（**S4 已实现**：`db/export_requests.go`、`export/export_jobs.go`，见 12.8） |
@@ -232,6 +238,13 @@ S4 落地说明（2026-11-04）：
 - `agent_job_outcome('proposal_export')`：成功且严格、目录已刷新、记录了引擎为 `final_ready`，其余成功为 `preview_only`；载荷增加请求组、策略、引擎与错误码。
 - 不带请求键的旧 HTTP 调用（`CreateExportJobs`）以保留前缀 `sys:legacy:` 生成一次性请求键，按预览稿策略登记请求组。
 
+S5a 落地说明（2026-11-04）：
+
+- `file_processing_records` 以 `ADD COLUMN IF NOT EXISTS` 增加 `candidate_only`、`parser_profile`（`''`/auto/native/ocr_only，`ck_file_processing_records_profile`）、`parser_version`、`rejected_by` / `reject_reason` / `rejected_at`；旧库内联状态 CHECK 按 5.1 的写法替换：先 `DROP CONSTRAINT IF EXISTS file_processing_records_status_check`，再加含 `rejected` 的 `ck_file_processing_records_status`；`ck_file_processing_records_rejected` 要求拒绝记录有拒绝人、原因与时间。
+- 触发器 `file_processing_records_guard` 冻结候选输入（文件、操作、请求键与指纹、原件哈希、目标文档与修订、payload、preview、候选模式、解析配置与版本、创建人），只允许 ready → adopted / rejected，其余终态不可再变。
+- `fixed_file_jobs` 以 `ADD COLUMN IF NOT EXISTS` 增加 `executor`、`error_code`、`retry_after`；`fixed_file_job_audit` 把 `executor` 并入输入不可变校验，并拒绝终态之后的状态变化。`candidate_only` / `parser_profile` 写在不可变的 `input` 中并计入请求指纹（`omitempty`，旧请求的指纹不变）。
+- `agent_job_outcome('tender_parse')`：记录被拒绝时业务状态为 `rejected`；载荷增加操作、候选模式、解析配置与版本、执行版本、原件与哈希、目标文档 / 修订、缺口数与错误码。`agentJobResultValid('tender_parse')` 另要求待采用候选的原件仍可用且哈希不变；被拒绝的候选不算交付。
+
 迁移验证覆盖新库、旧库升级、再次执行、旧 CHECK 替换及历史查询；原稿错误 FK 与不完整索引已改为上述约束，不把未运行的 DDL 当验收。
 
 DDL 落地补充（三轮核对）：
@@ -378,7 +391,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 | --- | --- |
 | 健康 | 新增 GET /api/runtime/tools，与 Tool 同源 |
 | 固定解析 | 已有 POST/GET /api/tasks/{id}/file-jobs、GET /api/tasks/{id}/file-jobs/{jobID}、POST /api/tasks/{id}/file-jobs/{jobID}/cancel；扩展 parser_profile/candidate_only |
-| 候选 | 现有路径为 /api/tasks/{id}/file-processing-records，含列表、GET /{recordID} 与 POST /{recordID}/adopt；**没有现成 reject 路由**。S5a 若提供拒绝按钮，新增同前缀 POST /{recordID}/reject，持久化拒绝人/原因/时间，已采用不得再拒绝 |
+| 候选 | 现有路径为 /api/tasks/{id}/file-processing-records，含列表、GET /{recordID} 与 POST /{recordID}/adopt；**没有现成 reject 路由**。S5a 若提供拒绝按钮，新增同前缀 POST /{recordID}/reject，持久化拒绝人/原因/时间，已采用不得再拒绝（**S5a 已实现**；详情另按 `cursor` 分页返回候选段落与原件定位，adopt 支持 import 候选 `expected_revision=0`） |
 | 图表 | 已有 GET/POST /api/tasks/{id}/charts（section_id 过滤/提交）、GET /charts/{chartID} 和 /image，以及 render/rebind/delete；不是 sections/{id}/charts。新增 POST/GET /api/tasks/{id}/chart-jobs、GET /api/tasks/{id}/chart-jobs/{jobID}、POST /api/tasks/{id}/chart-jobs/{jobID}/cancel |
 | 导出 | 保留 /api/tasks/{id}/exports/preflight、POST/GET exports、GET /{jobID} 与 /{jobID}/download；新增取消、request_key、expected_outline_version、服务器授权的最终稿/预览策略；旧兼容结果不默认为最终稿 |
 | 通知 | 复用任务 SSE 更新视图；刷新/重连读取持久化列表恢复，不用 SSE 代替数据库完成状态 |
@@ -397,7 +410,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 | S2 作业等待 | `features/execution/ExecutionPage.tsx`、`features/task-workspace/TaskWorkspaceProvider.tsx`、`resources.ts` 接入等待原因与作业事件；按当前用户权限读取业务作业 | “等待后台处理”与执行失败分开；刷新/断线重连恢复状态；Agent 提交的作业同样可见，不只显示页面提交的作业 |
 | S3 图表（2026-11-04 已交付，见 12.7） | `features/proposal/export/ExportParts.tsx` 的 ChartsCard 与 `features/proposal/writing/SectionWorkspace.tsx` 接入异步生成、取消、失败重试和修订标记 | 两条写作路径产图自动刷新；旧修订图不显示为当前图；取消后迟到响应不恢复成功；重试按新请求语义提交 |
 | S4 导出（2026-11-04 已交付，见 12.8） | `features/proposal/export/ExportPage.tsx`、`ExportParts.tsx` 接入预检阻断、请求组、各格式状态、取消与下载 | 明确区分预览/最终稿；多格式部分失败逐项展示；提交响应丢失后同键重发不重复生成；权限不足/版本冲突有明确提示 |
-| S5a 解析 | `features/proposal/documents/FixedWorkflow.tsx` 接入解析能力、候选模式、分页对照、人工采用及作业控制 | 区分处理中、候选待确认、已采用、失败/取消；不将 OCR 完成标成证据已核验；采用后刷新文档、要求、大纲及导出门禁 |
+| S5a 解析（2026-11-04 已交付，见 12.9） | `features/proposal/documents/FixedWorkflow.tsx` 接入解析能力、候选模式、分页对照、人工采用及作业控制 | 区分处理中、候选待确认、已采用、失败/取消；不将 OCR 完成标成证据已核验；采用后刷新文档、要求、大纲及导出门禁 |
 | S5b/S5c 条件扩展 | `pages/KnowledgePage.tsx` 及企业证据对应页面随分域协议一起设计，页面落点在该阶段确认 | 知识候选、索引生效与企业证据核验分开；未实现来源类型不出现在可提交选项中 |
 | S6 检索 | `pages/KnowledgePage.tsx`、`pages/task/ResearchTab.tsx` 显示当前索引/模型状态、检索降级原因与证据状态 | 模型故障不冒充正常语义检索，模型切换不混用索引；技术信息只在诊断详情中展示 |
 | S7 整体验收 | 连通上述页面，验证权限、关闭能力、刷新恢复、升级后的历史记录 | 业务用户只用浏览器完成所声明范围的全流程，无需安装依赖 |
@@ -412,7 +425,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 
 ## 9. 分阶段实施与退出标准
 
-S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2、S3、S4 外均未验收。
+S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2、S3、S4、S5a 外均未验收。
 
 各阶段的工作与退出标准同时包含第 8.1 节对应的前端交付及第 8.2 节联调要求，按“后端服务 → API/类型 → 页面接入 → 联调验收”闭环推进。
 
@@ -423,7 +436,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 | [x] E S2 订阅与回合状态机（2026-11-03） | schema、db/agent_jobs.go、engine/watchdog/intent_completion/intent_inputs；`agent_job_status`、`GET /api/tasks/{id}/agent-jobs` 与执行页等待状态 | 原子提交/等待、恢复扫描、ACK、Hint 保留、范围授权；故障注入无丢唤醒/重复应用；测试作业可验证框架，不代表真实工具交付。**结果**见 12.6 |
 | [x] E S3 图表 Skill（2026-11-04） | chart_render_jobs、服务/Tool/HTTP、SectionDraft.Charts 与章节事务 | 两条写作路径生成真实图；修订+图表入队崩溃恢复；取消/旧修订/兼容入口不覆盖新图。**结果**见 12.7 |
 | [x] E S4 合稿 Skill（2026-11-04） | export_requests、组幂等、严格策略、取消/暂停与完成事件 | 终态重发复用，同键异参拒绝，真实目录/图片/表格回读，无迟到发布；高影响入口符合 R2。**结果**见 12.8（Agent 导出入口默认关闭，R2 完成前不开放） |
-| [ ] E S5a 招标解析 Skill | tender_file、candidate_only、人工 import 采用、原生解析/PaddleOCR | 真实 OCR、完整候选、原件定位、幂等采用、source_epoch 失效通过；不开放知识/企业来源 |
+| [x] E S5a 招标解析 Skill（2026-11-04） | tender_file、candidate_only、人工 import 采用、原生解析/PaddleOCR | 真实 OCR、完整候选、原件定位、幂等采用、source_epoch 失效通过；不开放知识/企业来源。**结果**见 12.9 |
 | [ ] E S5b 知识库增强解析（条件阶段） | 先设计知识原件/候选/采用/索引失效，再实现；MinerU 按评测决定 | 分域表/API 设计与实现验收，不能借用招标表或改写已激活索引 |
 | [ ] E S5c 企业证据 OCR（条件阶段） | 先设计原件版本/页级候选/采用/可采性失效，再实现 | OCR 仅产待核验结果，原件变化传播失效，不声称业务可采性已通过 |
 | [ ] E S6 检索部署 | providers/健康回显/可选本地模型 | 真实接口、索引重建回滚与降级；无稳定收益保持既有模型和单 Agent |
@@ -431,7 +444,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 | [ ] V 外部验证 | 真实材料、保留集、专家 | 按 D0~D5/检索协议验收，目前缺材料 |
 | [ ] P 试点 | 受控真实企业/项目 | ROADMAP 发布门槛，不由 E 自动升级 |
 
-默认顺序：S1 → S2 → S3 → S4 → S5a → S6 → S7。S5b/c 是单独设计与验收的扩展，不以尚未冻结的分域 Schema 阻塞首版，未完成不声称三域全覆盖。S1 的编码与验收都在本机完成；mmdc 需先在本机安装。R2 与基础工程衔接，未完成不开放高影响入口。每阶段退出后重估工作量，不承诺固定周期或未经测量的 GPU 容量。
+默认顺序：S1 → S2 → S3 → S4 → S5a → S6 → S7（S1~S5a 已 E 收口）。S5b/c 是单独设计与验收的扩展，不以尚未冻结的分域 Schema 阻塞首版，未完成不声称三域全覆盖。S1 的编码与验收都在本机完成；mmdc 需先在本机安装。R2 与基础工程衔接，未完成不开放高影响入口。每阶段退出后重估工作量，不承诺固定周期或未经测量的 GPU 容量。
 
 ## 10. 验证矩阵与测量口径
 
@@ -747,6 +760,66 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 - 真实企业投标模板、交易平台投标文件制作工具的导入、签章与评分索引表（页码定位得分点）未验证；导出成功只表示产物已生成并通过本机回读，不代表外部评审通过（V/P 待验证）。
 - 引擎内并发仍为 1，未做数小时级运行与大批量导出排队测量；部分失败的浏览器演示用的是取消（一个格式成功、一个取消）和 PNG 改动（两个格式都失败），没有构造“同一请求组内一个格式成功、另一个格式真实执行失败”的样本。
 - 页面上请求组列表最多读取最近 30 组；更早的请求组需要分页读取，页面尚未提供翻页。
+
+### 12.9 S5a 收口记录（2026-11-04，E 级，本机）
+
+**交付内容**（对应 4.1~4.3、5.1~5.3、6、7、8、8.1 S5a 行）：
+
+| 落点 | 实现 |
+| --- | --- |
+| schema | 见 5.1 S5a 落地说明：候选模式 / 解析配置 / 解析版本 / 拒绝字段与 `rejected` 状态、候选不可改触发器；`fixed_file_jobs.executor` / `error_code` / `retry_after` 与终态不可改；`agent_job_outcome('tender_parse')` 的 `rejected` 与扩展载荷 |
+| db | `db/fixed_jobs.go`：`enqueueFixedFileJobTx`（任务行 / 文件处理锁 → Intent 活租约 → 作业；同键同参重放任意状态，同键异参 `ErrIdempotencyKeyConflict`，暂停 `ErrJobPrecondition`，容量 `ErrJobCapacity`）、`SubmitTenderParse`（同事务订阅当前意图）、`GetTenderParseJob`（作业类型 / 原件范围 / 限定对象时只读本意图作业）、`FinishFixedFileJobCode`、`ReleaseFixedFileJob`，领取尊重 `retry_after` 并以 `BUDGET_EXHAUSTED` 结束耗尽作业（保留最近一次原因）；`db/file_processing.go`：`RejectFileProcessingRecord`、`GetTenderParseRecord`；`db/materials.go`：导入候选待采用时材料为 `review`；`db/execution_scope.go`：`CheckFileScope`（`IntentMandate.allowed_file_ids`） |
+| ingest | `ParseOptions.Profile`（auto / native / ocr_only）；`ParseMeta.Gaps` 七类结构化缺口写进候选摘要；OCR 框 `coord=ocr_px` + 图像尺寸，段落另存逐行 `ocr_lines`；`HTTPOCR` 协议（请求 ID、内容 SHA-256、回报 engine / version / input_sha256，GET 返回执行版本，连接失败与 502/503/504 为 `ErrOCRTransient`）；`TesseractOCR.Version`；`OCRVersion` |
+| filework | `route.go`：`NormalizeProfile`、`ResolveRoute`（事务外固定 executor）、`pinnedOCR`（版本变化 `ErrRuntimeChanged`、暂时不可达 `ErrRuntimeTransient`，均丢弃本次候选）；`processing.go`：候选模式导入不写正式文档，`Adopt` 支持 import 候选（重读原件哈希、同事务 `PersistTender` + `CompleteFileProcessing`、幂等），`Reject`；`agent.go`：`SubmitAgentParse`（来源类型、参数组合、元数据只取本任务已有招标编号、`MetadataRequiredError`）；`candidate.go`：`Candidate` 分页与原件定位；`jobs.go`：暂时故障回队列（`RetryDelay`，OCR 能力降为 degraded，成功后恢复），其余失败带错误码终止 |
+| Tool / Skill | 新技能 `document-processing`（`bidtools/document_jobs.go`）：`document_parse_submit` / `status` / `result` / `cancel`，错误码 `INVALID_ARGUMENT` / `FEATURE_DISABLED` / `RUNTIME_UNAVAILABLE` / `HUMAN_ACTION_REQUIRED`（附 `missing_fields`）/ `SCOPE_VIOLATION` / `PRECONDITION_FAILED` / `CONFLICT_STALE_REVISION` / `IDEMPOTENCY_KEY_CONFLICT` / `CAPACITY_BUSY`；`agent_job_status` 识别 `rejected`；`add_intent` mandate 增加 `allowed_file_ids`；Planner 提示词说明解析方向与 `required_job_kinds=tender_parse`，候选采用前不是正式文档 |
+| HTTP | `/file-jobs` 接受 `parser_profile` / `candidate_only`（503 `runtime_unavailable`、422 `feature_disabled`、409 `idempotency_conflict` / `precondition_failed`、429 `capacity_busy`）；`POST /file-processing-records/{id}/reject`；详情按 `cursor` 分页返回 `candidate` 与 `gaps`，导入候选在原件变化时标 `stale`；`/adopt` 支持导入候选 |
+| 运行 | `tools/paddleocr`（`service.py`、`fetch_models.py`、`requirements.txt` / `requirements.lock.txt`），`start.bat` 自动启动并设置 `AUTOBID_OCR_URL`；`cmd/server` 先于 LLM 服务创建文件处理器与执行器，Worker 工具装配 `document-processing`；启动 OCR 自检在服务加载模型期间重试并记录执行版本；登记见 `docs/LOCAL_RUNTIME.md` 3.3 / 4.1 |
+| 前端 | `api/processing-types.ts` / `client.ts` 的候选、拒绝、解析配置与作业字段；`features/proposal/documents/parseJobs.ts`（状态、执行版本、原件定位、缺口文字、请求键规则，单测）；`FixedWorkflow.tsx` 作业行显示解析配置、执行版本、Agent 提交与候选状态，可取消、重试、核对候选；`ProcessingPanel.tsx` 提交时选择解析配置与候选模式，候选核对弹窗给出元数据、执行版本、OCR 未核验提示、缺口、逐段原件定位与分页，可采用或写原因拒绝；执行页把被拒绝的候选与成功分开 |
+
+**实施时选定的细节**：
+
+- **解析路由与执行版本**：auto 的 PDF 在 OCR 不可用时仍可提交，路由固定为不含 OCR，扫描页记为 `ocr_unavailable` 缺口，不当空白页。ocr_only 与图片必须有 OCR，否则提交即 `RUNTIME_UNAVAILABLE`、不插入作业。native 图片与 ocr_only 的 DOCX / 表格为参数错误。
+- **版本只在实际用到 OCR 时核对**：锁定 OCR 的作业遇到全文本层 PDF 时不调用 OCR，记录的解析版本只写固定解析器。
+- **暂时故障与确定性失败分开**：OCR 服务暂时不可达时，本次解析结果整体丢弃（不保存带假缺口的候选），作业回到队列，计入尝试、截止时间不变，按 `retry_after` 退避。版本变化、哈希不符等确定性失败直接终止并带错误码。
+- **导入元数据**：Agent 只能选用本任务已有正式招标文档中的招标编号 / 标段。本任务还没有正式文档、有多个编号未指定或给出未知编号时，返回 `HUMAN_ACTION_REQUIRED`，首份文件由人在页面导入。`doc_role` 与 `published_at` 可由 Agent 填写；它们计入请求指纹，并在候选核对时展示给人复核。
+- **请求指纹**：Agent 请求的指纹只按规范化的客户端输入计算，不含服务端推导的招标编号。同键重放先于运行能力与元数据检查，之后文档或 OCR 状态变化都不影响重放。
+- **页面默认**：页面导入默认勾选候选模式（可取消，取消后保持 F3a+ 的直接导入）。增强解析后端未交付，不出现在选项中；OCR 不可用时禁用“全部 OCR”。
+- **默认 OCR 模型**：默认用 mobile 识别模型（实测见 `docs/LOCAL_RUNTIME.md` 3.3）：同一合成扫描页 mobile 4.9 秒、漏 5 个字，server 17.4 秒、逐字正确。固定解析作业默认截止 15 分钟，server 模型只适合约 50 页以内的扫描件，作为可选配置。
+
+**验证结果**：
+
+- `go vet ./...` 通过；真实 PostgreSQL 下 `go test -race -count=1 ./...`：387 条测试/子测试通过，26 个包通过，0 失败，0 竞态报告；4 项可选跳过（真实模型契约、两个浏览器用例、文档引擎长稳用例，需显式环境变量开启）。配置了本机 WPS、mmdc 与 PaddleOCR（`AUTOBID_OCR_URL`），真实组件用例实际执行。
+- 新增 S5a 用例：
+  - `ingest/s5a_profile_test.go`：auto / native / ocr_only 路由与七类缺口、OCR 像素坐标与图像尺寸、低置信度与空识别、native 图片拒绝、候选摘要带缺口；HTTP OCR 协议（请求头哈希与请求 ID、回报哈希不符拒绝、GET 版本、503 与连接拒绝为暂时故障、415 为确定性失败、服务不报版本不能锁定）；**真实 PaddleOCR**：自检样本，以及两页 PDF（文本层 + 合成扫描页）只对扫描页 OCR，识别关键条款与表格文字，18 条逐行识别框都在图像范围内。
+  - `filework/s5a_integration_test.go`：候选导入不写正式文档、不推进来源 epoch，必需材料为“待采用”并阻断导出；采用（`expected_revision` 须为 0）后正式入库、来源 epoch 推进、导出门禁出现 `requirements_source_changed`、材料完成，重复采用幂等，已采用不能拒绝；拒绝须写原因、持久化拒绝人与时间、重复拒绝幂等、拒绝后不能采用、候选 payload 与状态不可改写、终态作业不可改状态、`agent_job_outcome` 为 `rejected`；路由表（8 种格式 / 配置组合）；执行版本锁定后 OCR 换版本以 `RUNTIME_UNAVAILABLE` 失败且不留候选；同键重放与同键异参；OCR 暂时不可达回队列（计入尝试、截止时间不变、`retry_after` 生效）、恢复后成功；一直不可达 3 次后 `BUDGET_EXHAUSTED` 并保留最近一次原因；Agent 提交的门禁（无宿主意图、未开放来源、未交付配置、参数组合、保留键、首份文档缺失 / 未知编号 `MetadataRequiredError`、`allowed_file_ids` 越界），受理后强制候选、固定执行版本、同事务订阅、重放复用订阅、同键异参冲突，终态事件 `candidate_pending_review` 与载荷，限定对象时他意图不可读记录与作业，事件投递确认后 `required_job_kinds=tender_parse` 收尾 done；Agent 重新解析（陈旧修订号拒绝、带元数据拒绝），候选被人工拒绝后另一意图的必需作业因结果失效而 blocked；**真实 PaddleOCR 端到端**：扫描件按 auto 路由生成候选，执行版本锁定 PaddleOCR 与模型摘要，候选逐段给出第 2 页、OCR 行数（≥15）、最低置信度与原件哈希，人工采用后正式入库为 2 页文档并推进来源 epoch。
+  - `bidtools/document_jobs_integration_test.go`：`FEATURE_DISABLED`（未配置、知识 / 企业证据来源、enhanced_pdf）、无宿主意图与 `allowed_file_ids` 越界 `SCOPE_VIOLATION`、`INVALID_ARGUMENT`、`HUMAN_ACTION_REQUIRED`（首份文档与未知编号）、无 OCR 的图片 `RUNTIME_UNAVAILABLE`、`CONFLICT_STALE_REVISION`、`IDEMPOTENCY_KEY_CONFLICT`；受理后强制候选、加速唤醒、订阅当前意图；状态给出候选记录引用；结果分页（`limit_sections` / `max_chars` / `next_cursor`、原件哈希）；他意图（限定对象）不能查询、读取或取消；取消排队作业与已终态原样返回；结果工具说明 OCR 未经核验。
+  - `server/document_jobs_test.go`：HTTP 503 / 422 / 409 错误码，候选详情分页与原件定位，拒绝 400 / 200、已拒绝不能采用、导入候选按 0 采用、已采用不能拒绝；**Worker 路径**：经 `document_parse_submit` 提交并订阅 → 意图 `blocked + waiting_job` → 固定执行器生成候选后唤醒 → `required_job_kinds=tender_parse` 校验通过后 done，候选未写入正式文档，Planner 未收到“已结束”。
+  - 既有用例的对应调整：技能数 9、新写入工具的只读断言、`TestProbeRuntime` 的替身 OCR 服务改为回报执行版本（S5a 协议要求，自检同时记录版本）。
+- 前端 `npm --prefix web run build` 通过（保留既有 bundle 大于 500 kB 提示）；`test:unit` 39/39 通过（S5a 新增 6 条：处理中 / 候选待核对 / 已采用 / 已拒绝 / 失败与取消分开、OCR 未核验与拒绝人原因、解析配置选项、执行版本 / 原件定位 / 缺口文字、请求键复用与换新、解析事件重读与被拒候选不显示为成功）。
+- 浏览器验收（本机服务二进制 + 隔离库 `autobid_s5acheck` + 真实 PaddleOCR；`AUTOBID_OFFICE_ENGINE=none`；种子经 db / filework 公开 API 构造，临时种子代码已删除）：
+  - 文档页“材料处理”：Agent 提交的答疑纪要候选显示“候选待核对 · Agent 提交”和执行版本 `fixed-parser-v1（不使用 OCR）`。解析配置只有三项，增强解析不出现；OCR 健康时“全部 OCR”可选；候选模式默认勾选。
+  - 选中两页扫描附件（第 2 页为合成扫描页），按 auto 提交为候选：
+    - 作业显示执行版本 `fixed-parser-v1 + paddleocr 3.7.0（PP-OCRv5_mobile_det / PP-OCRv5_mobile_rec）`，候选由真实 PaddleOCR 生成；
+    - 核对弹窗提示“第 2 页为 OCR 机器识别文字，未经人工核验”，逐段给出“第 2 页 · OCR n 行 · 最低置信度 0.97 / 1.00”；
+    - 正文中能看到 mobile 模型的真实漏字（“3.2★项目期90历天”）。
+  - 写入复核说明后采用：招标包文件由 1 份变为 2 份（扫描附件 2 页 6 段），作业与记录显示“已采用”，页面提示来源已变化、须重新提取要求。
+  - Agent 候选：不填原因直接点“拒绝此候选”，提示“请填写拒绝原因”；填写原因后拒绝成功。记录显示“已拒绝 · 拒绝人 operator · 原因：…”，作业显示“候选已拒绝”，正式文档未变。
+  - `GET /api/runtime/tools` 中 OCR 为 healthy，版本即锁定的 PaddleOCR 与模型摘要。
+  - 执行页的后台作业卡片显示“招标解析 #1 · 已成功 · 候选待人工采用”。作业事件在作业终态时冻结，之后的人工拒绝以材料处理页为准。
+  - 服务日志只有两条 WARN，对应刻意关闭的文档引擎与 mmdc。
+  - **验收中发现并修正**（S5a 之前就有的问题）：
+    - 招标包文件页的文件树与材料处理是兄弟组件，原先分别用文档 ID 和任务 ID 作 React key。两者相等时（隔离库中都为 1），每次刷新都会多渲染几份文件树，刷新 3 次后同一文档出现 14 份。
+    - 已改为带前缀的 key；复测刷新 4 次后仍只有 1 份。
+- 原始日志在 Git 忽略的 `data/s5a-checks/`（`vet.log`、`race.jsonl`、`race.exit`、`web-build.log`、`web-tests.log`、`browser-server.log`）。
+
+**边界（未包含在 S5a）**：
+
+- OCR 质量只有 1 页合成扫描样本，没有真实扫描招标件与人工标注；mobile 模型在样本上漏字但置信度仍高，因此候选必须人工对照原件采用，采用后也不等于证据已核验（V/P 待验证）。
+- 只配置了 CPU，没有安装 GPU 版 PaddlePaddle。MinerU 增强解析（enhanced_pdf）、知识库来源（S5b）与企业证明材料来源（S5c）均未实施，提交时返回 FEATURE_DISABLED。
+- 执行页后台作业卡片显示的是作业终态时冻结的事件（如“候选待人工采用”）；之后的人工采用 / 拒绝以材料处理页与 `document_parse_status` 为准。
+- PDF 扫描页只识别页面中面积最大的一张图像；不渲染整页矢量内容，CCITT / JBIG2 等编码的扫描图仍记为缺口。
+- 人工采用 / 拒绝仍以 `X-Autobid-User` 作审计声明，不是 R2 可信身份；Agent 不能采用候选（首版不注册采用工具）。
+- 单页 OCR 有 2 分钟超时，固定解析作业默认截止 15 分钟；大批量扫描件的排队与资源占用未测量。
 
 ## 13. 上游参考与版本核对入口
 

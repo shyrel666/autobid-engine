@@ -6,11 +6,15 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,6 +28,10 @@ import (
 // ErrOCRUnavailable 表示未配置可用的 OCR 引擎。
 var ErrOCRUnavailable = errors.New("ingest: OCR is not available (set AUTOBID_OCR_URL or install tesseract with chi_sim)")
 
+// ErrOCRTransient 表示本机 OCR 服务暂时不可达或繁忙（连接失败、502/503/504）；在原期限与尝试预算内可以重试，
+// 不得把这类失败当作“页面没有文字”。
+var ErrOCRTransient = errors.New("ingest: OCR service temporarily unavailable")
+
 // OCRProvider 识别一张图片（一页）。BBox 为像素坐标 [x0, y0, x1, y1]（原点左上）。
 type OCRProvider interface {
 	Name() string
@@ -34,6 +42,31 @@ type OCRPage struct {
 	Width  float64   `json:"width"`
 	Height float64   `json:"height"`
 	Lines  []OCRLine `json:"lines"`
+	// Engine / Version 是执行本次识别的引擎与版本（HTTP 服务回报；用于核对作业首次提交时锁定的执行版本）。
+	Engine  string `json:"engine,omitempty"`
+	Version string `json:"version,omitempty"`
+	// InputSHA256 是服务端收到的图像哈希；与请求不一致时客户端拒绝结果。
+	InputSHA256 string `json:"input_sha256,omitempty"`
+	RequestID   string `json:"request_id,omitempty"`
+}
+
+// OCRVersioner 由能报告执行版本的引擎实现（HTTP 服务、tesseract）。
+type OCRVersioner interface {
+	Version(ctx context.Context) (string, error)
+}
+
+// OCRVersion 返回引擎的执行版本：实现了 OCRVersioner 的调用之，否则用引擎名；UnavailableOCR 返回 ErrOCRUnavailable。
+func OCRVersion(ctx context.Context, p OCRProvider) (string, error) {
+	if p == nil {
+		return "", ErrOCRUnavailable
+	}
+	if _, ok := p.(UnavailableOCR); ok {
+		return "", ErrOCRUnavailable
+	}
+	if v, ok := p.(OCRVersioner); ok {
+		return v.Version(ctx)
+	}
+	return p.Name(), nil
 }
 
 type OCRLine struct {
@@ -97,7 +130,12 @@ func (f FallbackOCR) Recognize(ctx context.Context, image []byte, mime string) (
 	return nil, errors.Join(errs...)
 }
 
-// HTTPOCR 把图片以原始字节 POST 到 OCR 服务（Content-Type 为图片 MIME），响应体为 OCRPage JSON。
+// HTTPOCR 调用本机 OCR 服务（如 tools/paddleocr/service.py，只监听本机）：
+//   - POST URL：请求体为图片原始字节（Content-Type 为图片 MIME），附 X-Autobid-Request-Id 与 X-Autobid-Content-SHA256；
+//     响应为 OCRPage JSON（含 engine / version / input_sha256），input_sha256 与请求不一致时拒绝结果；
+//   - GET URL：返回 {"engine","version"}，作业首次提交时据此锁定执行版本。
+//
+// 连接失败与 502/503/504 归为 ErrOCRTransient（可在原预算内重试）；其他 4xx/5xx 与响应格式错误为确定性失败。
 type HTTPOCR struct {
 	URL    string
 	Token  string
@@ -105,6 +143,26 @@ type HTTPOCR struct {
 }
 
 func (h *HTTPOCR) Name() string { return "http" }
+
+func (h *HTTPOCR) client() *http.Client {
+	if h.Client != nil {
+		return h.Client
+	}
+	return &http.Client{Timeout: 2 * time.Minute}
+}
+
+// transientHTTP 判断 HTTP 调用失败是否为暂时性（服务未启动、重启中、繁忙）。
+func transientHTTP(err error, status int) bool {
+	if status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	var ne net.Error
+	var oe *net.OpError
+	return errors.As(err, &oe) || (errors.As(err, &ne) && ne.Timeout())
+}
 
 func (h *HTTPOCR) Recognize(ctx context.Context, image []byte, mime string) (*OCRPage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URL, bytes.NewReader(image))
@@ -114,16 +172,21 @@ func (h *HTTPOCR) Recognize(ctx context.Context, image []byte, mime string) (*OC
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
+	sum := sha256.Sum256(image)
+	digest := hex.EncodeToString(sum[:])
+	var rid [8]byte
+	_, _ = rand.Read(rid[:])
 	req.Header.Set("Content-Type", mime)
+	req.Header.Set("X-Autobid-Request-Id", hex.EncodeToString(rid[:]))
+	req.Header.Set("X-Autobid-Content-SHA256", digest)
 	if h.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+h.Token)
 	}
-	c := h.Client
-	if c == nil {
-		c = &http.Client{Timeout: 2 * time.Minute}
-	}
-	resp, err := c.Do(req)
+	resp, err := h.client().Do(req)
 	if err != nil {
+		if ctx.Err() == nil && transientHTTP(err, 0) {
+			return nil, fmt.Errorf("%w: %v", ErrOCRTransient, err)
+		}
 		return nil, fmt.Errorf("ocr request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -132,13 +195,58 @@ func (h *HTTPOCR) Recognize(ctx context.Context, image []byte, mime string) (*OC
 		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("ocr service: HTTP %d: %s", resp.StatusCode, truncateRunes(string(body), 200))
+		msg := fmt.Sprintf("ocr service: HTTP %d: %s", resp.StatusCode, truncateRunes(string(body), 200))
+		if transientHTTP(nil, resp.StatusCode) {
+			return nil, fmt.Errorf("%w: %s", ErrOCRTransient, msg)
+		}
+		return nil, errors.New(msg)
 	}
 	var page OCRPage
 	if err := json.Unmarshal(body, &page); err != nil {
 		return nil, fmt.Errorf("ocr service: decode response: %w", err)
 	}
+	if page.InputSHA256 != "" && !strings.EqualFold(page.InputSHA256, digest) {
+		return nil, fmt.Errorf("ocr service: recognized image hash %s does not match the request", truncateRunes(page.InputSHA256, 16))
+	}
 	return &page, nil
+}
+
+// Version 读取服务的执行版本（GET URL）。服务未回报版本时视为不可用，不能锁定执行版本。
+func (h *HTTPOCR) Version(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.URL, nil)
+	if err != nil {
+		return "", err
+	}
+	if h.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+h.Token)
+	}
+	resp, err := h.client().Do(req)
+	if err != nil {
+		if ctx.Err() == nil && transientHTTP(err, 0) {
+			return "", fmt.Errorf("%w: %v", ErrOCRTransient, err)
+		}
+		return "", fmt.Errorf("ocr version: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode/100 != 2 {
+		msg := fmt.Sprintf("ocr version: HTTP %d: %s", resp.StatusCode, truncateRunes(string(body), 200))
+		if transientHTTP(nil, resp.StatusCode) {
+			return "", fmt.Errorf("%w: %s", ErrOCRTransient, msg)
+		}
+		return "", errors.New(msg)
+	}
+	var info struct {
+		Engine  string `json:"engine"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil || strings.TrimSpace(info.Version) == "" {
+		return "", errors.New("ocr version: the service did not report an engine version")
+	}
+	return strings.TrimSpace(info.Version), nil
 }
 
 // TesseractOCR 调用 tesseract 命令行（stdin 输入、TSV 输出），按 block/par/line 聚合单词为行。
@@ -148,6 +256,19 @@ type TesseractOCR struct {
 }
 
 func (t *TesseractOCR) Name() string { return "tesseract" }
+
+// Version 读取 `tesseract --version` 的首行，并附语言包。
+func (t *TesseractOCR) Version(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, t.Path, "--version").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("tesseract --version: %w", err)
+	}
+	first := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	if first == "" {
+		return "", errors.New("tesseract --version: empty output")
+	}
+	return first + " (" + t.Lang + ")", nil
+}
 
 func (t *TesseractOCR) Recognize(ctx context.Context, image []byte, _ string) (*OCRPage, error) {
 	cmd := exec.CommandContext(ctx, t.Path, "stdin", "stdout", "-l", t.Lang, "--psm", "3", "tsv")

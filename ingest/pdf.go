@@ -135,7 +135,7 @@ type pdfInterp struct {
 	seq   int
 }
 
-func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err error) {
+func parsePDF(ctx context.Context, data []byte, ocr OCRProvider, profile string) (p *Parsed, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			p, err = nil, fmt.Errorf("%w: malformed PDF: %v", ErrUnsupportedFormat, r)
@@ -149,6 +149,12 @@ func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err
 	pages := d.pages()
 	if len(pages) == 0 {
 		return nil, fmt.Errorf("%w: PDF has no pages", ErrUnsupportedFormat)
+	}
+	if profile == ProfileOCROnly && ocr == nil {
+		return nil, ErrOCRUnavailable
+	}
+	if profile == ProfileNative {
+		ocr = nil
 	}
 	p = &Parsed{Meta: ParseMeta{Parser: "pdf", Pages: len(pages)}}
 	if info := d.dictOf(d.trailer["Info"]); info != nil {
@@ -168,7 +174,7 @@ func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err
 	textPages := 0
 	var ocrErr error
 	for i, out := range outs {
-		if countText(out.glyphs) >= 5 {
+		if profile != ProfileOCROnly && countText(out.glyphs) >= 5 {
 			var used []bool
 			ruled[i], used = ruledTables(out)
 			pageLines[i] = buildLayoutLines(withoutGlyphs(out, used))
@@ -182,14 +188,26 @@ func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err
 			}
 		}
 		if len(decodable) == 0 {
-			if out.unsupportedIm > 0 {
-				p.Meta.Warnings = append(p.Meta.Warnings, fmt.Sprintf("第 %d 页为扫描图像，但图像编码（CCITT/JBIG2 等）暂不支持送 OCR", out.num))
+			switch {
+			case out.unsupportedIm > 0:
+				msg := fmt.Sprintf("第 %d 页为扫描图像，但图像编码（CCITT/JBIG2 等）暂不支持送 OCR", out.num)
+				p.Meta.Warnings = append(p.Meta.Warnings, msg)
+				p.Meta.gap(out.num, GapImageUnsupported, msg)
+			case profile == ProfileOCROnly:
+				msg := fmt.Sprintf("第 %d 页没有可识别的页面图像（ocr_only 不使用文本层）", out.num)
+				p.Meta.Warnings = append(p.Meta.Warnings, msg)
+				p.Meta.gap(out.num, GapNoPageImage, msg)
 			}
 			continue
 		}
 		if ocr == nil {
 			ocrErr = ErrOCRUnavailable
-			p.Meta.Warnings = append(p.Meta.Warnings, fmt.Sprintf("第 %d 页无文本层（疑似扫描件），未配置 OCR", out.num))
+			kind, msg := GapOCRUnavailable, fmt.Sprintf("第 %d 页无文本层（疑似扫描件），未配置 OCR", out.num)
+			if profile == ProfileNative {
+				kind, msg = GapOCRNotRequested, fmt.Sprintf("第 %d 页无文本层（疑似扫描件），native 解析配置不调用 OCR", out.num)
+			}
+			p.Meta.Warnings = append(p.Meta.Warnings, msg)
+			p.Meta.gap(out.num, kind, msg)
 			continue
 		}
 		img := decodable[0]
@@ -201,11 +219,14 @@ func parsePDF(ctx context.Context, data []byte, ocr OCRProvider) (p *Parsed, err
 		page, err := ocr.Recognize(ctx, img.data, img.mime)
 		if err != nil {
 			ocrErr = err
-			p.Meta.Warnings = append(p.Meta.Warnings, fmt.Sprintf("第 %d 页 OCR 失败：%v", out.num, err))
+			msg := fmt.Sprintf("第 %d 页 OCR 失败：%v", out.num, err)
+			p.Meta.Warnings = append(p.Meta.Warnings, msg)
+			p.Meta.gap(out.num, GapOCRFailed, msg)
 			continue
 		}
 		p.Meta.OCR = ocr.Name()
 		p.Meta.OCRPages = append(p.Meta.OCRPages, out.num)
+		p.Meta.ocrPageGaps(out.num, page)
 		pageLines[i] = ocrLayoutLines(page, out.num)
 	}
 	if textPages == 0 && len(p.Meta.OCRPages) == 0 {
@@ -784,7 +805,8 @@ func ocrLayoutLines(page *OCRPage, pageNo int) []layoutLine {
 		h := max(l.BBox[3]-l.BBox[1], 1)
 		out = append(out, layoutLine{page: pageNo, y: -l.BBox[1], size: h, ocr: true, height: page.Height,
 			segs: []layoutSeg{{x0: l.BBox[0], x1: l.BBox[2], text: t}},
-			box:  BBox{Page: pageNo, X0: l.BBox[0], Y0: l.BBox[1], X1: l.BBox[2], Y1: l.BBox[3], Conf: l.Confidence}})
+			box: BBox{Page: pageNo, X0: l.BBox[0], Y0: l.BBox[1], X1: l.BBox[2], Y1: l.BBox[3], Conf: l.Confidence,
+				Coord: CoordOCRPixels, ImgW: page.Width, ImgH: page.Height}})
 	}
 	return out
 }

@@ -1,6 +1,6 @@
 # 本机运行依赖登记
 
-登记日期：2026-11-03。对应 [AGENT_TOOL_SKILLS_PLAN.md](../AGENT_TOOL_SKILLS_PLAN.md) S1。
+登记日期：2026-11-03。对应 [AGENT_TOOL_SKILLS_PLAN.md](../AGENT_TOOL_SKILLS_PLAN.md) S1；2026-11-04 随 S5a 登记本机 OCR（PaddleOCR）。
 
 本项目不做目标部署，运行、开发、测试与验收都以本机为准，见计划第 1、6 节。本文记录本机实际安装并验证过的程序、版本、位置、用途、环境变量和自检方法。
 
@@ -22,7 +22,7 @@
 | --- | --- | --- |
 | `office` 文档引擎 | 用内置模板生成两章小文档。刷新目录，另存 DOCX 并导出 PDF，再回读：DOCX 目录域要有带页码的条目，PDF 目录页码要等于标题实际所在页 | 已安装（WPS 优先） |
 | `mermaid` 图表渲染 | 用项目生成器构造中文分层架构图和甘特图，各渲染一次，PNG 要能解码，且尺寸不小于 100×50 | 已安装 |
-| `ocr` 扫描件识别 | 识别内置的中文样本图片 `ingest/ocr_selftest.png`，要识别出“招标”和“2026”，坐标落在图片范围内 | **未安装**（见 3.3） |
+| `ocr` 扫描件识别 | 识别内置的中文样本图片 `ingest/ocr_selftest.png`，要识别出“招标”和“2026”，坐标落在图片范围内；服务还须回报执行版本（解析作业据此锁定） | 已安装（PaddleOCR，见 3.3） |
 | `enhanced_pdf` 增强 PDF 解析 | 尚未交付，固定为 `unconfigured` | 未交付（S5） |
 | `embedding` 语义向量 | 嵌入一句固定短文本，向量维度要等于配置值，且没有非有限值 | 按 `.env.local.bat` 配置 |
 | `reranker` 语义重排 | 对两段固定文本打分，相关段落得分要高于无关段落 | 按 `.env.local.bat` 配置 |
@@ -35,7 +35,7 @@
 - `degraded`：自检通过，但最近一次实际调用失败。下一次调用成功后恢复为 `healthy`。
 - `self_test_failed`：已配置，但自检失败。
 
-文档引擎和 Mermaid 的自检在启动时并行执行，完成后才开始执行导出作业。其余三项在服务开始监听后于后台执行，自检期间状态为 `starting`。
+文档引擎和 Mermaid 的自检在启动时并行执行，完成后才开始执行导出作业。其余三项在服务开始监听后于后台执行，自检期间状态为 `starting`。本机 OCR 服务还在加载模型时（连接被拒或 503），OCR 自检在 2 分钟内每 2 秒重试一次，不立即判为失败。
 
 自检会消耗少量 embedding / reranker 额度，约几十个 token。
 
@@ -53,6 +53,10 @@
 | puppeteer | 25.13.0（不下载自带浏览器） | `tools\mermaid-cli\node_modules` | 被 Mermaid-CLI 调用 |
 | Google Chrome | 156.0.8078.80 | `C:\Program Files\Google\Chrome\Application\chrome.exe` | Mermaid-CLI 的渲染浏览器 |
 | 中文字体 | 系统自带：微软雅黑 `msyh.ttc`、黑体 `simhei.ttf` | `C:\Windows\Fonts` | 图表中文标签；导出正文使用模板指定的字体 |
+| Python（OCR 服务） | 3.10.8 | `D:\python-3.10.8`（只用来创建虚拟环境） | 本机 OCR 服务的运行时 |
+| PaddlePaddle | 3.3.1（CPU） | `tools\paddleocr\.venv` | OCR 推理框架 |
+| PaddleOCR / PaddleX | 3.7.0 / 3.7.2 | `tools\paddleocr\.venv` | 扫描件与图片识别（`tools/paddleocr/service.py`） |
+| OCR 模型 | `PP-OCRv5_mobile_det`、`PP-OCRv5_mobile_rec`（默认）；`PP-OCRv5_server_rec`（可选） | `tools\paddleocr\models` | 文字检测与识别；模型文件摘要写进执行版本 |
 
 授权用途由用户自行确认，不作为工程验收条件。
 
@@ -111,16 +115,59 @@ npm ci --prefix tools/mermaid-cli --no-audit --no-fund
 - 超时或取消时，结束 node 及其启动的全部浏览器进程，再删除临时目录。用户自己打开的浏览器不受影响，验证见第 4 节。
 - 图表中文字体默认是“微软雅黑 / 黑体”，在 Mermaid 配置中指定。
 
-### 3.3 OCR（未安装）
+### 3.3 OCR（PaddleOCR 本机服务，S5a）
 
-本机没有 tesseract，也没有配置 `AUTOBID_OCR_URL`，因此 `ocr` 状态为 `unconfigured`，扫描件上传会被拒绝。
+`tools/paddleocr/service.py` 是只监听 `127.0.0.1` 的 HTTP 服务，实现 `ingest.HTTPOCR` 协议：
 
-PaddleOCR 本机服务在 S5a 安装和验收。配置后的接入方式：
+- `GET /ocr`：返回引擎与执行版本，如 `paddleocr 3.7.0; paddle 3.3.1; PP-OCRv5_mobile_det@3206ba2888d2; PP-OCRv5_mobile_rec@b9c2be6f68f1; cpu`（`@` 后是模型文件摘要）。
+- `POST /ocr`：请求体是图片原始字节，带请求 ID 与内容 SHA-256；响应给出每行文字、像素坐标框、置信度、执行版本与收到的图片哈希。哈希不一致时客户端拒绝结果。
+- 错误为结构化 JSON：400、401、413、415、500、503。连接失败与 502/503/504 归为暂时故障，解析作业在原截止时间与尝试预算内重试；其他错误为确定性失败。
+- 服务只读取 `tools\paddleocr\models` 中预先下载的模型，运行时不联网下载；同一时间只识别一张图片，其余请求排队。
 
-- 服务地址：`AUTOBID_OCR_URL`（服务只监听本机），可选 `AUTOBID_OCR_TOKEN`。
-- 也可以安装 tesseract 并带上 `chi_sim` 语言包，通过 PATH 或 `AUTOBID_TESSERACT` 找到。
+固定版本清单：
 
-两种方式在启动时都会用内置样本自检。
+- `tools/paddleocr/requirements.txt`：顶层固定 `paddlepaddle==3.3.1`、`paddleocr==3.7.0`；
+- `requirements.lock.txt`：完整的 `pip freeze`；
+- 两者纳入 Git。虚拟环境 `.venv`、模型目录 `models` 与下载缓存不纳入 Git。
+
+安装（一次性，需联网）：
+
+```powershell
+python -m venv tools\paddleocr\.venv
+tools\paddleocr\.venv\Scripts\python.exe -m pip install -r tools\paddleocr\requirements.lock.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+tools\paddleocr\.venv\Scripts\python.exe -X utf8 tools\paddleocr\fetch_models.py
+# 可选：服务器版识别模型（更准、更慢，见下方实测）
+$env:PADDLEOCR_REC_MODEL = 'PP-OCRv5_server_rec'; tools\paddleocr\.venv\Scripts\python.exe -X utf8 tools\paddleocr\fetch_models.py
+```
+
+启动与配置：
+
+- `start.bat` 检测到 `.venv` 和默认模型后，在名为 `autobid-ocr` 的最小化窗口中启动服务（端口 `AUTOBID_OCR_PORT`，默认 18765），并设置 `AUTOBID_OCR_URL=http://127.0.0.1:18765/ocr`。
+- 已设置 `AUTOBID_OCR_URL` 或 `AUTOBID_OCR_AUTOSTART=0` 时，不自动启动。
+- 手动启动：`tools\paddleocr\.venv\Scripts\python.exe -X utf8 tools\paddleocr\service.py --port 18765`。
+- 可选参数：`--rec PP-OCRv5_server_rec`（或 `PADDLEOCR_REC_MODEL`），`AUTOBID_OCR_TOKEN`（服务与服务端同时设置后校验 Bearer 令牌）。
+- 只配置了 CPU。本机有 RTX 3050 Laptop GPU，但没有安装 GPU 版 PaddlePaddle，也没有测过 GPU 配置。
+
+已知问题：PaddlePaddle 3.3.1 在 Windows 上使用 oneDNN 时报 `ConvertPirAttribute2RuntimeAttribute not support`，服务固定 `enable_mkldnn=False`，用普通 CPU 内核推理。
+
+执行版本锁定（S5a）：
+
+- 解析作业首次提交时，把服务回报的执行版本写入作业的 `executor`。
+- 之后升级 PaddleOCR、更换模型或改用服务器版识别模型，排队中按旧版本提交的作业会以 `RUNTIME_UNAVAILABLE` 失败，需要用新的请求键重新提交。
+- 服务暂时停止时，作业回到队列，在原截止时间（固定解析作业默认 15 分钟）与 3 次尝试内重试。
+
+模型选择实测（2026-11-04，E 级，本机 CPU）。样本是一页合成的扫描招标页：900×1270 灰度 JPEG，含旋转与噪点，`ingest/testdata/scan_tender_page.jpg`，文字为虚构内容。
+
+| 识别模型 | 每页耗时 | 文字行 | 结果 |
+| --- | --- | --- | --- |
+| `PP-OCRv5_mobile_rec`（默认） | 4.9 秒 | 18 行全部检出，坐标正确 | 4 行条款共漏 5 个字，置信度仍在 0.97 以上：“工期”→“期”、“日历天”→“历天”、“投标人”→“投标”、“可用性”→“可性”、“2小时”→“2时” |
+| `PP-OCRv5_server_rec` | 17.4 秒 | 18 行全部检出 | 条款文字逐字正确 |
+
+- 默认用 mobile 模型：固定解析作业默认截止 15 分钟，按服务器版速度只能处理约 50 页扫描件。
+- 置信度高也会漏字，所以 OCR 结果只作为候选。须人工对照原件采用，采用后也不等于证据已核验。
+- 只有 1 页合成样本，不是质量结论。
+
+tesseract 仍可作为备选：安装后带上 `chi_sim` 语言包，经 PATH 或 `AUTOBID_TESSERACT` 找到。版本取自 `tesseract --version`。
 
 ### 3.4 Embedding / Reranker
 
@@ -160,9 +207,18 @@ go test -count=1 -v -run TestOfficeLargeDocumentAndSoak ./export/
 
 **尚未验证**：
 
-- OCR（未安装，S5a）；
+- OCR 的业务质量：只有合成样本，没有真实扫描招标件与人工标注（S5a 的本机记录见 4.1）；
 - 真实企业投标模板（需要用户提供）；
 - 引擎内同时处理多个文档（并发固定为 1）、数小时级运行与生产负载。
+
+### 4.1 OCR 本机验证记录（2026-11-04，E 级，S5a）
+
+真实 PaddleOCR 用例在设置 `AUTOBID_OCR_URL` 时执行：
+
+| 用例 | 结果 |
+| --- | --- |
+| `TestRealPaddleOCRScannedPDF`（`ingest`） | 自检样本通过。两页 PDF（第 1 页文本层、第 2 页为上表的合成扫描页）按 `auto` 路由解析：只有第 2 页走 OCR，用时约 5 秒；识别出“服务器数量不少于12台”“ISO9001”“99.9%”“机架式服务器”“核心交换机”；逐行识别框共 18 条，都落在 900×1270 图像范围内并带置信度 |
+| `TestRealOCRCandidateImportEndToEnd`（`filework`） | 同一 PDF 经固定解析作业生成候选。执行版本锁定为 PaddleOCR + 两个模型的摘要；候选逐段给出页码、OCR 行数与最低置信度；人工采用后正式入库为 2 页文档，来源 epoch 推进 |
 
 ## 5. 升级规则
 

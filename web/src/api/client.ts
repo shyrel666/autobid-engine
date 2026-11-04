@@ -224,7 +224,10 @@ export const api = {
   enqueueFixedJob: (id: number, input: FixedJobInput) => post<FixedJob>(`${t(id)}/file-jobs`, input),
   cancelFixedJob: (id: number, job: number) => post<FixedJob>(`${t(id)}/file-jobs/${job}/cancel`, {}),
   processingRecords: (id: number, before = 0) => get<ProcessingRecord[]>(`${t(id)}/file-processing-records?before=${before}`),
-  processingDetail: (id: number, record: number, offset = 0) => get<ProcessingDetail>(`${t(id)}/file-processing-records/${record}?offset=${offset}`),
+  processingDetail: (id: number, record: number, offset = 0, cursor = 0) =>
+    get<ProcessingDetail>(`${t(id)}/file-processing-records/${record}?offset=${offset}&cursor=${cursor}`),
+  rejectProcessingRecord: (id: number, record: number, reason: string) =>
+    post<ProcessingRecord>(`${t(id)}/file-processing-records/${record}/reject`, { reason }),
   importProcessingFile: (id: number, file: number, req: { request_key: string; tender_no: string; lot_no: string; doc_role: string; published_at: string }) =>
     post<ProcessingRecord>(`${t(id)}/files/${file}/import`, req),
   reparseDocument: (id: number, doc: number, expected_revision: number, request_key: string) =>

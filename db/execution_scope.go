@@ -19,6 +19,7 @@ func WithExecutionScope(ctx context.Context, m *IntentMandate) context.Context {
 	copy.AllowedJobKinds = slices.Clone(m.AllowedJobKinds)
 	copy.RequiredJobKinds = slices.Clone(m.RequiredJobKinds)
 	copy.AllowedTemplateIDs = slices.Clone(m.AllowedTemplateIDs)
+	copy.AllowedFileIDs = slices.Clone(m.AllowedFileIDs)
 	return context.WithValue(ctx, executionScopeKey{}, &copy)
 }
 func CheckSectionScope(ctx context.Context, id int64) error {
@@ -48,6 +49,15 @@ func CheckJobKindScope(ctx context.Context, kind string) error {
 func CheckTemplateScope(ctx context.Context, id int64) error {
 	if m, _ := ctx.Value(executionScopeKey{}).(*IntentMandate); id > 0 && m != nil && (m.RestrictObjects || len(m.AllowedTemplateIDs) > 0) && !slices.Contains(m.AllowedTemplateIDs, id) {
 		return fmt.Errorf("execution scope: export template %d is not authorized", id)
+	}
+	return nil
+}
+
+// CheckFileScope applies the granted task files (originals and ZIP children) to
+// tender parse submission, status, result paging and cancellation alike.
+func CheckFileScope(ctx context.Context, id int64) error {
+	if m, _ := ctx.Value(executionScopeKey{}).(*IntentMandate); m != nil && (m.RestrictObjects || len(m.AllowedFileIDs) > 0) && !slices.Contains(m.AllowedFileIDs, id) {
+		return fmt.Errorf("execution scope: file %d is not authorized", id)
 	}
 	return nil
 }

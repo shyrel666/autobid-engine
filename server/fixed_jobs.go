@@ -12,7 +12,30 @@ import (
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/filework"
 	"github.com/autobid/autobid-engine/ingest"
+	"github.com/autobid/autobid-engine/toolhealth"
 )
+
+// fileJobFail adds structured codes for the S5a submission gates; other errors keep the F3a+ status mapping.
+func fileJobFail(w http.ResponseWriter, err error) {
+	codes := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{db.ErrIdempotencyKeyConflict, http.StatusConflict, "idempotency_conflict"},
+		{db.ErrJobCapacity, http.StatusTooManyRequests, "capacity_busy"},
+		{db.ErrJobPrecondition, http.StatusConflict, "precondition_failed"},
+		{filework.ErrProfileDisabled, http.StatusUnprocessableEntity, "feature_disabled"},
+		{filework.ErrOCRRequired, http.StatusServiceUnavailable, "runtime_unavailable"},
+	}
+	for _, c := range codes {
+		if errors.Is(err, c.err) {
+			writeJSON(w, c.status, map[string]string{"error": toolhealth.Sanitize(err.Error()), "code": c.code})
+			return
+		}
+	}
+	fail(w, err)
+}
 
 // Raw body avoids multipart buffering. The original is durable before parsing starts.
 func (a *API) uploadProcessingFile(w http.ResponseWriter, r *http.Request, t *Task) {
@@ -86,7 +109,7 @@ func (a *API) enqueueFixedJob(w http.ResponseWriter, r *http.Request, t *Task) {
 	}
 	j, err := p.Enqueue(r.Context(), t.ID, in, operator(r))
 	if err != nil {
-		fail(w, err)
+		fileJobFail(w, err)
 		return
 	}
 	if a.cfg.FileRunner != nil {

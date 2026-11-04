@@ -47,7 +47,7 @@ func (d *DB) SetTaskPaused(ctx context.Context, id int64, paused bool) error {
 		        ELSE status END
 		WHERE id = $2`, paused, id)
 		if err == nil && paused {
-			_, err = tx.ExecContext(ctx, `UPDATE fixed_file_jobs SET status='cancelled',error='项目已暂停',lease_token=lease_token+1,lease_until=NULL,updated_by='task-pause',updated_at=now() WHERE task_id=$1 AND status IN ('queued','running')`, id)
+			_, err = tx.ExecContext(ctx, `UPDATE fixed_file_jobs SET status='cancelled',error='项目已暂停',error_code='CANCELLED',lease_token=lease_token+1,lease_until=NULL,retry_after=NULL,updated_by='task-pause',updated_at=now() WHERE task_id=$1 AND status IN ('queued','running')`, id)
 		}
 		if err == nil && paused {
 			// Persist a pause fence even if resume happens before the next heartbeat.

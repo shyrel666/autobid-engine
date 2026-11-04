@@ -159,9 +159,11 @@ type Text struct {
 type Page struct {
 	Texts []Text
 	JPEG  []byte
-	Rules [][4]float64
-	Fills [][4]float64
-	Ops   string
+	// JPEGWidth / JPEGHeight 是 JPEG 的像素尺寸（灰度）；为 0 时沿用 100×140 的旧样本尺寸。
+	JPEGWidth, JPEGHeight int
+	Rules                 [][4]float64
+	Fills                 [][4]float64
+	Ops                   string
 }
 
 // GridRules 返回 xs × ys 网格的全部边线（描边线段）；skip 中的 [x0, y, x1] 表示省略 y 处 x0..x1 段的水平线（纵向合并）。
@@ -265,7 +267,11 @@ func BuildPDF(title string, pages ...Page) []byte {
 		var content strings.Builder
 		res := fmt.Sprintf("<< /Font << /F1 %d 0 R >> >>", fontObj)
 		if len(p.JPEG) > 0 {
-			img := add(stream("/Type /XObject /Subtype /Image /Width 100 /Height 140 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode", p.JPEG, false))
+			w, h := p.JPEGWidth, p.JPEGHeight
+			if w <= 0 || h <= 0 {
+				w, h = 100, 140
+			}
+			img := add(stream(fmt.Sprintf("/Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode", w, h), p.JPEG, false))
 			res = fmt.Sprintf("<< /XObject << /Im1 %d 0 R >> >>", img)
 			content.WriteString("q 595 0 0 842 0 0 cm /Im1 Do Q\n")
 		}

@@ -87,12 +87,12 @@ export interface Overview {
 }
 
 /** S2：Agent 订阅的后台作业（GET /api/tasks/{id}/agent-jobs）。作业状态（job_status）与业务状态（event.business_state）分开。 */
-export type AgentJobKind = 'tender_parse' | 'proposal_export'
+export type AgentJobKind = 'tender_parse' | 'proposal_export' | 'chart_render'
 
 export interface AgentJobEvent {
   id: number
   terminal_status: 'succeeded' | 'failed' | 'cancelled' | 'superseded'
-  /** candidate_pending_review / adopted / preview_only / failed / cancelled / completed */
+  /** candidate_pending_review / adopted / preview_only / chart_ready / chart_stale / failed / cancelled / superseded / completed */
   business_state: string
   payload: Record<string, unknown> | null
   state: 'pending' | 'delivered' | 'acknowledged' | 'expired'
@@ -1155,10 +1155,34 @@ export interface ProposalChart {
   chart_type: ChartType; title: string; spec: unknown; source_format: 'mermaid' | 'json'; source: string; source_hash: string
   render_status: ChartRenderStatus; render_format: '' | 'png' | 'native'; render_error: string
   artifact_hash: string; artifact_size: number; width_px: number; height_px: number; rendered_at?: string
+  /** HTTP 章节撰写随草稿给出的图表计划编号（S3）。 */
+  plan_code?: string
+  /** 最近一次渲染作业（S3）；图表的渲染结果由作业写回。 */
+  latest_job?: ChartJobBrief
   created_by: string; updated_by: string; created_at: string; updated_at: string
 }
 
 export interface ChartReq { section_id: number; chart_type: ChartType; title: string; spec: unknown }
+
+/** S3：图表渲染作业（server/chart_jobs.go）。作业状态与图表渲染状态分开；superseded 表示章节已更新、结果不挂到新修订。 */
+export type ChartJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'superseded'
+
+export interface ChartJobBrief {
+  id: number; status: ChartJobStatus; attempts: number; max_attempts: number; deadline_at: string
+  error_code?: string; error?: string; created_by: string; created_at: string; finished_at?: string
+}
+
+export interface ChartRenderJob extends ChartJobBrief {
+  task_id: number; chart_id: number; request_key: string; source_hash: string; executor: string
+  lease_until?: string; started_at?: string; updated_at: string
+}
+
+/** 新图表：section_id + expected_rev_no + 规格；重试已有图表：chart_id。request_key 同一次提交重发时复用。 */
+export type ChartJobReq =
+  | { request_key: string; section_id: number; expected_rev_no: number; chart_type: ChartType; title: string; spec: unknown }
+  | { request_key: string; chart_id: number; expected_rev_no?: number }
+
+export interface ChartJobResp { accepted?: boolean; replayed?: boolean; job: ChartRenderJob; chart: ProposalChart }
 
 export interface ExportStatus {
   office: boolean; office_engine?: 'wps' | 'word'; office_version?: string; office_reason?: string

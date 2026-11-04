@@ -176,6 +176,7 @@ func (a *API) Handler() http.Handler {
 	a.registerComplianceRoutes(mux)
 	// Phase 6B：章节图表（server/charts.go）与锁定版本导出（server/export.go）
 	a.registerChartRoutes(mux)
+	a.registerChartJobRoutes(mux)
 	a.registerRuntimeRoutes(mux)
 	a.registerAgentJobRoutes(mux)
 	a.registerExportRoutes(mux)

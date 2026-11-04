@@ -157,7 +157,11 @@ func TestAgentJobSubscribeBeforeAndAfterTerminal(t *testing.T) {
 		t.Fatalf("kind confusion accepted: %v", err)
 	}
 	if _, err := f.d.SubscribeAgentJob(WithIntentExecution(ctx, iid, epoch), DefaultTenant, f.task.ID,
-		SubscribeAgentJobInput{Job: JobRef{Kind: "chart_render", ID: job3}}); !errors.Is(err, ErrJobKindUnsupported) {
+		SubscribeAgentJobInput{Job: JobRef{Kind: JobKindChartRender, ID: job3}}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("chart_render kind confusion accepted: %v", err)
+	}
+	if _, err := f.d.SubscribeAgentJob(WithIntentExecution(ctx, iid, epoch), DefaultTenant, f.task.ID,
+		SubscribeAgentJobInput{Job: JobRef{Kind: "knowledge_parse", ID: job3}}); !errors.Is(err, ErrJobKindUnsupported) {
 		t.Fatalf("unsupported kind accepted: %v", err)
 	}
 	scoped := WithExecutionScope(WithIntentExecution(ctx, iid, epoch), &IntentMandate{AllowedJobKinds: []string{JobKindProposalExport}})

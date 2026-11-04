@@ -1,9 +1,9 @@
-// Phase 6B：章节写作视图中的「章节图表」卡片，以及「⑥ 导出成稿」视图（门禁明细、格式与模板、发起导出、任务进度、历史与下载）。
+// Phase 6B：章节写作视图中的「章节图表」卡片（S3 起经图表渲染作业异步生成、取消与重试），以及「⑥ 导出成稿」视图（门禁明细、格式与模板、发起导出、任务进度、历史与下载）。
 // 全部数据来自 server/export.go 的真实路由；门禁、快照固化与文档引擎（WPS / Word）/ mmdc 调用都在后端。
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
-  AlertTriangle, CheckCircle2, Download, FileDown, FileText, ImageOff, Link2, Lock, RefreshCw, ShieldAlert, Trash2, Upload, Wand2,
+  AlertTriangle, CheckCircle2, Download, FileDown, FileText, ImageOff, Link2, Loader2, Lock, RefreshCw, ShieldAlert, Trash2, Upload, Wand2, XCircle,
 } from 'lucide-react'
 import { api, errorText, ApiError, saveBlob } from '../../../api/client'
 import type {
@@ -11,6 +11,9 @@ import type {
 } from '../../../api/types'
 import { Badge, Button, Card, Empty, ErrorBanner, Field, IconButton, Input, Modal, Notice, Pre, Select, Spinner, TextArea, cx, useConfirm, useToast } from '../../../components/ui'
 import BlockerList from '../../task-workspace/BlockerList'
+import { useTaskWorkspace, useTick } from '../../task-workspace/TaskWorkspaceProvider'
+import { chartStateView, keyForInput, retryRequestKey, splitCharts } from './chartJobs'
+import type { InputKey } from './chartJobs'
 import { RuntimeNotice } from '../../runtime/RuntimeStatus'
 import type { Tone } from '../../../components/ui'
 import { useAsync, useInterval } from '../../../hooks/useAsync'
@@ -57,11 +60,6 @@ const chartExamples: Record<ChartType, { title: string; spec: unknown }> = {
   },
 }
 
-function renderTone(c: ProposalChart): Tone {
-  if (c.stale) return 'amber'
-  return c.render_status === 'rendered' ? 'green' : c.render_status === 'failed' ? 'red' : 'amber'
-}
-
 function ChartImage({ taskID, chart }: { taskID: number; chart: ProposalChart }) {
   const [url, setURL] = useState('')
   const [err, setErr] = useState('')
@@ -96,30 +94,66 @@ function ChartBody({ taskID, chart }: { taskID: number; chart: ProposalChart }) 
   return (
     <div className="rounded border border-dashed border-amber-300 bg-amber-50/40 p-2">
       <div className="mb-1 flex items-center gap-1 text-xs text-amber-800"><ImageOff className="size-3.5" />
-        未渲染：导出时插入下列 Mermaid 源码占位框{chart.render_error ? `（${chart.render_error}）` : ''}</div>
+        尚无渲染图：导出时插入下列 Mermaid 源码占位框</div>
       <Pre className="max-h-48 text-[11px]">{chart.source}</Pre>
     </div>
   )
 }
 
+// 图表渲染作业（S3）：生成 / 重新渲染只提交作业，渲染由服务器后台完成；有活跃作业时每 2 秒刷新，
+// SSE 的 chart-render 活动同样触发重读。取消后迟到的渲染结果由服务器围栏拒绝，页面以服务器状态为准。
 export function ChartsCard({ taskID, sectionID, currentRevNo, writable, tick }:
   { taskID: number; sectionID: number; currentRevNo: number; writable: boolean; tick: number }) {
   const toast = useToast()
   const confirm = useConfirm()
+  const { invalidate } = useTaskWorkspace()
+  const chartTick = useTick('charts')
   const [refresh, setRefresh] = useState(0)
-  const data = useAsync(() => api.charts(taskID, sectionID), [taskID, sectionID, tick, refresh, currentRevNo])
+  const data = useAsync(() => api.charts(taskID, sectionID), [taskID, sectionID, tick, chartTick, refresh, currentRevNo])
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState('')
+  const [showStale, setShowStale] = useState(false)
   const charts = data.data?.charts ?? []
   const renderer = data.data?.renderer
+  const { current, stale } = splitCharts(charts)
+  const anyActive = charts.some((c) => chartStateView(c).active)
+  useInterval(() => { void data.reload() }, anyActive ? 2000 : null)
 
   const act = async (key: string, fn: () => Promise<unknown>, ok: string) => {
     setBusy(key)
-    try { await fn(); toast('ok', ok); setRefresh((n) => n + 1) } catch (e) { toast('error', errorText(e)) } finally { setBusy('') }
+    try { await fn(); toast('ok', ok); invalidate('chart_changed') } catch (e) { toast('error', errorText(e)); setRefresh((n) => n + 1) } finally { setBusy('') }
+  }
+  const item = (c: ProposalChart) => {
+    const v = chartStateView(c)
+    const job = c.latest_job
+    return (
+      <div key={c.id} className={cx('space-y-2 rounded-md border p-3', c.stale ? 'border-amber-300 bg-amber-50/30' : 'border-slate-200')}>
+        <div className="flex flex-wrap items-center gap-1.5 text-sm">
+          <span className="font-medium text-slate-800">{c.title}</span>
+          <Badge>{chartTypeLabel[c.chart_type]}</Badge>
+          <Badge tone={v.tone}>{v.active && <Loader2 className="size-3 animate-spin" aria-hidden />}{v.label}</Badge>
+          {c.plan_code && <Badge tone="purple" title="章节撰写随草稿给出的图表计划">写作计划 {c.plan_code}</Badge>}
+          <span className="text-xs text-slate-400">rev {c.rev_no} · #{c.id}</span>
+        </div>
+        {v.note && <p className={cx('text-xs', v.tone === 'red' ? 'text-red-600' : c.stale || v.tone === 'amber' ? 'text-amber-700' : 'text-slate-500')}>{v.note}</p>}
+        <ChartBody taskID={taskID} chart={c} />
+        <div className="flex flex-wrap gap-1.5">
+          {v.active && job && <Button size="sm" icon={<XCircle className="size-3.5" />} loading={busy === `c${c.id}`}
+            onClick={() => act(`c${c.id}`, () => api.cancelChartJob(taskID, job.id), `已取消渲染作业 #${job.id}`)}>取消渲染</Button>}
+          {c.stale && <Button size="sm" icon={<Link2 className="size-3.5" />} loading={busy === `b${c.id}`} disabled={!writable || v.active}
+            onClick={() => act(`b${c.id}`, () => api.rebindChart(taskID, c.id), `已绑定到 rev ${currentRevNo}`)}>绑定当前修订</Button>}
+          {v.canRetry && <Button size="sm" icon={<RefreshCw className="size-3.5" />} loading={busy === `r${c.id}`}
+            onClick={() => act(`r${c.id}`, () => api.submitChartJob(taskID, { chart_id: c.id, expected_rev_no: c.rev_no, request_key: retryRequestKey(c) }),
+              '已提交重新渲染，后台完成后自动刷新')}>{c.render_status === 'rendered' ? '重新渲染' : '重试渲染'}</Button>}
+          <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} loading={busy === `d${c.id}`} disabled={v.active}
+            onClick={async () => { if (await confirm({ title: `删除图表《${c.title}》？`, message: '删除后不会进入导出；已固化在历史导出任务中的快照不受影响。', confirmLabel: '删除', danger: true })) void act(`d${c.id}`, () => api.deleteChart(taskID, c.id), '已删除') }}>删除</Button>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <Card title={<>章节图表 <span className="text-xs font-normal text-slate-400">绑定修订；章节产生新修订后旧图表失效、不进入导出</span></>}
+    <Card title={<>章节图表 <span className="text-xs font-normal text-slate-400">绑定修订；后台渲染，章节产生新修订后旧图表失效、不进入导出</span></>}
       actions={<>
         <IconButton label="刷新章节图表" onClick={() => setRefresh((n) => n + 1)}><RefreshCw className="size-4" /></IconButton>
         <Button size="sm" variant="primary" icon={<Wand2 className="size-3.5" />} disabled={!currentRevNo} onClick={() => setOpen(true)}>生成图表</Button>
@@ -127,69 +161,67 @@ export function ChartsCard({ taskID, sectionID, currentRevNo, writable, tick }:
       <ErrorBanner error={data.error} onRetry={data.reload} />
       {renderer && !renderer.renderer && (
         <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" />服务器没有 mermaid-cli（mmdc）：架构图 / 甘特图 / 组织架构图只保存源码（unrendered），导出时插入源码占位框；
-          安装 mmdc 并设置 AUTOBID_MMDC_PATH 后可点「重新渲染」。设备选型表不受影响（导出为原生 Word 表格）。
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />服务器没有可用的 mermaid-cli（mmdc）：架构图 / 甘特图 / 组织架构图暂不能提交渲染，已有未渲染图表导出时插入源码占位框；
+          安装 mmdc 并设置 AUTOBID_MMDC_PATH 后可「重试渲染」。设备选型表不受影响（导出为原生 Word 表格）。
         </div>
       )}
       {!currentRevNo && <p className="text-xs text-slate-500">章节尚无正文修订，先保存正文再生成图表。</p>}
-      {data.loading && !data.data ? <Spinner /> : charts.length === 0 ? <Empty>本章节暂无图表</Empty> : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {charts.map((c) => (
-            <div key={c.id} className={cx('space-y-2 rounded-md border p-3', c.stale ? 'border-amber-300 bg-amber-50/30' : 'border-slate-200')}>
-              <div className="flex flex-wrap items-center gap-1.5 text-sm">
-                <span className="font-medium text-slate-800">{c.title}</span>
-                <Badge>{chartTypeLabel[c.chart_type]}</Badge>
-                <Badge tone={renderTone(c)}>{c.stale ? '已过期' : chartRenderLabel[c.render_status]}</Badge>
-                <span className="text-xs text-slate-400">rev {c.rev_no} · #{c.id}</span>
-              </div>
-              {c.stale && <p className="text-xs text-amber-700">{c.stale_reason}；确认图表仍适用于新正文后「绑定当前修订」，否则重新生成。</p>}
-              <ChartBody taskID={taskID} chart={c} />
-              <div className="flex flex-wrap gap-1.5">
-                {c.stale && <Button size="sm" icon={<Link2 className="size-3.5" />} loading={busy === `b${c.id}`} disabled={!writable}
-                  onClick={() => act(`b${c.id}`, () => api.rebindChart(taskID, c.id), `已绑定到 rev ${currentRevNo}`)}>绑定当前修订</Button>}
-                {c.source_format === 'mermaid' && <Button size="sm" icon={<RefreshCw className="size-3.5" />} loading={busy === `r${c.id}`}
-                  onClick={() => act(`r${c.id}`, () => api.renderChart(taskID, c.id), '已重新渲染')}>重新渲染</Button>}
-                <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} loading={busy === `d${c.id}`}
-                  onClick={async () => { if (await confirm({ title: `删除图表《${c.title}》？`, message: '删除后不会进入导出；已固化在历史导出任务中的快照不受影响。', confirmLabel: '删除', danger: true })) void act(`d${c.id}`, () => api.deleteChart(taskID, c.id), '已删除') }}>删除</Button>
-              </div>
+      {data.loading && !data.data ? <Spinner /> : current.length === 0 && stale.length === 0 ? <Empty>本章节暂无图表</Empty> : (
+        <div className="space-y-3">
+          {current.length === 0 ? <Empty>当前修订（rev {currentRevNo}）暂无图表</Empty> : <div className="grid gap-3 md:grid-cols-2">{current.map(item)}</div>}
+          {stale.length > 0 && (
+            <div className="rounded-md border border-amber-200">
+              <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs text-amber-800" onClick={() => setShowStale((s) => !s)}>
+                <AlertTriangle className="size-3.5" />旧修订图表 {stale.length} 张（不进入导出）{showStale ? '，点击收起' : '，点击展开'}
+              </button>
+              {showStale && <div className="grid gap-3 border-t border-amber-200 p-3 md:grid-cols-2">{stale.map(item)}</div>}
             </div>
-          ))}
+          )}
         </div>
       )}
-      {open && <ChartModal taskID={taskID} sectionID={sectionID} onClose={() => setOpen(false)} onDone={() => { setOpen(false); setRefresh((n) => n + 1) }} />}
+      {open && <ChartModal taskID={taskID} sectionID={sectionID} revNo={currentRevNo} onClose={() => setOpen(false)}
+        onDone={() => { setOpen(false); invalidate('chart_changed') }} />}
     </Card>
   )
 }
 
-function ChartModal({ taskID, sectionID, onClose, onDone }: { taskID: number; sectionID: number; onClose: () => void; onDone: () => void }) {
+function ChartModal({ taskID, sectionID, revNo, onClose, onDone }: { taskID: number; sectionID: number; revNo: number; onClose: () => void; onDone: () => void }) {
   const toast = useToast()
   const [type, setType] = useState<ChartType>('architecture')
   const [title, setTitle] = useState(chartExamples.architecture.title)
   const [spec, setSpec] = useState(JSON.stringify(chartExamples.architecture.spec, null, 2))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // 同一输入的重复提交（含响应丢失后重发）复用请求键；改了类型、题注或规格即换新键。
+  const key = useRef<InputKey>(undefined)
   const pick = (t: ChartType) => { setType(t); setTitle(chartExamples[t].title); setSpec(JSON.stringify(chartExamples[t].spec, null, 2)); setErr('') }
   const submit = async () => {
     let parsed: unknown
     try { parsed = JSON.parse(spec) } catch (e) { setErr(`规格不是合法 JSON：${(e as Error).message}`); return }
+    key.current = keyForInput(key.current, JSON.stringify([sectionID, revNo, type, title.trim(), parsed]),
+      () => `ui-chart-${sectionID}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
     setBusy(true); setErr('')
     try {
-      const c = await api.generateChart(taskID, { section_id: sectionID, chart_type: type, title, spec: parsed })
-      toast(c.render_status === 'rendered' ? 'ok' : 'info', c.render_status === 'rendered' ? '图表已生成并渲染' : `图表已保存（${chartRenderLabel[c.render_status]}）`)
+      const r = await api.submitChartJob(taskID, { request_key: key.current.key, section_id: sectionID, expected_rev_no: revNo, chart_type: type, title, spec: parsed })
+      toast(r.replayed ? 'info' : 'ok', r.replayed ? `该请求已提交过，返回原渲染作业 #${r.job.id}` : `已提交渲染作业 #${r.job.id}，后台完成后自动刷新`)
       onDone()
-    } catch (e) { setErr(errorText(e)) } finally { setBusy(false) }
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'runtime_unavailable') setErr(`服务器没有可用的 mermaid-cli，无法渲染该类型图表（设备选型表不受影响）：${e.message}`)
+      else if (e instanceof ApiError && e.code === 'stale_revision') setErr('章节已产生新修订，请关闭后刷新章节再生成图表。')
+      else setErr(errorText(e))
+    } finally { setBusy(false) }
   }
   return (
-    <Modal open wide title="生成章节图表" onClose={onClose}
+    <Modal open wide title={`生成章节图表（绑定 rev ${revNo}）`} onClose={onClose}
       dirty={title !== chartExamples[type].title || spec !== JSON.stringify(chartExamples[type].spec, null, 2)}
-      footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={submit}>生成</Button></>}>
+      footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={submit}>提交渲染</Button></>}>
       <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="图表类型"><Select value={type} onChange={(e) => pick(e.target.value as ChartType)}>
             {(Object.keys(chartExamples) as ChartType[]).map((k) => <option key={k} value={k}>{chartTypeLabel[k]}</option>)}</Select></Field>
           <Field label="题注"><Input value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
         </div>
-        <Field label="结构化规格（JSON）" hint="Mermaid 源码由服务器按规格生成并校验；设备型号、数量须与已核验证据一致">
+        <Field label="结构化规格（JSON）" hint="Mermaid 源码由服务器按规格生成并校验，渲染在后台完成；设备型号、数量须与已核验证据一致">
           <TextArea rows={14} className="font-mono text-xs" value={spec} onChange={(e) => setSpec(e.target.value)} />
         </Field>
         {err && <p className="text-sm text-red-600">{err}</p>}

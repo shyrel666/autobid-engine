@@ -74,7 +74,7 @@ func (k *Kit) ResidentTools() []tool.CoreTool {
 func (k *Kit) DeferredTools() []tool.CoreTool {
 	return append([]tool.CoreTool{k.queryCredentialsTool(), k.simulateScoringTool(), k.verifyCommercialTool(),
 		k.kbSearchProposalsTool(), k.kbSearchProductsTool(), k.kbReadChunkTool(), k.chartGenerateTool()},
-		append(append(k.proposalTools(), k.reviewTools()...), k.retrievalTools()...)...)
+		append(append(append(k.proposalTools(), k.reviewTools()...), k.retrievalTools()...), k.ChartJobTools()...)...)
 }
 
 // SectionWriterTools 返回单次技术标章节撰写（HTTP 派发）可用的辅助工具集（不含 section_write_draft，写回由派发门禁统一执行）。

@@ -92,6 +92,8 @@ npm ci --prefix tools/mermaid-cli --no-audit --no-fund
 | `AUTOBID_MMDC_BROWSER` | puppeteer 使用的浏览器可执行文件 |
 | `AUTOBID_MMDC_TIMEOUT_SECONDS` | 单次渲染超时，默认 90 秒 |
 | `AUTOBID_MMDC_CONCURRENCY` | 并发上限，默认 2，最大 8 |
+| `AUTOBID_CHART_WORKERS` | 图表渲染作业（`chart_render_jobs`，S3）的执行者数，默认 2；实际渲染并发仍受上一项限制 |
+| `AUTOBID_CHART_JOB_DEADLINE_SECONDS` | 图表渲染作业从首次提交起的截止时长，默认 600 秒；回收、暂停恢复与重试都不延长 |
 
 `start.bat` 在未设置时会自动填上两项默认值：
 

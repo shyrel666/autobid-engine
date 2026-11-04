@@ -121,6 +121,14 @@ func (s *ToolSet) workerTools() []tool.CoreTool {
 // schema helpers
 // ---------------------------------------------------------------------------
 
+func jobKinds(desc string) map[string]any {
+	kinds := make([]any, 0, len(db.AgentJobKinds()))
+	for _, k := range db.AgentJobKinds() {
+		kinds = append(kinds, k)
+	}
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": kinds}, "description": desc}
+}
+
 func obj(props map[string]any, required ...string) map[string]any {
 	m := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
@@ -300,6 +308,8 @@ func (s *ToolSet) addIntentTool() tool.CoreTool {
 				"max_tool_calls":          integer("hard cap on tool calls before forcing writeback"),
 				"forbidden_tools":         map[string]any{"type": "array", "items": str("tool name")},
 				"require_writeback":       map[string]any{"type": "boolean", "description": "require at least one graph/proposal writeback before finishing"},
+				"allowed_job_kinds":       jobKinds("background job kinds the worker may submit, query or cancel (narrows host capability)"),
+				"required_job_kinds":      jobKinds("job kinds that must each have a successful, still-valid job of this intent before it may finish (e.g. chart_render for chart work)"),
 			}),
 		}, "summary"),
 	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {

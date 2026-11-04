@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,14 +24,16 @@ type SectionWriteJob struct {
 	DeadlineAt  time.Time `json:"deadline_at"`
 	Error       string    `json:"error,omitempty"`
 	ResultRevNo *int      `json:"result_rev_no,omitempty"`
-	CreatedBy   string    `json:"created_by"`
+	// ChartPlans 是草稿随附的图表计划（S3）；写回为候选稿时只随作业留存，不登记正式图表。
+	ChartPlans json.RawMessage `json:"chart_plans"`
+	CreatedBy  string          `json:"created_by"`
 }
 
-const sectionJobCols = `id,tenant_id,task_id,section_id,section_code,base_rev_no,outline_version,request_key,instruction,status,attempts,max_attempts,deadline_at,lease_token,COALESCE(lease_until,'epoch'::timestamptz),error,result_rev_no,created_by`
+const sectionJobCols = `id,tenant_id,task_id,section_id,section_code,base_rev_no,outline_version,request_key,instruction,status,attempts,max_attempts,deadline_at,lease_token,COALESCE(lease_until,'epoch'::timestamptz),error,result_rev_no,chart_plans,created_by`
 
 func scanSectionJob(r rowScanner) (*SectionWriteJob, error) {
 	j := new(SectionWriteJob)
-	err := r.Scan(&j.ID, &j.TenantID, &j.TaskID, &j.SectionID, &j.SectionCode, &j.BaseRevNo, &j.BasedOnOutlineVersion, &j.RequestKey, &j.Instruction, &j.Status, &j.Attempts, &j.MaxAttempts, &j.DeadlineAt, &j.LeaseToken, &j.LeaseUntil, &j.Error, &j.ResultRevNo, &j.CreatedBy)
+	err := r.Scan(&j.ID, &j.TenantID, &j.TaskID, &j.SectionID, &j.SectionCode, &j.BaseRevNo, &j.BasedOnOutlineVersion, &j.RequestKey, &j.Instruction, &j.Status, &j.Attempts, &j.MaxAttempts, &j.DeadlineAt, &j.LeaseToken, &j.LeaseUntil, &j.Error, &j.ResultRevNo, &j.ChartPlans, &j.CreatedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -203,10 +206,34 @@ func (d *DB) HeartbeatSectionWriteJob(ctx context.Context, j *SectionWriteJob) e
 	})
 }
 
+// ChartPlanBatch carries the chart plans returned with a draft (S3). The
+// service validates the specs and builds deterministic sources beforehand.
+type ChartPlanBatch struct {
+	Plans    []ChartPlan
+	Deadline time.Duration
+}
+
 // FinishSectionWriteJob commits the fenced job result and revision atomically.
-func (d *DB) FinishSectionWriteJob(ctx context.Context, j *SectionWriteJob, in SaveRevisionInput) (*SaveRevisionResult, error) {
+// When the revision becomes current, its chart plans and their render jobs are
+// registered in the same transaction; a candidate keeps the plans on the job.
+func (d *DB) FinishSectionWriteJob(ctx context.Context, j *SectionWriteJob, in SaveRevisionInput, charts *ChartPlanBatch) (*SaveRevisionResult, error) {
+	var plans []ChartPlan
+	var deadline time.Duration
+	if charts != nil {
+		plans, deadline = charts.Plans, charts.Deadline
+	}
+	if err := ValidateChartPlans(plans); err != nil {
+		return nil, err
+	}
+	planJSON, err := json.Marshal(plans)
+	if err != nil {
+		return nil, err
+	}
+	if plans == nil {
+		planJSON = []byte("[]")
+	}
 	var out *SaveRevisionResult
-	err := d.Transaction(ctx, func(tx *DB) error {
+	err = d.Transaction(ctx, func(tx *DB) error {
 		if err := tx.guardSectionJob(ctx, j); err != nil {
 			return err
 		}
@@ -234,8 +261,10 @@ func (d *DB) FinishSectionWriteJob(ctx context.Context, j *SectionWriteJob, in S
 		status := "awaiting_review"
 		if out.Outcome != SaveApplied {
 			status = "candidate"
+		} else if err := insertChartPlansTx(ctx, tx, j.TenantID, j, out.Revision, plans, deadline, "ai:"+j.CreatedBy); err != nil {
+			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE section_write_jobs SET status=$2,result_rev_no=$3,error=$4,lease_until=NULL,updated_at=now() WHERE id=$1`, j.ID, status, out.Revision.RevNo, out.Reason)
+		_, err = tx.ExecContext(ctx, `UPDATE section_write_jobs SET status=$2,result_rev_no=$3,error=$4,chart_plans=$5::jsonb,lease_until=NULL,updated_at=now() WHERE id=$1`, j.ID, status, out.Revision.RevNo, out.Reason, string(planJSON))
 		return err
 	})
 	return out, err

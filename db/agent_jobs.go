@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// 作业引用 kind。只列出已实现同事务校验的类型；chart_render 随 S3 加入。
+// 作业引用 kind。只列出已实现同事务校验的类型（chart_render 见 chart_jobs.go）。
 const (
 	JobKindTenderParse    = "tender_parse"
 	JobKindProposalExport = "proposal_export"
@@ -29,10 +29,13 @@ const (
 var agentJobTables = map[string]string{
 	JobKindTenderParse:    "fixed_file_jobs",
 	JobKindProposalExport: "export_jobs",
+	JobKindChartRender:    "chart_render_jobs",
 }
 
 // AgentJobKinds 返回已支持的作业类型（稳定顺序）。
-func AgentJobKinds() []string { return []string{JobKindTenderParse, JobKindProposalExport} }
+func AgentJobKinds() []string {
+	return []string{JobKindTenderParse, JobKindProposalExport, JobKindChartRender}
+}
 
 // ValidAgentJobKind 报告 kind 是否已实现订阅校验。
 func ValidAgentJobKind(kind string) bool { _, ok := agentJobTables[kind]; return ok }
@@ -93,6 +96,12 @@ type SubscribeAgentJobInput struct {
 func intentExecutionFrom(ctx context.Context) (intentExecution, bool) {
 	p, ok := ctx.Value(intentExecutionKey{}).(intentExecution)
 	return p, ok && p.ID > 0
+}
+
+// IntentExecutionBound 报告 ctx 是否带有宿主注入的 Intent 执行身份（Tool 提交据此强制订阅当前 Intent）。
+func IntentExecutionBound(ctx context.Context) bool {
+	_, ok := intentExecutionFrom(ctx)
+	return ok
 }
 
 // LockSubmittingIntent 锁定宿主绑定且持有活租约的 Intent（任务未暂停、未终态）。
@@ -187,7 +196,9 @@ func (d *DB) SubscribeAgentJob(ctx context.Context, tenant string, taskID int64,
 	return subs[0], nil
 }
 
-func isTerminalJobStatus(s string) bool { return s == "succeeded" || s == "failed" || s == "cancelled" }
+func isTerminalJobStatus(s string) bool {
+	return s == "succeeded" || s == "failed" || s == "cancelled" || s == ChartJobSuperseded
+}
 
 // AgentJobFilter 过滤订阅列表。宿主绑定 Intent 的执行只能读本 Intent 的订阅（Unscoped 仅供存储层内部使用）。
 type AgentJobFilter struct {
@@ -201,13 +212,15 @@ type AgentJobFilter struct {
 
 const agentJobCols = `s.id, s.task_id, s.intent_id, s.created_intent_epoch, s.job_kind, s.job_id, s.target_ref, s.expected_version, s.required,
 	s.state, s.created_by, s.created_at, s.updated_at,
-	COALESCE(f.status, x.status, ''), COALESCE(f.attempts, x.attempts, 0), COALESCE(f.max_attempts, x.max_attempts, 0), f.deadline_at,
-	COALESCE(f.error, x.error, ''),
+	COALESCE(f.status, x.status, c.status, ''), COALESCE(f.attempts, x.attempts, c.attempts, 0),
+	COALESCE(f.max_attempts, x.max_attempts, c.max_attempts, 0), COALESCE(f.deadline_at, c.deadline_at),
+	COALESCE(f.error, x.error, c.error, ''),
 	e.id, e.terminal_status, e.business_state, e.payload, e.state, e.delivery_epoch, e.delivered_at, e.acknowledged_at, e.created_at`
 
 const agentJobFrom = ` FROM agent_job_subscriptions s
 	LEFT JOIN fixed_file_jobs f ON s.job_kind = 'tender_parse' AND f.tenant_id = s.tenant_id AND f.task_id = s.task_id AND f.id = s.job_id
 	LEFT JOIN export_jobs x ON s.job_kind = 'proposal_export' AND x.tenant_id = s.tenant_id AND x.task_id = s.task_id AND x.id = s.job_id
+	LEFT JOIN chart_render_jobs c ON s.job_kind = 'chart_render' AND c.tenant_id = s.tenant_id AND c.task_id = s.task_id AND c.id = s.job_id
 	LEFT JOIN agent_job_events e ON e.subscription_id = s.id`
 
 func scanAgentJob(r rowScanner) (*AgentJobSubscription, error) {
@@ -303,18 +316,11 @@ func (d *DB) GetAgentJobSnapshot(ctx context.Context, tenant string, taskID int6
 	if err := CheckJobKindScope(ctx, ref.Kind); err != nil {
 		return nil, err
 	}
-	if p, ok := intentExecutionFrom(ctx); ok && restrictsObjects(ctx) {
-		var owned bool
-		if err := d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_job_subscriptions WHERE tenant_id = $1 AND task_id = $2 AND intent_id = $3 AND job_kind = $4 AND job_id = $5)`,
-			tenantOr(tenant), taskID, p.ID, ref.Kind, ref.ID).Scan(&owned); err != nil {
-			return nil, err
-		}
-		if !owned {
-			return nil, fmt.Errorf("execution scope: %s #%d is not subscribed by the current intent", ref.Kind, ref.ID)
-		}
+	if err := d.checkJobOwnedByIntent(ctx, tenant, taskID, ref); err != nil {
+		return nil, err
 	}
 	deadline := "NULL::timestamptz"
-	if ref.Kind == JobKindTenderParse {
+	if ref.Kind == JobKindTenderParse || ref.Kind == JobKindChartRender {
 		deadline = "deadline_at"
 	}
 	snap := &AgentJobSnapshot{Job: ref}
@@ -582,7 +588,8 @@ func (d *DB) checkJobDeliverables(ctx context.Context, taskID int64, n *Node, m 
 	return nil
 }
 
-// agentJobResultValid 校验成功作业的结果版本仍有效：解析候选就绪且未被新解析修订取代（或已采用）；导出产物已登记。
+// agentJobResultValid 校验成功作业的结果版本仍有效：解析候选就绪且未被新解析修订取代（或已采用）；导出产物已登记；
+// 图表与作业源码一致、绑定章节当前修订且有真实产物（PNG 已登记哈希，或设备表原生表格）。
 // 严格最终稿策略（S4）落地前，导出结果一律按 preview_only 对待。
 func (d *DB) agentJobResultValid(ctx context.Context, taskID int64, ref JobRef) (bool, error) {
 	var ok bool
@@ -596,6 +603,13 @@ func (d *DB) agentJobResultValid(ctx context.Context, taskID int64, ref JobRef) 
 			ref.ID, taskID).Scan(&ok)
 	case JobKindProposalExport:
 		err = d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM export_jobs WHERE id = $1 AND task_id = $2 AND status = 'succeeded' AND artifact_hash <> '')`,
+			ref.ID, taskID).Scan(&ok)
+	case JobKindChartRender:
+		err = d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM chart_render_jobs j
+			JOIN proposal_charts c ON c.tenant_id = j.tenant_id AND c.task_id = j.task_id AND c.id = j.chart_id
+			JOIN proposal_sections s ON s.tenant_id = c.tenant_id AND s.id = c.section_id
+			WHERE j.id = $1 AND j.task_id = $2 AND j.status = 'succeeded' AND c.source_hash = j.source_hash AND c.rev_no = s.current_rev_no
+			  AND c.render_status = 'rendered' AND (c.render_format = 'native' OR (c.render_format = 'png' AND c.artifact_hash <> '')))`,
 			ref.ID, taskID).Scan(&ok)
 	default:
 		return false, fmt.Errorf("%w: %q", ErrJobKindUnsupported, ref.Kind)

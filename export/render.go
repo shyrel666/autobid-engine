@@ -61,10 +61,15 @@ func (m *MMDC) Name() string { return "mmdc" }
 // Version 是 `mmdc --version` 的输出（探测时读取）。
 func (m *MMDC) Version() string { return m.version }
 
+// MMDCTimeout 是单次 mmdc 渲染的上限（AUTOBID_MMDC_TIMEOUT_SECONDS，默认 90 秒）。
+func MMDCTimeout() time.Duration {
+	return time.Duration(envInt("AUTOBID_MMDC_TIMEOUT_SECONDS", 90)) * time.Second
+}
+
 // DetectMMDC 依次查找 AUTOBID_MMDC_PATH、PATH 中的 mmdc，并读取版本；都没有时返回 ErrRendererMissing（附查找说明）。
 // AUTOBID_MMDC_BROWSER 指定浏览器，AUTOBID_MMDC_TIMEOUT_SECONDS（默认 90）与 AUTOBID_MMDC_CONCURRENCY（默认 2，上限 8）限制执行。
 func DetectMMDC() (*MMDC, error) {
-	m := &MMDC{Timeout: time.Duration(envInt("AUTOBID_MMDC_TIMEOUT_SECONDS", 90)) * time.Second, Width: 1600,
+	m := &MMDC{Timeout: MMDCTimeout(), Width: 1600,
 		Concurrency: min(envInt("AUTOBID_MMDC_CONCURRENCY", 2), 8), Browser: strings.TrimSpace(os.Getenv("AUTOBID_MMDC_BROWSER"))}
 	if p := strings.TrimSpace(os.Getenv("AUTOBID_MMDC_PATH")); p != "" {
 		if st, err := os.Stat(p); err != nil || st.IsDir() {

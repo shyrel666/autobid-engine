@@ -23,7 +23,12 @@
   - 引擎接线：`runIntent` 投递事件并只确认已保存进 transcript 的事件；Watchdog Stop 与 RequireWriteback 的“持久化订阅释放本轮槽位”分支；等待态不通知 Planner 已结束。
   - 公共只读工具 `agent_job_status`（Planner `ExtraTools` 与 Worker 均装配）、`GET /api/tasks/{id}/agent-jobs`，执行页“等待后台处理”与后台作业卡片。
   - S2 只交付框架，没有注册任何提交类工具；测试作业直接写固定解析 / 导出队列表来驱动框架。
-- **尚未实施**：S3~S7。代码与 schema 中仍不存在本文其余拟新增的表（`chart_render_jobs`、`export_requests`）、提交类工具、路由与字段，也没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
+- **S3 已 E 收口（2026-11-04，本机验证，见第 9 节与 12.7）**：
+  - 持久化图表渲染作业 `chart_render_jobs`（复合外键 → `proposal_charts`，请求幂等、执行版本与期限首次提交固定、终态不可改写），`chart_render` 加入订阅类型，新增 `superseded` 终态。
+  - 存储与执行：`db/chart_jobs.go`（提交 / 领取 / 心跳 / 写回 / 取消，暂停退回 queued 并推进令牌）、`export/chart_jobs.go`（服务层校验与规范化请求哈希、`ChartRunner` 事务外渲染并按作业 + 令牌隔离产物）。
+  - 两条写作路径：Worker 经新技能 `diagram-generation`（`chart_render_submit` / `chart_render_status` / `chart_render_cancel`）提交并订阅；HTTP 章节 Writer 草稿的 `charts` 计划与修订在同一事务登记。
+  - HTTP `/api/tasks/{id}/chart-jobs*`；前端章节图表卡片改为异步生成、取消、重试与旧修订分组。
+- **尚未实施**：S4~S7。代码与 schema 中仍不存在本文其余拟新增的表（`export_requests`）、导出与解析的提交类工具、路由与字段，也没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
 
 适用项目：AutoBid Engine。本文中的 Skill 指项目提供给 Agent 的业务技能（`bidtools.Skills()`），不是 Codex 桌面插件。
 
@@ -68,7 +73,7 @@
 | Skills / Tools | `bidtools/skills.go` 有 **6** 个 Skill；`agent/worker.go` 经 `Skill` 解锁、`SearchExtraTools` 获取 Schema；`server/task_llm.go:LLMService.Resolve` 装配 Worker；Planner 尚未挂载业务工具 | 新增 3 个 Skill，复用 knowledge-reuse；Planner 只读注入、宿主授权 |
 | 文档 | `filework.Processor.process` 首次导入直接 PersistTender；reparse 将完整 PreparedTender 存入 FileProcessingRecord.Payload，Preview 仅为差异摘要；Adopt 目前只支持 reparse；固定队列已有幂等/租约/取消 | Agent 首次导入候选模式、人工采用 import 分支、解析后端与结果分页 |
 | 检索 | `retrieval/providers.go`、版本化索引、核验与 knowledge-reuse 已有 | 健康探测、版本回显与可选模型部署，不重写协议 |
-| 图表 | `export.BuildChartSource` 支持 architecture/gantt/org/equipment_table；`export.Renderer.RenderPNG` 与 `export.MMDC`；proposal_charts 已有 source_hash、pending、修订绑定、产物路径/哈希 | 期望修订围栏、持久化渲染作业、幂等取消、结构化图表计划 |
+| 图表 | `export.BuildChartSource` 支持 architecture/gantt/org/equipment_table；`export.Renderer.RenderPNG` 与 `export.MMDC`；proposal_charts 已有 source_hash、pending、修订绑定、产物路径/哈希 | 期望修订围栏、持久化渲染作业、幂等取消、结构化图表计划（**S3 已实现**：`db/chart_jobs.go`、`export/chart_jobs.go`，见 12.7） |
 | 导出 | `db.CreateExportJobs` 冻结快照；**CompleteExportJob、FailExportJob、Heartbeat 已检查 lease_token + running**；export/runner.go 异步执行 | 全生命周期请求幂等、cancelled、严格最终稿策略与完成通知；复用已有围栏，没有 FinishExportJob 这个待修补接口 |
 | 导出引擎 | **2026-11-03 已实现**：`export.Service.Office` 是文档引擎接口（`export/office.go`，含按 `AUTOBID_OFFICE_ENGINE` 探测与启动自检），实现为 WPS/Word COM 自动化（`office_windows.go` + `office_com.ps1`）；`Execute` 在引擎为 nil 时 PDF 永久失败，DOCX 只写 updateFields 占位；`/api/export/status` 返回 `office_engine` / `office_version` | 作业结果记录引擎名与版本（需 `export_jobs` 新列，S4）；多作业排队已在 S1 验证（引擎固定串行） |
 | HTTP 章节 Writer | `server/proposal.go:llmSectionWriter.WriteSection` 已调用 harness.Run（最多 6 轮工具调用，再解析 JSON）；SectionWriterTools 包含证据绑定，非纯只读；`server/section_jobs.go:executeSectionJob` 调 FinishSectionWriteJob 原子保存修订/结果 | 增加图表计划，并在修订提交事务内登记渲染作业；不改回单次 LLM 调用 |
@@ -199,11 +204,18 @@ import 还需现有 ProcessInput 的 TenderNo/LotNo/Title/DocRole/PublishedAt �
 
 S2 落地说明（2026-11-03）：
 
-- `agent_job_subscriptions.job_kind` 的 CHECK（`ck_agent_job_subscriptions_kind`）目前只含已实现校验的 `tender_parse`、`proposal_export`；S3 先实现 `chart_render_jobs` 的校验，再按 5.1 的 DROP/ADD 写法扩展该约束。
+- `agent_job_subscriptions.job_kind` 的 CHECK（`ck_agent_job_subscriptions_kind`）在 S2 只含已实现校验的 `tender_parse`、`proposal_export`；S3 已先实现 `chart_render_jobs` 的同事务校验，再按 5.1 的 DROP/ADD 写法扩展为含 `chart_render`。
 - `expected_version` 为可空 BIGINT（解析为目标 parse_revision，图表为 rev_no，导出为大纲版本）。
 - `agent_job_events` 另带 `tenant_id`，并以复合 FK `(tenant_id, subscription_id)` 关联订阅，归属仍只经订阅读取。
 - 终态发布用触发器 `agent_job_terminal` 挂在作业表 `AFTER UPDATE OF status` 上，与终态写入同一事务；终态内容由 SQL 函数 `agent_job_outcome` 统一给出，“先完成后订阅”的路径复用同一函数。
 - 触发器 `return_terminal_intent_inputs` 已改为监听 `state, blocked_reason` 并豁免 blocked+waiting_job。
+
+S3 落地说明（2026-11-04）：
+
+- `chart_render_jobs` 按上表建立：`UNIQUE(tenant_id,task_id,request_key)`、活跃部分唯一索引 `(tenant_id,chart_id)`、复合 FK `(tenant_id,task_id,chart_id)` → `proposal_charts` `ON DELETE CASCADE`；另有 `executor`（首次提交固定的执行版本，如 `mmdc 11.17.0`、`native`）、`lease_owner`、`started_at/finished_at`。
+- 触发器 `chart_render_jobs_immutable` 拒绝改写冻结输入（请求键 / 哈希 / 源码哈希 / 执行版本 / 期限 / 尝试预算 / 创建人）以及终态之后的状态变化；`agent_job_terminal('chart_render')` 挂在 `AFTER UPDATE OF status` 上，终态集合加入 `superseded`。
+- `agent_job_outcome('chart_render')` 的业务状态：成功且图表仍与作业源码一致、绑定章节当前修订并已渲染为 `chart_ready`，否则 `chart_stale`；载荷含图表、修订、尺寸、产物哈希与错误码。
+- `proposal_charts.plan_code`（每修订部分唯一）与 `section_write_jobs.chart_plans` 为 `ADD COLUMN IF NOT EXISTS`；HTTP Writer 计划的请求键为服务端保留前缀 `sys:section-job:<作业>:rev:<修订>:chart:<编号>`，客户端请求键不得以 `sys:` 开头。
 
 迁移验证覆盖新库、旧库升级、再次执行、旧 CHECK 替换及历史查询；原稿错误 FK 与不完整索引已改为上述约束，不把未运行的 DDL 当验收。
 
@@ -368,7 +380,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 | --- | --- | --- |
 | S1 运行能力 | `features/task-workspace/TaskHeader.tsx` 及解析/导出入口展示相关能力状态，必要时复用能力提示组件；导出页 `features/proposal/export/ExportParts.tsx` 已显示文档引擎（WPS/Word）版本（2026-11-03） | 依赖未配置、自检失败、检查中分别可见；显示影响和下一步，不泄漏宿主路径/密钥；已有有效图表时不因渲染器离线误禁导出 |
 | S2 作业等待 | `features/execution/ExecutionPage.tsx`、`features/task-workspace/TaskWorkspaceProvider.tsx`、`resources.ts` 接入等待原因与作业事件；按当前用户权限读取业务作业 | “等待后台处理”与执行失败分开；刷新/断线重连恢复状态；Agent 提交的作业同样可见，不只显示页面提交的作业 |
-| S3 图表 | `features/proposal/export/ExportParts.tsx` 的 ChartsCard 与 `features/proposal/writing/SectionWorkspace.tsx` 接入异步生成、取消、失败重试和修订标记 | 两条写作路径产图自动刷新；旧修订图不显示为当前图；取消后迟到响应不恢复成功；重试按新请求语义提交 |
+| S3 图表（2026-11-04 已交付，见 12.7） | `features/proposal/export/ExportParts.tsx` 的 ChartsCard 与 `features/proposal/writing/SectionWorkspace.tsx` 接入异步生成、取消、失败重试和修订标记 | 两条写作路径产图自动刷新；旧修订图不显示为当前图；取消后迟到响应不恢复成功；重试按新请求语义提交 |
 | S4 导出 | `features/proposal/export/ExportPage.tsx`、`ExportParts.tsx` 接入预检阻断、请求组、各格式状态、取消与下载 | 明确区分预览/最终稿；多格式部分失败逐项展示；提交响应丢失后同键重发不重复生成；权限不足/版本冲突有明确提示 |
 | S5a 解析 | `features/proposal/documents/FixedWorkflow.tsx` 接入解析能力、候选模式、分页对照、人工采用及作业控制 | 区分处理中、候选待确认、已采用、失败/取消；不将 OCR 完成标成证据已核验；采用后刷新文档、要求、大纲及导出门禁 |
 | S5b/S5c 条件扩展 | `pages/KnowledgePage.tsx` 及企业证据对应页面随分域协议一起设计，页面落点在该阶段确认 | 知识候选、索引生效与企业证据核验分开；未实现来源类型不出现在可提交选项中 |
@@ -385,7 +397,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 
 ## 9. 分阶段实施与退出标准
 
-S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2 外均未验收。
+S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2、S3 外均未验收。
 
 各阶段的工作与退出标准同时包含第 8.1 节对应的前端交付及第 8.2 节联调要求，按“后端服务 → API/类型 → 页面接入 → 联调验收”闭环推进。
 
@@ -394,7 +406,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 | S0 文档核对（已完成） | 校正接口、契约、事务与不确定项 | 第 2~5、12 节作为编码输入，不代替迁移实测 |
 | [x] E S1 运行包、文档引擎与自检（2026-11-03） | WPS/Word 文档引擎、自检校准与 ★ 字体（6.1）；本机运行依赖登记（`docs/LOCAL_RUNTIME.md`）；mmdc（`tools/mermaid-cli`）；健康 Tool/API（`toolhealth`、`GET /api/runtime/tools`、`tool_runtime_status`）及前端能力提示 | 本机上，WPS（及配置时的 Word）真实刷新目录，DOCX/PDF 回读通过，交付 DOCX 换软件打开目录页码零误差；mmdc 真实 PNG；超时后无残留进程且不误杀用户进程；本机依赖版本已登记。**结果**见 12.5 末尾“S1 收口复验” |
 | [x] E S2 订阅与回合状态机（2026-11-03） | schema、db/agent_jobs.go、engine/watchdog/intent_completion/intent_inputs；`agent_job_status`、`GET /api/tasks/{id}/agent-jobs` 与执行页等待状态 | 原子提交/等待、恢复扫描、ACK、Hint 保留、范围授权；故障注入无丢唤醒/重复应用；测试作业可验证框架，不代表真实工具交付。**结果**见 12.6 |
-| [ ] E S3 图表 Skill | chart_render_jobs、服务/Tool/HTTP、SectionDraft.Charts 与章节事务 | 两条写作路径生成真实图；修订+图表入队崩溃恢复；取消/旧修订/兼容入口不覆盖新图 |
+| [x] E S3 图表 Skill（2026-11-04） | chart_render_jobs、服务/Tool/HTTP、SectionDraft.Charts 与章节事务 | 两条写作路径生成真实图；修订+图表入队崩溃恢复；取消/旧修订/兼容入口不覆盖新图。**结果**见 12.7 |
 | [ ] E S4 合稿 Skill | export_requests、组幂等、严格策略、取消/暂停与完成事件 | 终态重发复用，同键异参拒绝，真实目录/图片/表格回读，无迟到发布；高影响入口符合 R2 |
 | [ ] E S5a 招标解析 Skill | tender_file、candidate_only、人工 import 采用、原生解析/PaddleOCR | 真实 OCR、完整候选、原件定位、幂等采用、source_epoch 失效通过；不开放知识/企业来源 |
 | [ ] E S5b 知识库增强解析（条件阶段） | 先设计知识原件/候选/采用/索引失效，再实现；MinerU 按评测决定 | 分域表/API 设计与实现验收，不能借用招标表或改写已激活索引 |
@@ -623,6 +635,52 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 - `chart_render` 类型、`superseded` 终态与 `export_jobs` 的 cancelled 状态分别随 S3、S4 落地；导出结果在严格最终稿策略（S4）前一律为 preview_only。
 - 等待中的单个意图暂不支持从页面取消；SSE 断线重连依赖既有 `invalidate(ALL)`（已包含作业资源），未单独做断网演练。
 - 身份仍为宿主注入的执行身份，不是 R2 可信用户身份；开放高影响提交入口前仍须完成 R2。
+
+### 12.7 S3 收口记录（2026-11-04，E 级，本机）
+
+**交付内容**（对应 3.2、4.1~4.3、5.1~5.2、8、8.1 S3 行）：
+
+| 落点 | 实现 |
+| --- | --- |
+| schema | `chart_render_jobs`（六态、请求键全生命周期唯一、每图表至多一个活跃作业、复合 FK 级联）与不可改触发器；`agent_job_outcome` / `agent_job_terminal` 加入 `chart_render` 与 `superseded`；订阅类型 CHECK 以 DROP/ADD 扩展；`proposal_charts.plan_code`、`section_write_jobs.chart_plans` |
+| db | `db/chart_jobs.go`：`SubmitChartRender`（新图表或重试已有图表；先查原请求比哈希，新键才检查暂停 / 容量 / 修订 / 批准大纲；宿主绑定 Intent 时同事务订阅）、`ClaimChartRenderJob`（领取时以 `BUDGET_EXHAUSTED` 结束耗尽作业、以 superseded 结束已过期图表）、`HeartbeatChartRenderJob`、`FinishChartRenderJob`（可重试失败回 queued，失败不覆盖已有有效渲染）、`CancelChartRenderJob`、`ListChartRenderJobs`；`FinishSectionWriteJob(..., *ChartPlanBatch)`；`agentJobResultValid('chart_render')`；兼容入口 `SetChartRender` / `RebindChart` / `DeleteChart` 先锁图表再检查活跃作业；`SetTaskPaused` 撤销在途渲染写回资格 |
+| export | `export/chart_jobs.go`：`Service.SubmitChartRender`、`BuildChartPlans`、`ChartRunner`（心跳续租，租约丢失即取消渲染；产物按作业 + 令牌目录写入，写回被拒时删除，成功后清理其他尝试）；`ChartRequest.ExpectedRevNo`（同步兼容入口可缺省）；`MMDCTimeout()`；`Service.ChartWake` 加速领取 |
+| Tool / Skill | 新技能 `diagram-generation`（`chart_render_submit` / `chart_render_status` / `chart_render_cancel`），拒绝时返回 `accepted=false` + `error_code` + `retryable`；`proposal-writing` 第 8 步改为引用它；`agent_job_status` 支持 `chart_render`；`add_intent` 的 mandate Schema 补出 `allowed_job_kinds` / `required_job_kinds`（S2 已支持解析但未在 Schema 中声明），Planner 提示词说明图表方向可要求 `chart_render` |
+| HTTP | `POST/GET /api/tasks/{id}/chart-jobs`、`GET /chart-jobs/{jobID}`、`POST /chart-jobs/{jobID}/cancel`（400 / 404 / 409 `idempotency_conflict`·`stale_revision`·`chart_job_active` / 422 / 429 / 503 `runtime_unavailable`）；`/charts/{id}/render|rebind` 与删除在作业活跃时 409；HTTP Writer 草稿 `charts` 计划在保存修订前全部校验（无效则整份草稿不保存、作业以原因阻塞）；`chart-render` 活动 |
+| 运行 | `cmd/server` 启动 `ChartRunner`（`AUTOBID_CHART_WORKERS`，租约 = mmdc 超时 + 60 秒，终态后 `WakeAgentJobs`）；`AUTOBID_CHART_JOB_DEADLINE_SECONDS`（默认 600）登记在 `docs/LOCAL_RUNTIME.md` |
+| 前端 | `api/types.ts` / `client.ts` 的图表作业类型与调用；`features/proposal/export/chartJobs.ts` 展示与请求键规则（单测）；章节图表卡片改为提交渲染作业、显示排队 / 渲染中 / 失败 / 已取消、取消与重试、写作计划标记、旧修订图表折叠分组且不进入导出说明；活跃作业时 2 秒轮询，`chart-render` 活动重读图表、导出门禁与作业列表；执行页作业卡片显示图表渲染与 `chart_ready` / `chart_stale` |
+
+**实施时选定的细节**：
+
+- **执行版本**：新请求固定当时的渲染器标签（`mmdc 11.17.0`，设备选型表为 `native`）；执行时渲染器标签不同则以 `RUNTIME_UNAVAILABLE` 失败并标记未渲染，按新请求重试，不随配置漂移。
+- **渲染器不可用**：Tool / 页面提交 Mermaid 图表返回 `RUNTIME_UNAVAILABLE`（不插入作业）；设备选型表照常受理。HTTP Writer 的计划随修订登记，执行时以 `RUNTIME_UNAVAILABLE` 结束并标记未渲染，导出插入源码占位框。
+- **取消与失败不覆盖有效图**：取消不改写图表；重新渲染失败、耗尽或取消时保留图表已有的有效渲染结果。
+- **superseded 的判定**：有活跃作业时禁止重新绑定、章节修订号只增不减，图表过期是单调的，因此领取时可不加章节锁直接结束为 superseded；写回时在章节锁下再判一次。
+- **`chart_generate`**：保留为同步兼容工具（仍由 `proposal-writing` 解锁，以便旧会话重放），说明中写明不登记后台作业、不满足 `required_job_kinds=chart_render`，新图表走 `diagram-generation`。
+- **测试夹具**：`dbtest.ReadyTask` 在已有（旧写作门禁）任务内构造可导出标书；引擎测试环境增加 `legacyWriting` 与 `beforeRun`。
+
+**验证结果**：
+
+- `go vet ./...` 通过；真实 PostgreSQL 下 `go test -race -count=1 ./...`：366 条测试/子测试通过，26 个包通过，0 失败，0 竞态报告；4 项可选跳过（真实模型契约、两个浏览器用例、文档引擎长稳用例，需显式环境变量开启）。首轮全量运行发现 1 条 S2 用例仍把 chart_render 断言为未支持类型（S3 起应为类型混用 → SCOPE_VIOLATION），修正断言后重跑全量通过。配置了本机 mmdc（`AUTOBID_MMDC_PATH` / `AUTOBID_MMDC_BROWSER`）与 WPS，真实组件用例实际执行。
+- 新增 S3 用例：
+  - `db/chart_jobs_test.go`：未修订 / 期望修订不符 / 保留键 / 章节越界拒绝；6 路并发同键只建一个作业；同键重放与同键异参；活跃作业时重试与三个兼容入口拒绝；暂停拒绝新请求但重放原作业；订阅与重放复用订阅；限定对象时不能读取 / 取消他人作业；领取、错令牌心跳、写回、重复写回拒绝；终态事件 `chart_ready` 与载荷；终态状态与冻结期限不可改写；新修订后结果失效；写回时 / 领取时 superseded 且不改图；取消后心跳与迟到成功被拒；重试同一图表 → 暂停撤销写回 → 恢复后尝试次数与原期限不变；可重试失败回 queued；尝试耗尽与截止耗尽；图表计划编号重复拒绝；**故障注入**（第二个作业插入失败）时修订与第一张图表一起回滚、章节作业仍可重试；正常写回同事务登记两张图表与作业（保留前缀请求键）；冲突候选不登记正式图表、计划随作业留存。
+  - `export/chart_jobs_test.go`：规范化后同一请求重放、异参冲突；首次失败后重试成功、产物按作业 + 令牌隔离且哈希可回读；渲染器不可用时同键重放仍返回原作业、Mermaid 新请求拒绝、设备表原生生成；执行版本不一致失败后按新请求重试；兼容同步渲染在作业终态后可用；渲染完成到写回之间被取消时迟到结果被拒、本次产物删除；图表计划校验；**真实 mmdc**：中文架构图 848×596、甘特图 3168×392 经作业渲染并绑定章节当前修订。
+  - `bidtools/chart_jobs_integration_test.go`：`FEATURE_DISABLED`、无宿主意图与章节 / 作业类型越界 `SCOPE_VIOLATION`、`INVALID_ARGUMENT`（缺参、规格错误、job_ref 类型错误）、`CONFLICT_STALE_REVISION`、`IDEMPOTENCY_KEY_CONFLICT`、`RUNTIME_UNAVAILABLE`；受理后订阅当前意图、重放；状态与取消的意图范围。
+  - `server/chart_jobs_test.go`（真实 mmdc）：`/chart-jobs` 提交 202、重放、409 两类冲突、保留键 400、兼容入口 409、列表 / 详情、渲染后 PNG 下载、取消后执行者不恢复成功、按新键重试同一图表、渲染器不可用 503 而设备表 202；**HTTP Writer 路径**：草稿附甘特图 + 设备表计划 → 修订与两张图表同事务登记 → 执行器渲染（甘特图 3168×296 PNG、设备表原生）；无效计划时修订不保存、作业阻塞；**Worker 路径**：经 `chart_render_submit` 提交并订阅 → 意图 `blocked + waiting_job` → `ChartRunner` 真实渲染后唤醒 → 校验 `required_job_kinds=chart_render`（图表绑定当前修订且已渲染）后 done，Planner 未收到“已结束”。
+- 前端 `npm --prefix web run build` 通过（保留既有 bundle 大于 500 kB 提示）；`test:unit` 28/28 通过（新增 5 条：活跃作业可取消不可并发重试、旧修订图过期分组、取消 / 失败后可重试且保留原图、请求键复用与换新、`chart-render` 活动与 Agent 图表作业状态）。
+- 浏览器验收（本机服务二进制 + 隔离库 `autobid_s3check` + 真实 mmdc 与 WPS；种子数据经 db 公开 API 构造可导出标书）：
+  - 章节图表卡片“生成图表”提交技术架构图 → 卡片显示“渲染中 · 渲染作业 #1 · 第 1/3 次”与“取消渲染” → 无需刷新自动变为“已渲染”，图片为 mmdc 真实 PNG（896×904）；
+  - 暂停任务后为已渲染图表登记一个排队作业 → 卡片显示“排队渲染” → 页面取消 → 图表保留原渲染、提示“最近一次重新渲染已取消” → 恢复任务后“重新渲染”以新请求键 `ui-retry-2-after-3` 提交并渲染成功；
+  - 页面保持打开时，另一进程经 `FinishSectionWriteJob` 写回 rev 2（附组织架构图与设备选型表计划），并经 `chart_render_submit` 同等路径以意图身份提交甘特图：卡片自动刷新出“写作计划 C1 / C2”与 Agent 图表（均为 rev 2、已渲染），rev 1 的两张图收入“旧修订图表 2 张（不进入导出）”折叠组；
+  - 执行页“后台作业”显示“图表渲染 #7 · 工作 #2 · 已成功 · 图表已绑定当前修订”，等待中的工作被唤醒回到“待执行”；控制台无错误，服务日志无 WARN/ERROR。
+- 原始日志在 Git 忽略的 `data/s3-checks/`（`vet.log`、`race.jsonl`、`race.exit`、`web-build.log`、`web-tests.log`、`browser-server.log`）。
+
+**边界（未包含在 S3）**：
+
+- 浏览器验收中的写作路径由测试进程直接调用存储层写回（本机没有可用于演示的生成模型配置）；两条写作路径的真实执行（HTTP 章节 Writer 与 Worker 工具调用）由 `server/chart_jobs_test.go` 的替身模型用例覆盖。图表内容是否正确、是否符合评审要求未经外部评审（V/P 待验证）。
+- 引擎内 mmdc 并发仍由 `AUTOBID_MMDC_CONCURRENCY` 限制；未做数小时级运行与大批量图表的排队测量。
+- 页面上的作业列表只在章节图表卡片与执行页呈现，没有单独的任务级图表作业页；Planner 仍不能直接提交图表（经 `add_intent` 派发 Worker）。
+- 身份仍为宿主注入的执行身份与 `X-Autobid-User` 审计声明，不是 R2 可信身份；导出（S4）、解析（S5a）的提交类工具尚未实施，导出结果仍为 preview_only。
 
 ## 13. 上游参考与版本核对入口
 

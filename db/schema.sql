@@ -2819,8 +2819,8 @@ CREATE TRIGGER trg_return_terminal_intent_inputs AFTER UPDATE OF state, blocked_
 -- S2 (AGENT_TOOL_SKILLS_PLAN 5.1 / 5.3): durable Agent job subscriptions and
 -- terminal events, domain B. Polymorphic job references cannot use a plain FK;
 -- the Go layer validates task, tenant and the live intent lease inside the
--- submitting transaction. A kind is listed only once its validation exists
--- (chart_render joins in S3).
+-- submitting transaction. A kind is listed only once its validation exists;
+-- S3 adds chart_render (chart_render_jobs) and replaces the CHECK on old databases.
 CREATE TABLE IF NOT EXISTS agent_job_subscriptions (
     id                   BIGSERIAL PRIMARY KEY,
     tenant_id            TEXT NOT NULL DEFAULT 'default',
@@ -2839,7 +2839,7 @@ CREATE TABLE IF NOT EXISTS agent_job_subscriptions (
     approved_by          TEXT NOT NULL DEFAULT '',
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT ck_agent_job_subscriptions_kind CHECK (job_kind IN ('tender_parse','proposal_export')),
+    CONSTRAINT ck_agent_job_subscriptions_kind CHECK (job_kind IN ('tender_parse','proposal_export','chart_render')),
     CONSTRAINT ck_agent_job_subscriptions_state CHECK (state IN ('waiting','notified','acknowledged','cancelled')),
     CONSTRAINT uq_agent_job_subscriptions_intent_job UNIQUE (tenant_id, intent_id, job_kind, job_id),
     CONSTRAINT uq_agent_job_subscriptions_tenant_id UNIQUE (tenant_id, id)
@@ -2916,19 +2916,36 @@ BEGIN
           INTO terminal_status, business_state, payload
           FROM export_jobs j
          WHERE j.id = jid AND j.status IN ('succeeded','failed','cancelled');
+    ELSIF k = 'chart_render' THEN
+        -- S3: a succeeded render is only chart_ready while the chart still matches its job source and the
+        -- section's current revision; a later revision turns the same result into chart_stale.
+        SELECT j.status,
+               CASE j.status
+                   WHEN 'succeeded' THEN CASE WHEN c.source_hash = j.source_hash AND c.rev_no = s.current_rev_no
+                                                   AND c.render_status = 'rendered' THEN 'chart_ready' ELSE 'chart_stale' END
+                   ELSE j.status END,
+               jsonb_build_object('status', j.status, 'attempts', j.attempts, 'max_attempts', j.max_attempts, 'chart_id', j.chart_id,
+                   'section_id', c.section_id, 'section_code', s.section_code, 'rev_no', c.rev_no, 'current_rev_no', s.current_rev_no,
+                   'render_status', c.render_status, 'render_format', c.render_format, 'width_px', c.width_px, 'height_px', c.height_px,
+                   'artifact_hash', c.artifact_hash, 'source_hash', j.source_hash, 'error_code', j.error_code, 'error', left(j.error, 500))
+          INTO terminal_status, business_state, payload
+          FROM chart_render_jobs j
+          JOIN proposal_charts c ON c.tenant_id = j.tenant_id AND c.task_id = j.task_id AND c.id = j.chart_id
+          JOIN proposal_sections s ON s.tenant_id = c.tenant_id AND s.id = c.section_id
+         WHERE j.id = jid AND j.status IN ('succeeded','failed','cancelled','superseded');
     END IF;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Every terminal transition of a subscribed job publishes inside the job's own
 -- transaction: success, permanent failure, cancellation, deadline and attempt
--- exhaustion alike. Returning to queued is not terminal. Only subscriptions and
--- events are written; exploration_nodes are never locked here.
+-- exhaustion alike (S3 adds superseded). Returning to queued is not terminal.
+-- Only subscriptions and events are written; exploration_nodes are never locked here.
 CREATE OR REPLACE FUNCTION agent_job_terminal() RETURNS trigger AS $$
 DECLARE
     o RECORD;
 BEGIN
-    IF NEW.status IN ('succeeded','failed','cancelled') AND OLD.status NOT IN ('succeeded','failed','cancelled') THEN
+    IF NEW.status IN ('succeeded','failed','cancelled','superseded') AND OLD.status NOT IN ('succeeded','failed','cancelled','superseded') THEN
         SELECT * INTO o FROM agent_job_outcome(TG_ARGV[0], NEW.id);
         IF o.terminal_status IS NOT NULL THEN
             WITH s AS (
@@ -2950,3 +2967,87 @@ CREATE TRIGGER trg_fixed_file_jobs_agent_terminal AFTER UPDATE OF status ON fixe
 DROP TRIGGER IF EXISTS trg_export_jobs_agent_terminal ON export_jobs;
 CREATE TRIGGER trg_export_jobs_agent_terminal AFTER UPDATE OF status ON export_jobs
     FOR EACH ROW EXECUTE FUNCTION agent_job_terminal('proposal_export');
+
+-- ---------------------------------------------------------------------------
+-- S3 (AGENT_TOOL_SKILLS_PLAN 3.2 / 4.3 / 5.1~5.2): durable chart render jobs, domain C.
+--   chart_render_jobs  one render request for one chart. The revision is read from the bound chart (composite FK),
+--                      never copied. request_key is unique for the job's whole life (terminal replays return the
+--                      original job); at most one queued/running job per chart. deadline_at and max_attempts are
+--                      fixed at first submission; lease_token fences every write-back. Rendering happens outside
+--                      database transactions (export.ChartRunner).
+--   proposal_charts.plan_code       code of an HTTP section writer chart plan (unique per revision).
+--   section_write_jobs.chart_plans  the plans returned with the draft, kept with candidate results too.
+-- ---------------------------------------------------------------------------
+ALTER TABLE proposal_charts ADD COLUMN IF NOT EXISTS plan_code TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_proposal_charts_plan_code ON proposal_charts(tenant_id, section_rev_id, plan_code) WHERE plan_code <> '';
+ALTER TABLE section_write_jobs ADD COLUMN IF NOT EXISTS chart_plans JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+CREATE TABLE IF NOT EXISTS chart_render_jobs (
+    id           BIGSERIAL PRIMARY KEY,
+    tenant_id    TEXT NOT NULL DEFAULT 'default',
+    task_id      BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    chart_id     BIGINT NOT NULL,
+    request_key  TEXT NOT NULL CHECK (request_key <> '' AND length(request_key) <= 200),
+    request_hash TEXT NOT NULL CHECK (request_hash <> ''),
+    source_hash  TEXT NOT NULL CHECK (source_hash <> ''),
+    executor     TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'queued'
+                 CHECK (status IN ('queued','running','succeeded','failed','cancelled','superseded')),
+    attempts     INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    max_attempts INT NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 10),
+    deadline_at  TIMESTAMPTZ NOT NULL,
+    lease_owner  TEXT NOT NULL DEFAULT '',
+    lease_token  BIGINT NOT NULL DEFAULT 0,
+    lease_until  TIMESTAMPTZ,
+    error_code   TEXT NOT NULL DEFAULT '',
+    error        TEXT NOT NULL DEFAULT '',
+    started_at   TIMESTAMPTZ,
+    finished_at  TIMESTAMPTZ,
+    created_by   TEXT NOT NULL DEFAULT '',
+    updated_by   TEXT NOT NULL DEFAULT '',
+    approved_by  TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_chart_render_jobs_request UNIQUE (tenant_id, task_id, request_key),
+    CONSTRAINT uq_chart_render_jobs_task_id UNIQUE (tenant_id, task_id, id),
+    CONSTRAINT ck_chart_render_jobs_lease CHECK (status <> 'running' OR lease_until IS NOT NULL),
+    CONSTRAINT fk_chart_render_jobs_chart FOREIGN KEY (tenant_id, task_id, chart_id)
+        REFERENCES proposal_charts(tenant_id, task_id, id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chart_render_jobs_active ON chart_render_jobs(tenant_id, chart_id) WHERE status IN ('queued','running');
+CREATE INDEX IF NOT EXISTS idx_chart_render_jobs_queue ON chart_render_jobs(id) WHERE status IN ('queued','running');
+CREATE INDEX IF NOT EXISTS idx_chart_render_jobs_task ON chart_render_jobs(tenant_id, task_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_chart_render_jobs_chart ON chart_render_jobs(tenant_id, chart_id, id DESC);
+DROP TRIGGER IF EXISTS trg_chart_render_jobs_upd ON chart_render_jobs;
+CREATE TRIGGER trg_chart_render_jobs_upd BEFORE UPDATE ON chart_render_jobs
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- The frozen request (input, executor, deadline and attempt budget) never changes, and a terminal job never
+-- changes status again: a late success, failure or heartbeat cannot rewrite a cancelled or superseded job.
+CREATE OR REPLACE FUNCTION chart_render_jobs_immutable() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.tenant_id, NEW.task_id, NEW.chart_id, NEW.request_key, NEW.request_hash, NEW.source_hash, NEW.executor,
+        NEW.max_attempts, NEW.deadline_at, NEW.created_by, NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.tenant_id, OLD.task_id, OLD.chart_id, OLD.request_key, OLD.request_hash, OLD.source_hash, OLD.executor,
+        OLD.max_attempts, OLD.deadline_at, OLD.created_by, OLD.created_at) THEN
+        RAISE EXCEPTION 'chart render job % input is immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    IF OLD.status IN ('succeeded','failed','cancelled','superseded') AND NEW.status IS DISTINCT FROM OLD.status THEN
+        RAISE EXCEPTION 'chart render job % is already %', OLD.id, OLD.status USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_chart_render_jobs_immutable ON chart_render_jobs;
+CREATE TRIGGER trg_chart_render_jobs_immutable BEFORE UPDATE ON chart_render_jobs
+    FOR EACH ROW EXECUTE FUNCTION chart_render_jobs_immutable();
+
+DROP TRIGGER IF EXISTS trg_chart_render_jobs_agent_terminal ON chart_render_jobs;
+CREATE TRIGGER trg_chart_render_jobs_agent_terminal AFTER UPDATE OF status ON chart_render_jobs
+    FOR EACH ROW EXECUTE FUNCTION agent_job_terminal('chart_render');
+
+-- Old databases created the subscription kind CHECK without chart_render.
+ALTER TABLE agent_job_subscriptions DROP CONSTRAINT IF EXISTS ck_agent_job_subscriptions_kind;
+ALTER TABLE agent_job_subscriptions ADD CONSTRAINT ck_agent_job_subscriptions_kind
+    CHECK (job_kind IN ('tender_parse','proposal_export','chart_render'));

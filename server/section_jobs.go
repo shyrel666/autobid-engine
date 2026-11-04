@@ -115,16 +115,28 @@ func (a *API) executeSectionJob(j *db.SectionWriteJob) {
 		fail(err)
 		return
 	}
+	// S3：图表计划在保存修订前全部校验并生成确定性源码；修订与图表作业随后在同一事务登记。
+	charts, err := a.exportSvc().BuildChartPlans(draft.Charts)
+	if err != nil {
+		fail(fmt.Errorf("图表计划无效，修订未保存：%w", err))
+		return
+	}
 	source := db.RevAIInitial
 	if j.BaseRevNo > 0 {
 		source = db.RevAIRewrite
 	}
-	res, err := a.pg.FinishSectionWriteJob(ctx, j, db.SaveRevisionInput{Source: source, ContentMD: draft.ContentMD, SummaryNote: draft.SummaryNote, DiffSummary: draft.DiffSummary, EvidenceIDs: draft.EvidenceIDs, AdmissibilityItemIDs: draft.AdmissibilityItemIDs, CommitmentIDs: draft.CommitmentIDs, Gaps: draft.Gaps})
+	res, err := a.pg.FinishSectionWriteJob(ctx, j, db.SaveRevisionInput{Source: source, ContentMD: draft.ContentMD, SummaryNote: draft.SummaryNote, DiffSummary: draft.DiffSummary, EvidenceIDs: draft.EvidenceIDs, AdmissibilityItemIDs: draft.AdmissibilityItemIDs, CommitmentIDs: draft.CommitmentIDs, Gaps: draft.Gaps}, charts)
 	if err != nil {
 		fail(err)
 		return
 	}
 	emit("state", fmt.Sprintf("章节 %s 写回 rev %d（%s），待人工评审", j.SectionCode, res.Revision.RevNo, res.Outcome), fmt.Sprintf("job_id=%d", j.ID))
+	if charts != nil && res.Outcome == db.SaveApplied {
+		// 作业已随修订提交，这里只加速执行者领取。
+		a.exportSvc().WakeChartRunner()
+		a.hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "chart-render", Kind: "state", At: time.Now(),
+			Summary: fmt.Sprintf("章节 %s rev %d 登记 %d 张图表的渲染作业", j.SectionCode, res.Revision.RevNo, len(charts.Plans))})
+	}
 }
 
 func (a *API) listSectionJobs(w http.ResponseWriter, r *http.Request, t *Task) {

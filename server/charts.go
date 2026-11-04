@@ -9,7 +9,8 @@ package server
 //   POST   /api/tasks/{id}/charts/{chartID}/rebind        重新绑定到章节当前修订（人工确认图表仍适用）
 //   DELETE /api/tasks/{id}/charts/{chartID}
 //   GET    /api/export/status                             文档引擎（WPS / Word）/ mermaid-cli 可用性
-// 状态码：规格错误 400；不存在 404；渲染期间源码被改 409；章节尚无修订 422。
+// 状态码：规格错误 400；不存在 404；渲染期间源码被改、图表有排队 / 执行中的渲染作业（S3，见 chart_jobs.go）409；章节尚无修订 422。
+// render / rebind / delete 是兼容入口：图表有活跃渲染作业时一律拒绝，不与作业并发改写。
 
 import (
 	"errors"
@@ -43,6 +44,8 @@ func chartFail(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error(), "code": "no_revision"})
 	case errors.Is(err, db.ErrChartSourceMoved):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "chart_changed"})
+	case errors.Is(err, db.ErrChartJobActive):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "chart_job_active"})
 	default:
 		proposalFail(w, err)
 	}

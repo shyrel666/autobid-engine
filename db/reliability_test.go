@@ -61,14 +61,14 @@ func TestSectionWriteJobRecoveryAndFencing(t *testing.T) {
 		t.Fatalf("lost immutable input or budget: %+v", second)
 	}
 	in := SaveRevisionInput{Source: RevAIInitial, ContentMD: "恢复后的章节正文", SummaryNote: "摘要"}
-	if _, err = p.d.FinishSectionWriteJob(ctx, first, in); !errors.Is(err, ErrLeaseLost) {
+	if _, err = p.d.FinishSectionWriteJob(ctx, first, in, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("stale executor wrote: %v", err)
 	}
-	res, err := restarted.FinishSectionWriteJob(ctx, second, in)
+	res, err := restarted.FinishSectionWriteJob(ctx, second, in, nil)
 	if err != nil || res.Outcome != SaveApplied {
 		t.Fatalf("finish: %v %+v", err, res)
 	}
-	if _, err = p.d.FinishSectionWriteJob(ctx, second, in); !errors.Is(err, ErrLeaseLost) {
+	if _, err = p.d.FinishSectionWriteJob(ctx, second, in, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("duplicate finish: %v", err)
 	}
 	det, err := p.d.GetSection(ctx, DefaultTenant, p.task.ID, sid)
@@ -105,7 +105,7 @@ func TestSectionWriteJobCancelPauseAndBudget(t *testing.T) {
 	if err = p.d.HeartbeatSectionWriteJob(ctx, running); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("cancel heartbeat: %v", err)
 	}
-	if _, err = p.d.FinishSectionWriteJob(ctx, running, SaveRevisionInput{Source: RevAIInitial, ContentMD: "late"}); !errors.Is(err, ErrLeaseLost) {
+	if _, err = p.d.FinishSectionWriteJob(ctx, running, SaveRevisionInput{Source: RevAIInitial, ContentMD: "late"}, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("cancel write: %v", err)
 	}
 	j = enqueue("paused")
@@ -122,7 +122,7 @@ func TestSectionWriteJobCancelPauseAndBudget(t *testing.T) {
 	if err = p.d.SetTaskPaused(ctx, p.task.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = p.d.FinishSectionWriteJob(ctx, running, SaveRevisionInput{Source: RevAIInitial, ContentMD: "暂停前旧任务"}); !errors.Is(err, ErrLeaseLost) {
+	if _, err = p.d.FinishSectionWriteJob(ctx, running, SaveRevisionInput{Source: RevAIInitial, ContentMD: "暂停前旧任务"}, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("pause/resume fence: %v", err)
 	}
 	if _, err = p.d.ExecContext(ctx, `UPDATE section_write_jobs SET deadline_at=now()-interval '1 second' WHERE id=$1`, j.ID); err != nil {

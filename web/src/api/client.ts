@@ -11,7 +11,7 @@ import type {
   ExtractRequirementsResp, RFPGoalDecompResult, OutlineDetail, OutlineInput, OutlineList, ProposalSection, RequirementInput, RequirementItem, RequirementManifest,
   RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionDetail, BidScopeInput, VetoStatus, SectionWriteJob,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
-  ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
+  ChartJobReq, ChartJobResp, ChartRenderJob, ChartReq, CreateExportReq, ExportJob, ExportPreflight, ExportStatus, ExportTemplate, ExportWarning, ProposalChart,
   RuntimeCapability, RuntimeCapabilityStatus, AgentJob,
   LLMSettings, LLMPoolStatus, LLMProfileInput, LLMTestResult, LLMRecordDetail, LLMRecordsResp, SystemCatalog, AgentRoleKey, TaskGraph,
   CompanyPerformance, EvidenceOriginal, EvidenceBinding, AdmissibilityRun, AdmissibilityDecision,
@@ -360,6 +360,12 @@ export const api = {
   rebindChart: (id: number, chartID: number) => post<ProposalChart>(`${t(id)}/charts/${chartID}/rebind`),
   deleteChart: (id: number, chartID: number) => del(`${t(id)}/charts/${chartID}`),
   chartImage: (id: number, chartID: number) => blob(`${t(id)}/charts/${chartID}/image`),
+  // 图表渲染作业（S3）：提交只登记作业（202），渲染由服务端执行器完成；以列表 / 详情接口恢复状态。
+  submitChartJob: (id: number, req: ChartJobReq) => post<ChartJobResp>(`${t(id)}/chart-jobs`, req),
+  chartJobs: (id: number, f: { chart_id?: number; section_id?: number; before?: number; limit?: number } = {}) =>
+    get<{ jobs: ChartRenderJob[]; renderer: ExportStatus }>(`${t(id)}/chart-jobs${qs(f)}`),
+  chartJob: (id: number, jobID: number) => get<ChartJobResp>(`${t(id)}/chart-jobs/${jobID}`),
+  cancelChartJob: (id: number, jobID: number) => post<ChartJobResp>(`${t(id)}/chart-jobs/${jobID}/cancel`),
   exportPreflight: (id: number) => get<ExportPreflight>(`${t(id)}/exports/preflight`),
   createExport: (id: number, req: CreateExportReq) => post<{ jobs: ExportJob[]; warnings: ExportWarning[] }>(`${t(id)}/exports`, req),
   exportJobs: (id: number) => get<{ jobs: ExportJob[] }>(`${t(id)}/exports`),

@@ -171,6 +171,14 @@ func Ready(t testing.TB, d *db.DB, spec Spec) *Proposal {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
+	return ReadyTask(t, d, task.ID, spec)
+}
+
+// ReadyTask 在已有任务（须为旧写作门禁，即 LegacyWriting）内构造可导出的标书，供需要自建任务的引擎集成测试使用。
+func ReadyTask(t testing.TB, d *db.DB, taskID int64, spec Spec) *Proposal {
+	t.Helper()
+	ctx := context.Background()
+	task := &db.Task{ID: taskID}
 	p := &Proposal{DB: d, TaskID: task.ID, Reqs: map[string]int64{}, Sections: map[string]int64{}, Spec: spec}
 	for _, r := range spec.Reqs {
 		mand := r.Mandatory

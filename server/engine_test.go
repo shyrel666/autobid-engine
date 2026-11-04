@@ -218,6 +218,9 @@ type envOpts struct {
 	extraTools []tool.CoreTool
 	onActivity func(db.Activity)           // 额外的活动投递（如 SSE Hub）
 	planner    func(env *harnessEnv) brain // 替换默认 plannerBrain
+	// legacyWriting 创建不强制 D3 门禁的任务；beforeRun 在引擎启动前准备任务数据（如构造可写作的标书）。
+	legacyWriting bool
+	beforeRun     func(task *Task)
 }
 
 func newEnvWith(t *testing.T, timeoutSec int, prove bool, workerFn brain, cfg Config, o envOpts) *harnessEnv {
@@ -275,11 +278,15 @@ func newEnvWith(t *testing.T, timeoutSec int, prove bool, workerFn brain, cfg Co
 	env.cancel = cancel
 	task, err := m.CreateTask(ctx, db.CreateTaskInput{
 		Name: fmt.Sprintf("engine-%d", time.Now().UnixNano()), Goal: "完成 A 标段资格审查推演", TimeoutSeconds: timeoutSec,
+		LegacyWriting: o.legacyWriting,
 	}, "A 标段资格审查无废标风险")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	env.task = task
+	if o.beforeRun != nil {
+		o.beforeRun(task)
+	}
 	e.Start(ctx)
 	if err := e.Run(ctx, task); err != nil {
 		t.Fatalf("Run: %v", err)

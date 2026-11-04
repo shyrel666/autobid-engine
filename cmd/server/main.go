@@ -188,6 +188,16 @@ func run(logger *slog.Logger) error {
 			e.WakeAgentJobs() // 终态事件已在作业事务内持久化；这里只加速等待中 Intent 的唤醒扫描
 		}}
 	runner.Start(engineCtx)
+	// 图表渲染执行者（S3）：领取 chart_render_jobs，在数据库事务外调用 mmdc；租约过期的作业在领取时回收。
+	chartRunner := &export.ChartRunner{Service: exporter, Owner: fmt.Sprintf("%s/%d/charts", hostname, os.Getpid()), Logger: logger,
+		Workers: envInt("AUTOBID_CHART_WORKERS", 2),
+		Lease:   export.MMDCTimeout() + 60*time.Second,
+		OnChange: func(j *db.ChartRenderJob, summary string) {
+			hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "chart-render", Kind: "state", At: time.Now(), Summary: summary})
+			e.WakeAgentJobs()
+		}}
+	exporter.ChartWake = chartRunner.Wake
+	chartRunner.Start(engineCtx)
 	var fileStore *filework.Store
 	if envBool("AUTOBID_FILE_PROCESSING_ENABLED") {
 		dir := os.Getenv("AUTOBID_FILEWORK_DIR")

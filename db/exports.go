@@ -262,6 +262,11 @@ func chartWarningsTx(ctx context.Context, q queryer, tenant string, taskID, outl
 			warns = append(warns, ExportWarning{Kind: WarnChartStale, SectionID: c.SectionID, ChartID: c.ID,
 				Message: fmt.Sprintf("图表 #%d《%s》%s，不纳入导出（可重新绑定或重新生成）", c.ID, c.Title, c.StaleReason)})
 			continue
+		case c.SourceFormat == ChartSourceJSON && c.RenderStatus == ChartPending:
+			// 设备选型表按结构化 JSON 原生成表，不依赖渲染结果。
+		case c.RenderStatus == ChartPending && c.LatestJob.Active():
+			warns = append(warns, ExportWarning{Kind: WarnChartUnrendered, SectionID: c.SectionID, ChartID: c.ID,
+				Message: fmt.Sprintf("图表 #%d《%s》渲染作业 #%d 仍在进行，现在导出将插入源码占位框", c.ID, c.Title, c.LatestJob.ID)})
 		case c.RenderStatus == ChartUnrendered || c.RenderStatus == ChartPending:
 			warns = append(warns, ExportWarning{Kind: WarnChartUnrendered, SectionID: c.SectionID, ChartID: c.ID,
 				Message: fmt.Sprintf("图表 #%d《%s》未渲染（%s），导出时插入 Mermaid 源码占位框", c.ID, c.Title, orText(c.RenderError, "尚未渲染"))})

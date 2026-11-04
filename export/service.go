@@ -29,6 +29,15 @@ type Service struct {
 	Office         Office
 	OfficeReason   string
 	Health         *toolhealth.Registry
+	// ChartWake 在新图表渲染作业登记后加速执行者领取（作业已持久化，为 nil 时等待执行者轮询）。
+	ChartWake func()
+}
+
+// WakeChartRunner 非阻塞地唤醒图表渲染执行者。
+func (s *Service) WakeChartRunner() {
+	if s != nil && s.ChartWake != nil {
+		s.ChartWake()
+	}
 }
 
 // Status 是外部依赖可用性（门禁明细与前端展示）。
@@ -138,12 +147,13 @@ func envInt(key string, def int) int {
 // 图表
 // ---------------------------------------------------------------------------
 
-// ChartRequest 是一次图表生成请求。
+// ChartRequest 是一次同步图表生成请求（兼容入口）。ExpectedRevNo > 0 时要求章节当前修订仍是该版本，缺省绑定当前修订。
 type ChartRequest struct {
-	SectionID int64           `json:"section_id"`
-	ChartType string          `json:"chart_type"`
-	Title     string          `json:"title"`
-	Spec      json.RawMessage `json:"spec"`
+	SectionID     int64           `json:"section_id"`
+	ExpectedRevNo int             `json:"expected_rev_no,omitempty"`
+	ChartType     string          `json:"chart_type"`
+	Title         string          `json:"title"`
+	Spec          json.RawMessage `json:"spec"`
 }
 
 // GenerateChart 校验规格、生成源码、绑定章节当前修订并尝试渲染。
@@ -152,7 +162,7 @@ func (s *Service) GenerateChart(ctx context.Context, tenant string, taskID int64
 	if err != nil {
 		return nil, err
 	}
-	c, err := s.DB.CreateChart(ctx, tenant, taskID, actor, db.ChartInput{SectionID: req.SectionID, ChartType: req.ChartType,
+	c, err := s.DB.CreateChart(ctx, tenant, taskID, actor, db.ChartInput{SectionID: req.SectionID, ExpectedRevNo: req.ExpectedRevNo, ChartType: req.ChartType,
 		Title: strings.TrimSpace(req.Title), Spec: src.Spec, SourceFormat: src.Format, Source: src.Source, SourceHash: src.Hash})
 	if err != nil {
 		return nil, err
@@ -160,8 +170,12 @@ func (s *Service) GenerateChart(ctx context.Context, tenant string, taskID int64
 	return s.RenderChart(ctx, tenant, taskID, c, actor)
 }
 
-// RenderChart 渲染（或重新渲染）一张图表并写回状态。
+// RenderChart 同步渲染（或重新渲染）一张图表并写回状态（兼容入口）。图表有排队 / 执行中的渲染作业时拒绝
+// （ErrChartJobActive），写回时 db 再次检查，避免与作业并发改写。
 func (s *Service) RenderChart(ctx context.Context, tenant string, taskID int64, c *db.ProposalChart, actor string) (*db.ProposalChart, error) {
+	if c.LatestJob.Active() {
+		return nil, db.ErrChartJobActive
+	}
 	var r db.ChartRender
 	switch {
 	case c.SourceFormat == db.ChartSourceJSON:

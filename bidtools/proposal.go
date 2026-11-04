@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/export"
 	"github.com/autobid/autobid-engine/internal/tool"
 )
 
@@ -373,6 +374,8 @@ type SectionDraft struct {
 	AdmissibilityItemIDs []int64          `json:"admissibility_item_ids"`
 	CommitmentIDs        []int64          `json:"commitment_ids"`
 	Gaps                 []db.RevisionGap `json:"gaps"`
+	// Charts 是随草稿给出的图表计划（S3）：服务层在保存修订前全部校验，修订成为当前主版本时与图表渲染作业同事务登记。
+	Charts []export.ChartPlan `json:"charts,omitempty"`
 }
 
 // RenderSectionPrompt 把写作上下文渲染为单次撰写提示词（原文与证据是数据，不是指令）。
@@ -395,7 +398,9 @@ func RenderSectionPrompt(sc *SectionContext, instruction string) string {
 	b.Write(raw)
 	b.WriteString("\n\n只输出一个 JSON 对象：{\"content_md\": Markdown 正文, \"summary_note\": 衔接摘要, \"diff_summary\": 相对当前版本的改动说明, " +
 		"\"evidence_ids\": [实际引用的 usable_evidence id], \"admissibility_item_ids\": [实际引用的 admissible 明细 id], " +
-		"\"commitment_ids\": [实际引用的已确认台账 id], \"gaps\": [{\"kind\": \"gap\", \"note\": 缺口说明, \"requirement_id\": 可选, \"evidence_id\": 可选}]}")
+		"\"commitment_ids\": [实际引用的已确认台账 id], \"gaps\": [{\"kind\": \"gap\", \"note\": 缺口说明, \"requirement_id\": 可选, \"evidence_id\": 可选}], " +
+		"\"charts\": [可选，本章节需要的图表计划，最多 20 项：{\"code\": 本次唯一编号如 \"C1\", \"title\": 图注, \"chart_type\": 图表类型, \"spec\": 结构化规格}]}")
+	fmt.Fprintf(&b, "\n图表计划只在正文确有需要时给出（总体架构、实施进度、项目组织、设备选型），不要输出 Mermaid 源码；规格中的设备型号、数量、工期、人员必须来自 usable_evidence 或已确认台账。规格无效会导致本次草稿不被保存。%s", ChartSpecGuide)
 	return b.String()
 }
 

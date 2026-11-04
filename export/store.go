@@ -21,7 +21,8 @@ import (
 
 // Store 是导出目录（AUTOBID_EXPORT_DIR）。布局：
 //
-//	<root>/<tenant>/charts/task-<id>/<sha256>.png        图表渲染产物（内容寻址，重绘不覆盖旧产物）
+//	<root>/<tenant>/charts/task-<id>/<sha256>.png        同步渲染产物（兼容入口，内容寻址，重绘不覆盖旧产物）
+//	<root>/<tenant>/charts/task-<id>/job-<id>/t<token>/<sha256>.png  渲染作业产物（S3：每次执行一个目录，成功后清理其他令牌目录）
 //	<root>/<tenant>/templates/<sha256>.docx              上传的模板
 //	<root>/<tenant>/tasks/task-<id>/job-<id>/t<token>/   每次执行（围栏令牌）一个目录，成功后清理其他令牌目录
 type Store struct {
@@ -62,6 +63,18 @@ func (s *Store) tenantRel(tenant string, parts ...string) string {
 
 func (s *Store) chartRel(tenant string, taskID int64, sum string) string {
 	return s.tenantRel(tenant, "charts", "task-"+strconv.FormatInt(taskID, 10), sum+".png")
+}
+
+func (s *Store) chartJobDir(tenant string, taskID, jobID int64) string {
+	return s.tenantRel(tenant, "charts", "task-"+strconv.FormatInt(taskID, 10), "job-"+strconv.FormatInt(jobID, 10))
+}
+
+func (s *Store) chartAttemptRel(tenant string, taskID, jobID, token int64) string {
+	return s.chartJobDir(tenant, taskID, jobID) + "/t" + strconv.FormatInt(token, 10)
+}
+
+func (s *Store) chartJobRel(tenant string, taskID, jobID, token int64, sum string) string {
+	return s.chartAttemptRel(tenant, taskID, jobID, token) + "/" + sum + ".png"
 }
 
 func (s *Store) templateRel(tenant, sum string) string {

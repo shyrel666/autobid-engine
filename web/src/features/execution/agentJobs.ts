@@ -4,11 +4,16 @@
 import type { AgentJob, NodeBrief } from '../../api/types'
 import type { Tone } from '../../components/ui'
 
-export const JOB_KIND_LABEL: Record<string, string> = { tender_parse: '招标解析', proposal_export: '标书导出' }
-const JOB_STATUS_LABEL: Record<string, string> = { queued: '排队中', running: '处理中', succeeded: '已成功', failed: '失败', cancelled: '已取消' }
+export const JOB_KIND_LABEL: Record<string, string> = { tender_parse: '招标解析', proposal_export: '标书导出', chart_render: '图表渲染' }
+const JOB_STATUS_LABEL: Record<string, string> = {
+  queued: '排队中', running: '处理中', succeeded: '已成功', failed: '失败', cancelled: '已取消', superseded: '已被新修订取代',
+}
 const BUSINESS_LABEL: Record<string, string> = {
   candidate_pending_review: '候选待人工采用', adopted: '已采用', preview_only: '仅预览稿，非最终稿', completed: '已完成',
+  chart_ready: '图表已绑定当前修订', chart_stale: '章节已更新，图表已过期',
 }
+// 成功但结果待人工处理或已不适用于当前修订的业务状态，不显示为最终成功。
+const PENDING_BUSINESS = new Set(['preview_only', 'candidate_pending_review', 'chart_stale'])
 const SUBSCRIPTION_LABEL: Record<string, string> = {
   waiting: '等待结果', notified: '结果待送达工作', acknowledged: '结果已送达工作', cancelled: '任务结束，已取消等待',
 }
@@ -41,8 +46,9 @@ export function jobView(j: AgentJob): JobView {
   const biz = j.event?.business_state ?? ''
   const status = JOB_STATUS_LABEL[j.job_status] ?? (j.job_status || '未知')
   const tone: Tone = j.job_status === 'failed' || j.job_status === 'cancelled' ? 'red'
-    : j.job_status === 'succeeded' ? (biz === 'preview_only' || biz === 'candidate_pending_review' ? 'amber' : 'green')
-      : 'blue'
+    : j.job_status === 'superseded' ? 'amber'
+      : j.job_status === 'succeeded' ? (PENDING_BUSINESS.has(biz) ? 'amber' : 'green')
+        : 'blue'
   const detail: string[] = [`${SUBSCRIPTION_LABEL[j.state] ?? j.state} · 第 ${j.job_attempts}/${j.job_max_attempts} 次`]
   if (j.job_deadline_at) detail.push(`截止 ${new Date(j.job_deadline_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}`)
   if (j.job_error) detail.push(`原因：${j.job_error}`)

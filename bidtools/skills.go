@@ -10,6 +10,7 @@ const (
 	SkillKnowledgeReuse     = "knowledge-reuse"
 	SkillProposalWriting    = "proposal-writing"
 	SkillProposalReview     = "proposal-review"
+	SkillDiagramGeneration  = "diagram-generation"
 )
 
 // Skills 返回内置招投标专业技能；每个技能解锁其所属的延迟工具（§4.3 阶段 B）。
@@ -78,7 +79,7 @@ func Skills() []tool.Skill {
 		},
 		{
 			Name:        SkillProposalWriting,
-			Description: "技术标章节写作：在已批准大纲下读取章节写作上下文（要求原文、前置章节摘要、证据有效性），编制章节故事板（D3 粉队评审对象），对受控引用标记执行确定性展开，撰写或重写章节草稿并经数据库门禁写回，按需生成章节图表。",
+			Description: "技术标章节写作：在已批准大纲下读取章节写作上下文（要求原文、前置章节摘要、证据有效性），编制章节故事板（D3 粉队评审对象），对受控引用标记执行确定性展开，撰写或重写章节草稿并经数据库门禁写回；需要图表时引用 diagram-generation 技能。",
 			Tools:       []string{ToolSectionReadContext, ToolRequirementBindEvidence, ToolSectionUpsertStoryboard, ToolSectionRenderGrounded, ToolSectionWriteDraft, ToolChartGenerate},
 			Body: `# 技术标章节写作
 
@@ -95,9 +96,30 @@ func Skills() []tool.Skill {
    section_read_context 的返回值（派发时给了 lease_token 也一并传入）。
 7. outcome 为 stale_outline（大纲已在你写作期间被修改）或 conflict_candidate（他人已保存新版本）时，草稿只是候选稿，没有覆盖当前版本：
    不要换个版本号强行重试，重新读取上下文并报告结果，由人工决定是否采用。
-8. 需要图表时（总体架构、实施进度、项目组织、设备选型），在章节草稿写回成功后 SearchExtraTools("select:chart_generate")，
-   按结构化 spec 调用 chart_generate（不要自己写 Mermaid；设备型号、数量等必须来自 usable_evidence）。图表绑定章节当前修订，
-   章节再次修订后旧图表自动失效、不进入导出，需要重新生成。render_status 为 unrendered 表示服务器没有 mermaid-cli，导出时会插入源码占位框。`,
+8. 需要图表时（总体架构、实施进度、项目组织、设备选型），在章节草稿写回成功后调用 Skill("diagram-generation")，按其步骤用
+   chart_render_submit 为章节当前修订提交后台渲染作业（不要自己写 Mermaid；设备型号、数量等必须来自 usable_evidence）。
+   图表绑定提交时的修订，章节再次修订后旧图表自动失效、不进入导出，需要为新修订重新提交。
+   SearchExtraTools("select:chart_generate") 可取得同步兼容工具 chart_generate：它在本次调用内渲染、不登记后台作业，
+   不满足 required_job_kinds=chart_render，新图表一律走 diagram-generation。`,
+		},
+		{
+			Name:        SkillDiagramGeneration,
+			Description: "章节图表生成（proposal-writing 引用）：按结构化规格为章节当前修订提交持久化图表渲染作业（技术架构图、实施甘特图、组织架构图、设备选型表），查询或取消作业；结果以作业事件唤醒当前意图。",
+			Tools:       []string{ToolChartRenderSubmit, ToolChartRenderStatus, ToolChartRenderCancel},
+			Body: `# 章节图表生成
+
+1. 只为已写回成功的章节当前修订生成图表：先用 section_read_context 读取章节，base_rev_no 即章节当前修订号；章节尚无修订时先用 proposal-writing 写草稿。
+2. SearchExtraTools("select:chart_render_submit") 取 Schema，再按结构化 spec 调用 chart_render_submit：
+   chart_type 为 architecture / gantt / org / equipment_table，不要自己写 Mermaid；设备型号、数量、工期、人员等必须来自 usable_evidence 或已确认的承诺台账。
+   expected_rev_no 填章节当前修订号；request_key 自己生成（如 "chart-2.1-architecture-1"），同一次提交重发时复用，改变规格或重新执行时换新键。
+3. accepted=true 后作业在服务器后台渲染。当前意图会在作业结束后被自动唤醒并收到作业事件：期间不要轮询，也不要以相同参数重复提交，本轮总结后即可结束。
+4. 被拒绝（accepted=false）时按 error_code 处理：CONFLICT_STALE_REVISION 重新读取章节后以新键提交；INVALID_ARGUMENT 修正 spec；
+   RUNTIME_UNAVAILABLE 表示服务器没有可用的 mermaid-cli（设备选型表不受影响），record_fact 记录缺口；PRECONDITION_FAILED 表示章节尚无修订或大纲未批准；
+   CAPACITY_BUSY 稍后重试；IDEMPOTENCY_KEY_CONFLICT 换新键。未纠正原因前不要盲目重试。
+5. 收到作业事件后：business_state=chart_ready 表示图表已绑定章节当前修订；chart_stale 或 superseded 表示章节已更新，旧图不进入导出，需按新修订重新提交；
+   failed 时 record_fact 记录失败原因与 error_code。
+6. 查询单个作业：SearchExtraTools("select:chart_render_status") 后调用 chart_render_status（或公共工具 agent_job_status）；
+   不再需要排队或执行中的作业时，SearchExtraTools("select:chart_render_cancel") 后调用 chart_render_cancel 取消，取消后迟到的结果不会写回。`,
 		},
 		{
 			Name:        SkillProposalReview,

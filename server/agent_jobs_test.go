@@ -228,7 +228,11 @@ func TestAgentJobStatusToolAndRoute(t *testing.T) {
 	if got := call(ctx, map[string]any{"job_ref": map[string]any{"kind": db.JobKindTenderParse, "id": foreign}}); !strings.Contains(fmt.Sprint(got["error"]), "SCOPE_VIOLATION") {
 		t.Fatalf("foreign job readable: %v", got)
 	}
-	if got := call(ctx, map[string]any{"job_ref": map[string]any{"kind": "chart_render", "id": ja}}); !strings.Contains(fmt.Sprint(got["error"]), "INVALID_ARGUMENT") {
+	// chart_render（S3）已支持：用固定解析作业的 ID 查询属于类型混用，按越界处理；未实现的类型仍是参数错误。
+	if got := call(ctx, map[string]any{"job_ref": map[string]any{"kind": db.JobKindChartRender, "id": ja}}); !strings.Contains(fmt.Sprint(got["error"]), "SCOPE_VIOLATION") {
+		t.Fatalf("kind confusion readable: %v", got)
+	}
+	if got := call(ctx, map[string]any{"job_ref": map[string]any{"kind": "knowledge_parse", "id": ja}}); !strings.Contains(fmt.Sprint(got["error"]), "INVALID_ARGUMENT") {
 		t.Fatalf("unsupported kind: %v", got)
 	}
 	if got := call(ctx, map[string]any{"intent_id": b}); len(got["jobs"].([]any)) != 1 {
@@ -242,7 +246,10 @@ func TestAgentJobStatusToolAndRoute(t *testing.T) {
 	if st := c.do("GET", fmt.Sprintf("/api/tasks/%d/agent-jobs?intent_id=%d", task.ID, a), nil, &list); st != 200 || len(list) != 1 || list[0].Job.ID != ja {
 		t.Fatalf("route filter: %d %+v", st, list)
 	}
-	if st := c.do("GET", fmt.Sprintf("/api/tasks/%d/agent-jobs?kind=chart_render", task.ID), nil, nil); st != 400 {
+	if st := c.do("GET", fmt.Sprintf("/api/tasks/%d/agent-jobs?kind=knowledge_parse", task.ID), nil, nil); st != 400 {
 		t.Fatalf("route kind validation: %d", st)
+	}
+	if st := c.do("GET", fmt.Sprintf("/api/tasks/%d/agent-jobs?kind=chart_render", task.ID), nil, &list); st != 200 || len(list) != 0 {
+		t.Fatalf("route chart_render filter: %d %+v", st, list)
 	}
 }

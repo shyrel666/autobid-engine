@@ -22,12 +22,15 @@ import (
 
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/db/dbtest"
+	"github.com/autobid/autobid-engine/export/officetest"
 	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/toolhealth"
 )
 
+// requireOffice 先排队再探测：真实文档引擎的用例跨包串行，用例结束才释放，进程快照断言看不到别的包的进程。
 func requireOffice(t *testing.T) Office {
 	t.Helper()
+	officetest.Hold(t)
 	o, err := DetectOffice(context.Background(), OfficeOptions{Engine: os.Getenv("AUTOBID_OFFICE_ENGINE"), Timeout: 3 * time.Minute})
 	if err != nil {
 		t.Skipf("依赖缺失：文档引擎（WPS / Word）不可用，无法验证目录页码刷新与 PDF 版式：%v", err)

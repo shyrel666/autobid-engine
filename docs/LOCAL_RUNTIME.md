@@ -223,6 +223,8 @@ $env:AUTOBID_OFFICE_SOAK = "30"
 go test -count=1 -v -run TestOfficeLargeDocumentAndSoak ./export/
 ```
 
+真实文档引擎用例经 `export/officetest` 跨包排队，默认并行运行即可，不需要 `-p 1`；本机服务运行或自检时不要跑这些用例，它不走这把锁。
+
 真实组件用例（未安装对应组件时跳过）：
 
 | 用例 | WPS 12.1.0.29161 | Word 16.0.20527 |

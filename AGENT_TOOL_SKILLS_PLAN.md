@@ -864,7 +864,12 @@ Recall@20 均为 1（集合太小，必然饱和）。本地模型在该集上�
 **验证结果**：
 
 - `go vet ./...` 通过；真实 PostgreSQL 下 `go test -race -count=1 -p 1 ./...`：**467 条测试 / 子测试通过，0 失败，0 竞态报告**，26 个包通过；4 项可选跳过（`TestOfficeLargeDocumentAndSoak`、`TestLiveModelContract`、两个浏览器用例，需显式环境变量开启）。配置了本机 WPS、mmdc 与 PaddleOCR，真实组件用例实际执行。`TestLiveModelContract` 另用本地模型开启运行并通过。
-- 默认并行的 `go test -race ./...` 有 1 个失败：`TestExportCancelDuringRealRefresh`。该用例快照“调用前已存在的 WPS 自动化进程”并断言它们不被结束，并行时快照到了 `server` 包真实导出启动的进程，后者正常退出即被判失败。单独运行、S6 与未改动的基线代码都通过，`-p 1` 全量通过。这是 S4 用例的跨包竞争，与 S6 无关，未修改；真实导出用例须串行运行（`-p 1`）。
+- S6 收口时，默认并行的 `go test -race ./...` 有 1 个失败：`TestExportCancelDuringRealRefresh`。该用例快照“调用前已存在的 WPS 自动化进程”并断言它们不被结束，并行时快照到了 `server` 包真实导出启动的进程，后者正常退出即被判失败。单独运行、S6 与未改动的基线代码都通过，`-p 1` 全量通过。这是 S4 用例的跨包竞争，与 S6 无关。
+- 2026-11-06 修复上述竞争，`-p 1` 不再需要：
+  - 新增 `export/officetest.Hold`（本机范围的文件锁，持锁进程退出即释放）。`requireOffice` / `requireOfficeEngine` 在探测引擎前取锁，用例结束释放。
+  - 断言没有放宽，调用前已存在的进程仍全部受保护。选择串行，而不是只保护非自动化进程，是因为残留检查同样会看到别的包的进程，`office_com.ps1` 与 `sweep` 也按时间窗回收自动化进程。
+  - 配置真实 WPS 与 mmdc，不带 `-p 1` 的 `go test -race -count=1 ./export/... ./server/...` 连续 3 次通过（每次 99 通过、0 失败、0 竞态）。修复前同一命令复现了该失败。
+  - 全量 `go test -race -count=1 ./...` 并行 3 次（未配置 PaddleOCR），真实引擎用例全部通过：2 次全绿（456 通过），1 次 `retrieval` 的 `TestConcurrentResearchSharedBudgetAndGates` 失败。该失败是独立问题：同键并发请求晚于 run 结束时，`Coordinator.Run` 在 `retrieval/research.go:176` 的 `EnsureRetrievalJobs` 上返回 conflict；只在高负载下出现，单独重复 40 次通过，本次未修改。
 - 新增测试 43 个函数，覆盖约定的全部场景：`retrieval/s6_test.go`、`s6_providers_test.go`、`db/knowledge_index_jobs_test.go`、`server/s6_retrieval_test.go`、`bidtools/s6_retrieval_test.go`、`toolhealth/s6_test.go`。
 - 前端 `npm --prefix web run build` 通过；`test:unit` 94/94 通过（S6 新增 55 条）。本地模型 `test_service.py` 9/9 通过（真实模型）。
 - **真实组件演练**（真实服务二进制 + 隔离库 + 真实模型服务 + 3 份真实招标 DOCX，973 个分块），42 项通过：

@@ -93,4 +93,4 @@ Windows amd64，本机真实 PostgreSQL，真实 WPS、mmdc、PaddleOCR。连接
 | 真实百炼切换与回滚 | 7 项通过，用量约 300 token |
 | 旧库升级演练 | 通过；再次迁移幂等 |
 
-模型报告：[`synthetic-local-models.json`](synthetic-local-models.json)。合成集的 nDCG 没有显示本地模型优于词法基线，不构成业务质量证据。默认并行运行时 `TestExportCancelDuringRealRefresh` 存在跨包竞争，见 [`AGENT_TOOL_SKILLS_PLAN.md`](../../../AGENT_TOOL_SKILLS_PLAN.md) 12.10。
+模型报告：[`synthetic-local-models.json`](synthetic-local-models.json)。合成集的 nDCG 没有显示本地模型优于词法基线，不构成业务质量证据。当时默认并行运行 `TestExportCancelDuringRealRefresh` 存在跨包竞争，2026-11-06 已修复，见 [`AGENT_TOOL_SKILLS_PLAN.md`](../../../AGENT_TOOL_SKILLS_PLAN.md) 12.10。

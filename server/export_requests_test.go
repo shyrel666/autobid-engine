@@ -27,12 +27,15 @@ import (
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/db/dbtest"
 	"github.com/autobid/autobid-engine/export"
+	"github.com/autobid/autobid-engine/export/officetest"
 	"github.com/autobid/autobid-engine/internal/llm"
 	"github.com/autobid/autobid-engine/internal/tool"
 )
 
+// requireOfficeEngine 先排队再探测：与 export 包的真实引擎用例跨包串行，见 export/officetest。
 func requireOfficeEngine(t *testing.T) export.Office {
 	t.Helper()
+	officetest.Hold(t)
 	o, err := export.DetectOffice(context.Background(), export.OfficeOptions{Engine: os.Getenv("AUTOBID_OFFICE_ENGINE"), Timeout: 3 * time.Minute})
 	if err != nil {
 		t.Skipf("依赖缺失：文档引擎（WPS / Word）不可用，无法验证最终稿：%v", err)

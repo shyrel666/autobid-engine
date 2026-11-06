@@ -105,8 +105,12 @@ func (c *Coordinator) Run(ctx context.Context, t string, taskID int64, actor str
 	work = withBudget(work, run)
 	// Planning is itself a leased job: retries cannot spawn a second different set of workers.
 	planSpec, _ := json.Marshal(Facet{Query: req.Question, Role: "planner"})
-	if err = c.Service.DB.EnsureRetrievalJobs(work, run.TenantID, run.ID, []json.RawMessage{planSpec}); err != nil && work.Err() == nil {
+	ended, err := c.ensureJobs(ctx, work, run, []json.RawMessage{planSpec})
+	if err != nil {
 		return ResearchResult{}, err
+	}
+	if ended {
+		return c.result(ctx, run)
 	}
 	jobs, err := c.Service.DB.RetrievalJobs(ctx, run.TenantID, run.ID)
 	if err != nil {
@@ -173,10 +177,14 @@ func (c *Coordinator) Run(ctx context.Context, t string, taskID int64, actor str
 			b, _ := json.Marshal(f)
 			specs = append(specs, b)
 		}
-		if err = c.Service.DB.EnsureRetrievalJobs(work, run.TenantID, run.ID, specs); err != nil {
+		if ended, err = c.ensureJobs(ctx, work, run, specs); err != nil {
 			return ResearchResult{}, err
 		}
-		jobs, err = c.Service.DB.RetrievalJobs(work, run.TenantID, run.ID)
+		if ended {
+			return c.result(ctx, run)
+		}
+		// Reads use ctx: work may already have ended, and the claims below then fail harmlessly.
+		jobs, err = c.Service.DB.RetrievalJobs(ctx, run.TenantID, run.ID)
 		if err != nil {
 			return ResearchResult{}, err
 		}
@@ -203,16 +211,51 @@ func (c *Coordinator) Run(ctx context.Context, t string, taskID int64, actor str
 			return ResearchResult{}, workerErr
 		}
 	}
+	return c.finish(ctx, run, req)
+}
+
+// ensureJobs inserts the run's jobs idempotently. Any same-key request can end the run after
+// CreateRetrievalRun returned it as running, so a conflict here is a replay that lost that race,
+// not a failure: ended=true sends the caller to the stored result. A same-key request with other
+// parameters never gets this far, CreateRetrievalRun rejects it. Once work has expired or been
+// cancelled nothing more can be scheduled; that is not an error either, and the caller carries on
+// so that finish can record the deadline.
+func (c *Coordinator) ensureJobs(ctx, work context.Context, run *db.RetrievalRun, specs []json.RawMessage) (ended bool, err error) {
+	err = c.Service.DB.EnsureRetrievalJobs(work, run.TenantID, run.ID, specs)
+	if errors.Is(err, db.ErrRetrievalConflict) {
+		// ctx, not work: the conflict decides the outcome even if work expired meanwhile.
+		current, e := c.Service.DB.GetRetrievalRun(ctx, run.TenantID, run.ID)
+		if e != nil {
+			return false, e
+		}
+		if current.Status != "running" {
+			return true, nil
+		}
+		return false, err
+	}
+	if work.Err() != nil {
+		return false, nil
+	}
+	return false, err
+}
+
+// finish aggregates the run and ends it once no job can still change the outcome.
+func (c *Coordinator) finish(ctx context.Context, run *db.RetrievalRun, req ResearchRequest) (ResearchResult, error) {
 	endCtx, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
-	if err = c.Service.DB.ExpireRetrievalJobs(endCtx, run.TenantID, run.ID); err != nil {
+	if err := c.Service.DB.ExpireRetrievalJobs(endCtx, run.TenantID, run.ID); err != nil {
 		return ResearchResult{}, err
 	}
 	result, err := c.result(endCtx, run)
 	if err != nil {
 		return result, err
 	}
-	pending := false
+	expired := time.Now().After(run.Deadline)
+	// The plan and its children are written in two steps, and a valid plan has at least one
+	// child. A concurrent replay that read the plan as running can land between those steps;
+	// ending the run there would drop the whole plan, so wait unless the deadline has passed.
+	// A plan owner that crashed in this gap is recovered by the next replay.
+	pending := !expired && len(result.Jobs) == 1 && result.Jobs[0].Status == "completed"
 	failed := false
 	for _, j := range result.Jobs {
 		if j.Status == "pending" || j.Status == "running" {
@@ -229,7 +272,7 @@ func (c *Coordinator) Run(ctx context.Context, t string, taskID int64, actor str
 	if !failed && len(result.Gaps) == 0 && len(result.Evidence) > 0 && req.Claim != nil && req.Question == req.Claim.Text && len(result.Jobs) == 2 {
 		status = "completed"
 	}
-	if time.Now().After(run.Deadline) {
+	if expired {
 		status = "budget_exhausted"
 	}
 	result.Status = status

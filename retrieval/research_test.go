@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -98,6 +99,208 @@ func TestConcurrentResearchSharedBudgetAndGates(t *testing.T) {
 	if run.UsedCalls > 3 || run.ReservedTokens > 30000 {
 		t.Fatalf("budget overflow %+v", run)
 	}
+}
+
+type reasonerFunc func(context.Context, string, bool) (string, int, error)
+
+func (f reasonerFunc) Decide(ctx context.Context, prompt string, planner bool) (string, int, error) {
+	return f(ctx, prompt, planner)
+}
+
+// stagedRun stores the run Coordinator.Run would create for req, so a test can set its state first.
+func stagedRun(t *testing.T, s *Service, tenant string, req ResearchRequest, deadline time.Time) *db.RetrievalRun {
+	t.Helper()
+	req.Query.TenantID = tenant
+	req.Query.Limit = 8
+	raw, _ := json.Marshal(req)
+	run, _, err := s.DB.CreateRetrievalRun(context.Background(), db.RetrievalRun{TenantID: tenant, RequestKey: req.Key, Request: raw, Kind: "research", MaxCalls: 24, MaxTokens: 48000, Deadline: deadline}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// holdRunKeyLock stalls EnsureRetrievalJobs, whose FOR UPDATE conflicts with FOR KEY SHARE, and
+// nothing else: the budget, usage and finish writes on the run row do not touch its key.
+func holdRunKeyLock(t *testing.T, s *Service, tenant, requestKey string) *sql.Tx {
+	t.Helper()
+	lock, err := s.DB.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Rollback() })
+	var id int64
+	if err = lock.QueryRow(`SELECT id FROM retrieval_runs WHERE tenant_id=$1 AND request_key=$2 FOR KEY SHARE`, tenant, requestKey).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return lock
+}
+
+func awaitBlockedBy(t *testing.T, s *Service, lock *sql.Tx) {
+	t.Helper()
+	var pid int
+	if err := lock.QueryRow(`SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		var blocked int
+		if err := s.DB.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, pid).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked > 0 {
+			return
+		}
+	}
+	t.Fatal("Run never reached EnsureRetrievalJobs")
+}
+
+// A replay that read the run as running must return the result when another request ends it.
+func TestReplayReturnsRunEndedBeforePlanJobEnsured(t *testing.T) {
+	s, tenant, _ := fixture(t)
+	ctx := context.Background()
+	c := &Coordinator{Service: s}
+	req := ResearchRequest{Key: "late-plan", Question: "恢复时间"}
+	run := stagedRun(t, s, tenant, req, time.Now().Add(time.Minute))
+	lock := holdRunKeyLock(t, s, tenant, req.Key)
+	type outcome struct {
+		result ResearchResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, err := c.Run(ctx, tenant, 0, "test", req)
+		done <- outcome{r, err}
+	}()
+	awaitBlockedBy(t, s, lock)
+	if _, err := lock.Exec(`UPDATE retrieval_runs SET status='partial',finished_at=now() WHERE id=$1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.err != nil || got.result.RunID != run.ID || got.result.Status != "partial" {
+		t.Fatalf("%+v %v", got.result, got.err)
+	}
+	req.Question = "different"
+	if _, err := c.Run(ctx, tenant, 0, "test", req); !errors.Is(err, db.ErrRetrievalConflict) {
+		t.Fatal("same key with other parameters must stay a conflict", err)
+	}
+}
+
+func TestRunEndedBeforeChildJobsEnsuredReturnsResult(t *testing.T) {
+	s, tenant, _ := fixture(t)
+	req := ResearchRequest{Key: "late-children", Question: "恢复和质保", Multi: true}
+	c := &Coordinator{Service: s, MultiEnabled: true, Reasoner: reasonerFunc(func(ctx context.Context, _ string, _ bool) (string, int, error) {
+		_, err := s.DB.ExecContext(ctx, `UPDATE retrieval_runs SET status='partial',finished_at=now() WHERE tenant_id=$1 AND request_key=$2`, tenant, req.Key)
+		return `{"facets":[{"query":"恢复时间","domain":"knowledge","role":"product"}]}`, 10, err
+	})}
+	r, err := c.Run(context.Background(), tenant, 0, "test", req)
+	if err != nil || r.Status != "partial" || len(r.Jobs) != 1 {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+
+// planOwnerBeforeChildren leaves the run where the plan owner stands between its two writes.
+func planOwnerBeforeChildren(t *testing.T, s *Service, tenant string, run *db.RetrievalRun, req ResearchRequest) []json.RawMessage {
+	t.Helper()
+	ctx := context.Background()
+	plan, _ := json.Marshal(Facet{Query: req.Question, Role: "planner"})
+	if err := s.DB.EnsureRetrievalJobs(ctx, tenant, run.ID, []json.RawMessage{plan}); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := s.DB.RetrievalJobs(ctx, tenant, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.DB.ClaimRetrievalJob(ctx, tenant, jobs[0].ID, jobLease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facet := Facet{Query: req.Question, Domain: "knowledge", Role: "researcher"}
+	if err = s.DB.FinishRetrievalJob(ctx, tenant, jobs[0].ID, token, "completed", []Facet{facet}); err != nil {
+		t.Fatal(err)
+	}
+	child, _ := json.Marshal(facet)
+	return []json.RawMessage{plan, child}
+}
+
+// A replay that read the plan as running can aggregate inside this gap. Ending the run there
+// dropped the plan: the run closed with no evidence and the owner then failed with a conflict.
+func TestReplayCannotEndRunBetweenPlanAndChildJobs(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		ownerStaysUp bool
+	}{{"owner writes children", true}, {"owner crashed", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, tenant, _ := fixture(t)
+			ctx := context.Background()
+			c := &Coordinator{Service: s}
+			req := ResearchRequest{Key: "plan-gap", Question: "恢复时间"}
+			run := stagedRun(t, s, tenant, req, time.Now().Add(time.Minute))
+			specs := planOwnerBeforeChildren(t, s, tenant, run, req)
+			r, err := c.finish(ctx, run, req)
+			if err != nil || r.Status != "running" {
+				t.Fatalf("%+v %v", r, err)
+			}
+			other := req
+			other.Question = "different"
+			if _, err = c.Run(ctx, tenant, 0, "test", other); !errors.Is(err, db.ErrRetrievalConflict) {
+				t.Fatal("same key with other parameters must stay a conflict", err)
+			}
+			if tc.ownerStaysUp {
+				if err = s.DB.EnsureRetrievalJobs(ctx, tenant, run.ID, specs); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r, err = c.Run(ctx, tenant, 0, "test", req)
+			if err != nil || r.Status != "partial" || len(r.Jobs) != 2 || r.Jobs[1].Status != "completed" {
+				t.Fatalf("%+v %v", r, err)
+			}
+		})
+	}
+}
+
+func TestDeadlineEndsRunStuckBetweenPlanAndChildJobs(t *testing.T) {
+	s, tenant, _ := fixture(t)
+	req := ResearchRequest{Key: "plan-gap-deadline", Question: "恢复时间"}
+	run := stagedRun(t, s, tenant, req, time.Now().Add(time.Minute))
+	planOwnerBeforeChildren(t, s, tenant, run, req)
+	if _, err := s.DB.Exec(`UPDATE retrieval_runs SET deadline=now()-interval '1 second' WHERE id=$1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	r, err := (&Coordinator{Service: s}).Run(context.Background(), tenant, 0, "test", req)
+	if err != nil || r.Status != "budget_exhausted" {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+
+// The deadline expiring inside either ensure call ends the run the same way: not as a raw error.
+func TestDeadlineWhileEnsuringJobsEndsRun(t *testing.T) {
+	const window = 500 * time.Millisecond
+	t.Run("plan", func(t *testing.T) {
+		s, tenant, _ := fixture(t)
+		req := ResearchRequest{Key: "deadline-plan", Question: "恢复时间"}
+		stagedRun(t, s, tenant, req, time.Now().Add(window))
+		holdRunKeyLock(t, s, tenant, req.Key)
+		r, err := (&Coordinator{Service: s}).Run(context.Background(), tenant, 0, "test", req)
+		if err != nil || r.Status != "budget_exhausted" {
+			t.Fatalf("%+v %v", r, err)
+		}
+	})
+	t.Run("children", func(t *testing.T) {
+		s, tenant, _ := fixture(t)
+		req := ResearchRequest{Key: "deadline-children", Question: "恢复和质保", Multi: true}
+		// Planning passed the first ensure, so the lock can only stall the second one.
+		c := &Coordinator{Service: s, MultiEnabled: true, Duration: window, Reasoner: reasonerFunc(func(context.Context, string, bool) (string, int, error) {
+			holdRunKeyLock(t, s, tenant, req.Key)
+			return `{"facets":[{"query":"恢复时间","domain":"knowledge","role":"product"}]}`, 10, nil
+		})}
+		r, err := c.Run(context.Background(), tenant, 0, "test", req)
+		if err != nil || r.Status != "budget_exhausted" {
+			t.Fatalf("%+v %v", r, err)
+		}
+	})
 }
 
 func TestRestartRecoveryAndCancellation(t *testing.T) {

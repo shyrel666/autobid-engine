@@ -869,7 +869,22 @@ Recall@20 均为 1（集合太小，必然饱和）。本地模型在该集上�
   - 新增 `export/officetest.Hold`（本机范围的文件锁，持锁进程退出即释放）。`requireOffice` / `requireOfficeEngine` 在探测引擎前取锁，用例结束释放。
   - 断言没有放宽，调用前已存在的进程仍全部受保护。选择串行，而不是只保护非自动化进程，是因为残留检查同样会看到别的包的进程，`office_com.ps1` 与 `sweep` 也按时间窗回收自动化进程。
   - 配置真实 WPS 与 mmdc，不带 `-p 1` 的 `go test -race -count=1 ./export/... ./server/...` 连续 3 次通过（每次 99 通过、0 失败、0 竞态）。修复前同一命令复现了该失败。
-  - 全量 `go test -race -count=1 ./...` 并行 3 次（未配置 PaddleOCR），真实引擎用例全部通过：2 次全绿（456 通过），1 次 `retrieval` 的 `TestConcurrentResearchSharedBudgetAndGates` 失败。该失败是独立问题：同键并发请求晚于 run 结束时，`Coordinator.Run` 在 `retrieval/research.go:176` 的 `EnsureRetrievalJobs` 上返回 conflict；只在高负载下出现，单独重复 40 次通过，本次未修改。
+  - 全量 `go test -race -count=1 ./...` 并行 3 次（未配置 PaddleOCR），真实引擎用例全部通过：2 次全绿（456 通过），1 次 `retrieval` 的 `TestConcurrentResearchSharedBudgetAndGates` 失败。该失败是独立问题：`Coordinator.Run` 在第二次 `EnsureRetrievalJobs` 上返回 conflict；只在高负载下出现，单独重复 40 次通过，本次未修改，已在下一条修复。
+- 2026-11-06 修复上述 `retrieval` 失败（`retrieval/research.go`）：
+  - **实际有两个时序**，都走单 Agent 也用的同键重放路径，与多 Agent 开关无关。打点记录的 62 次 conflict 中：
+    - 32 次为 `run=partial jobs=1`：写计划与写子任务是两步。并发重放读到规划任务 `running` 后进入汇总，此时规划已完成、子任务尚未写入，于是提前结束了 run。这个 run 只有规划任务，没有证据；规划持有者随后才在写子任务时拿到 conflict。
+    - 30 次为 `jobs=4`：请求晚于 run 结束，这才是最初判断的时序。
+    - 只把 conflict 改成返回结果，前一种会变成静默的 `partial`。
+  - **修复**：
+    - `ensureJobs` 统一两处调用：conflict 时重读 run，已结束就返回 `c.result`；`work` 到期或被取消不算错误，继续收尾。原先第二次调用会把到期直接作为错误返回，现在两处一致，到期时 run 以 `budget_exhausted` 结束。
+    - `finish`（原 `Run` 尾部）在“规划已完成、子任务未写入”时不结束 run，过了截止时间除外。规划持有者在此窗口崩溃时，由下一次重放补齐子任务。
+    - 同键异参仍由 `CreateRetrievalRun` 返回 conflict；预算、租约与门禁未改。
+  - **可见的行为变化**：在途请求遇到 run 被取消时，返回 `status=cancelled` 的结果，不再是 409。调用方恰好在上述窗口内取消时，run 保持 `running` 等待重放，不再以 `partial` 结束；不重放就不会后台收尾，这与现有恢复方式一致。
+  - **干扰项**：同时出现的 `db: not found`、`sql: no rows in result set` 与 `Status:running` 不是产品问题。Windows 上 `UnixNano` 跨进程常相同（12 个进程的 480 个时间戳只有 102 个不同值），副本共用租户并在清理时互删数据。`fixture` 的租户加入进程号后，这些失败全部消失。
+  - **验证**：
+    - 12 副本 × 25 次：修复前 84/2700 失败，全部是 conflict；修复后 3000/3000 通过，0 竞态。24 副本超过 PostgreSQL 连接上限，不作为结果。
+    - `retrieval/research_test.go` 新增 5 个确定性用例，不加生产钩子：用 `FOR KEY SHARE` 行锁让 `Run` 停在 `EnsureRetrievalJobs`，或由替身 Reasoner 在规划中结束 run；计划与子任务之间的窗口用例先构造该状态，再直接调用 `finish`。逐项撤销修复时，相应用例均失败。
+    - `go vet ./...` 通过；全量 `go test -race -count=1 ./...` 连续 3 次通过。后 2 次统计为 461 通过、0 失败、0 竞态、12 跳过；真实 WPS 用例实际执行，mmdc 与 PaddleOCR 未配置，相应用例跳过。
 - 新增测试 43 个函数，覆盖约定的全部场景：`retrieval/s6_test.go`、`s6_providers_test.go`、`db/knowledge_index_jobs_test.go`、`server/s6_retrieval_test.go`、`bidtools/s6_retrieval_test.go`、`toolhealth/s6_test.go`。
 - 前端 `npm --prefix web run build` 通过；`test:unit` 94/94 通过（S6 新增 55 条）。本地模型 `test_service.py` 9/9 通过（真实模型）。
 - **真实组件演练**（真实服务二进制 + 隔离库 + 真实模型服务 + 3 份真实招标 DOCX，973 个分块），42 项通过：

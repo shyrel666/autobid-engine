@@ -38,7 +38,8 @@ func database(t *testing.T) *db.DB {
 func fixture(t *testing.T) (*Service, string, int64) {
 	t.Helper()
 	pg := database(t)
-	tenant := fmt.Sprintf("retrieval-%d", time.Now().UnixNano())
+	// UnixNano alone collides across processes on Windows; parallel test binaries need the pid.
+	tenant := fmt.Sprintf("retrieval-%d-%d", os.Getpid(), time.Now().UnixNano())
 	doc := &db.KnowledgeDocument{TenantID: tenant, Title: "恢复服务", Category: db.KnowledgeProductSpec, RawText: "synthetic recovery spec", Extra: json.RawMessage(`{"product":"X-1","version":"v1","valid_from":"2026-01-01","valid_until":"2027-01-01"}`)}
 	id, _, err := pg.InsertKnowledgeDocument(context.Background(), doc, []db.KnowledgeChunk{{Seq: 0, Content: "恢复时间：0.5分钟", SectionTitle: "恢复时间", SectionPath: "技术参数", Tables: json.RawMessage(`[]`)}, {Seq: 1, Content: "质保期：2年", SectionTitle: "质保期", Tables: json.RawMessage(`[]`)}}, db.DefaultEmbedder())
 	if err != nil {

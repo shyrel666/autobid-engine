@@ -52,6 +52,13 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
 - [x] E **导出文档引擎替换为 WPS / Word**（2026-11-03 实施，同日随 [`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S1 收口：多作业排队、140 页大文档、WPS 30 次 / Word 15 次连续刷新与中途取消清理均在本机通过，引擎内并发保持 1，真实企业模板待用户提供）：原导出引擎及其代码、配置、文档与本地诊断文件已全部移除；`export/office.go` 定义文档引擎接口与启动自检，`office_windows.go` + `office_com.ps1` 经 COM 自动化刷新目录、另存 DOCX、导出 PDF，`AUTOBID_OFFICE_ENGINE=auto` 时 WPS 优先、Word 备选；同时校准回读自检（行尾空格、行末压缩标点不算越界）并修正 ★/▲ 字体回退。开发机（Windows 11 + 本机 WPS / Word）实测通过，真实 PostgreSQL 全量竞态 315 条通过、0 失败，两个真实导出用例在 WPS 下通过（运行与验收以本机为准），详见 [`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) 6.1 / 12.5。
 - [x] E **Agent 后台作业订阅与回合状态机**（2026-11-03，[`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S2）：`agent_job_subscriptions` / `agent_job_events` 与作业表终态触发器，`db/agent_jobs.go` 的同事务订阅、原子回合收尾（open / blocked+waiting_job / done / blocked）、唤醒扫描与按 transcript 确认事件；公共只读工具 `agent_job_status`、`GET /api/tasks/{id}/agent-jobs` 与执行页“等待后台处理”。真实 PostgreSQL 全量竞态 350 条通过、0 失败，前端构建与单测 23/23 通过，浏览器验收通过（详见该计划 12.6）。只交付框架，尚无提交类工具（S3/S4/S5a）；不改变 D0~D5 的 V/P 状态。
 - [x] E **图表 Skill 与持久化渲染作业**（2026-11-04，[`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S3）：`chart_render_jobs`（请求幂等、执行版本与期限首次提交固定、租约围栏、终态不可改写、superseded）与 `db/chart_jobs.go` / `export/chart_jobs.go` 的提交、领取、写回、取消与暂停围栏；新技能 `diagram-generation`（`chart_render_submit` / `status` / `cancel`）同事务订阅当前意图，HTTP 章节 Writer 草稿的图表计划与修订同事务登记；`/api/tasks/{id}/chart-jobs*` 与章节图表卡片的异步生成、取消、重试和旧修订分组。真实 PostgreSQL 全量竞态 366 条通过、0 失败，真实 mmdc 渲染两条写作路径的图表，前端构建与单测 28/28 通过，浏览器验收通过（详见该计划 12.7）。图表内容正确性未经外部评审；不改变 D0~D5 的 V/P 状态。
+- [x] E **检索部署**（2026-11-06，[`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S6）：
+  - **索引**：持久化构建作业（租约、断点接续、取消、幂等、尝试与截止预算），重建按内容指纹复用向量，启用前核对模型 / 维度 / 预处理，构建、启用、回滚、模型变更全部留审计。
+  - **模型**：运行中失败与恢复写入运行能力状态，模型挂起时只降级不报错，服务商用量写入运行记录，`INFO_URL` 核对服务端实际修订；可选本地模型包 `tools/local-models` 默认关闭。
+  - **回显**：`/api/knowledge/retrieval-status` 与 `tool_runtime_status` 同源；知识库与证据检索页用业务语言显示状态、降级原因与下一步，技术信息只在诊断详情。
+  - **真实数据修复**：表格含 `<`、`>`、`&` 时检索报错；研究的重排占满预算导致补查走不到。
+  - **验证**：真实 PostgreSQL 串行全量竞态 467 条通过、0 失败（真实 WPS、mmdc、PaddleOCR）；真实组件故障演练 42 项 + 百炼 7 项通过；旧库升级演练通过；前端单测 94/94，浏览器验收通过（详见该计划 12.10）。
+  - **边界**：合成集上本地模型未优于词法基线，默认配置与单 Agent 不变；检索质量没有结论，不改变 D0~D5 的 V/P 状态。
 - [x] E **招标解析 Skill、候选模式与本机 PaddleOCR**（2026-11-04，[`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S5a）：
   - **候选与人工审定**：`file_processing_records` 的候选模式、解析配置 / 版本与拒绝状态（候选不可改写）；导入候选不写正式文档、不推进来源 epoch，人工采用后同事务 `PersistTender` 并推进 epoch，拒绝须写原因。
   - **解析路由与执行版本**：`fixed_file_jobs.executor` 首次提交固定解析路由与 OCR 执行版本（auto / native / ocr_only，enhanced_pdf 未交付）；OCR 版本变化以 `RUNTIME_UNAVAILABLE` 失败，暂时不可达在原期限与尝试预算内重试。

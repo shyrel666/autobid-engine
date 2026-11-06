@@ -101,6 +101,11 @@ func kbResult(hits []db.KnowledgeHit, meta ...retrieval.Result) tool.Result {
 		out["degraded"] = meta[0].Degraded
 		out["strategy"] = meta[0].Strategy
 		out["verification"] = "unverified: retrieval relevance is not evidence of compliance"
+		out["retrieval_mode"] = meta[0].Diagnostics.Mode
+		out["index_state"] = meta[0].Diagnostics.IndexState
+		if meta[0].Diagnostics.Mode == "lexical_only" {
+			out["degraded_note"] = "semantic channel unavailable; only full-text and keyword recall ran. No hits does not prove the knowledge base lacks the content."
+		}
 	}
 	return tool.JSON(out)
 }

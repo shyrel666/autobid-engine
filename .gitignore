@@ -50,3 +50,10 @@ Thumbs.db
 /tools/paddleocr/models/
 /tools/paddleocr/.paddlex-cache/
 /tools/paddleocr/__pycache__/
+
+# Local semantic model pack (installed from tools/local-models/models.lock.json, see docs/LOCAL_RUNTIME.md)
+/tools/local-models/.venv/
+/tools/local-models/models/
+/tools/local-models/.pipcache/
+/tools/local-models/.s6/
+/tools/local-models/__pycache__/

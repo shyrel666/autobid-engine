@@ -859,7 +859,38 @@ export interface TaskReport {
 }
 export interface RetrievalResult {
   total: number; hits: KnowledgeHit[]; run_id: number; evidence_ids: number[] | null
-  degraded: string[]; index_id: number; strategy: string; cached: boolean
+  degraded: string[] | null; index_id: number; strategy: string; cached: boolean
+  diagnostics: RetrievalDiagnostics
+}
+export interface RetrievalDiagnostics {
+  mode: 'hybrid' | 'lexical_only'
+  embedding_model?: string; reranker_model?: string; preprocessing?: string
+  index_state: RetrievalIndexState
+  fused_candidates: number; reranked_candidates: number
+  failures?: Record<string, string>
+}
+export type RetrievalState = 'semantic' | 'degraded' | 'lexical_only' | 'empty'
+export type RetrievalIndexState = 'current' | 'unconfigured' | 'missing' | 'model_changed' | 'dimension_changed' | 'preprocessing_changed' | 'documents_changed'
+export type KnowledgeIndexStatus = 'queued' | 'building' | 'ready' | 'failed' | 'cancelled'
+export type KnowledgeIndexState = 'current' | 'rollback_ready' | 'documents_changed' | 'model_mismatch' | 'dimension_mismatch' | 'preprocessing_mismatch' | 'queued' | 'building' | 'failed' | 'cancelled'
+export interface RetrievalModelInfo {
+  id: string; name: string; revision: string; format: string
+  dimension?: number; hosting: 'local' | 'remote' | ''; timeout_seconds: number
+  max_candidates?: number; tokens_used: number; served_version?: string
+}
+export interface RetrievalModelStatus {
+  configured: boolean
+  health: RuntimeCapabilityStatus
+  info?: RetrievalModelInfo
+}
+export interface RetrievalStatus {
+  state: RetrievalState; reasons: string[] | null; index_state: RetrievalIndexState
+  epoch: number; chunks: number; strategy: string; preprocessing: string
+  multi_agent_enabled: boolean
+  embedding: RetrievalModelStatus; reranker: RetrievalModelStatus
+  active_index?: KnowledgeIndex; active_build?: KnowledgeIndex
+  indexes: KnowledgeIndexView[] | null
+  checked_at: string
 }
 export interface EvidenceClaim {
   text: string; parameter: string; operator: string; value: number; unit: string
@@ -873,8 +904,26 @@ export interface RetrievalEvidence {
   claim: { verdict?: { quote?: string; table?: number; row?: number; column?: number } }
 }
 export interface KnowledgeIndex {
-  id: number; model: string; dimension: number; preprocessing: string; epoch: number
-  status: string; active: boolean; error: string
+  id: number; tenant_id: string; model: string; dimension: number; preprocessing: string; epoch: number
+  status: KnowledgeIndexStatus; active: boolean; error: string
+  request_key: string; total_chunks: number; embedded_chunks: number; reused_chunks: number
+  reused_from?: number | null; attempts: number; max_attempts: number
+  deadline_at?: string | null; retry_after?: string | null; error_code: string
+  started_at?: string | null; finished_at?: string | null
+  activated_at?: string | null; activated_by: string; updated_at: string
+  created_at?: string; created_by?: string; updated_by?: string; approved_by?: string
+}
+export interface KnowledgeIndexView extends KnowledgeIndex {
+  state: KnowledgeIndexState; can_activate: boolean; can_delete: boolean
+}
+export interface KnowledgeIndexBuildRequest { request_key: string; dimension?: number }
+export interface KnowledgeIndexBuildResponse { index: KnowledgeIndex; replayed: boolean }
+export interface KnowledgeIndexEvent {
+  id: number; tenant_id: string; index_id: number
+  event: 'build_requested' | 'build_ready' | 'build_failed' | 'build_cancelled' | 'activated' | 'rolled_back' | 'deleted' | 'model_configured'
+  from_index_id?: number | null; model: string; dimension: number
+  detail: Record<string, unknown>; created_at: string
+  created_by: string; updated_by: string; approved_by: string
 }
 export interface ResearchRequest {
  request_key: string; question: string; multi_agent?: boolean
@@ -883,6 +932,8 @@ export interface ResearchRequest {
 export interface RetrievalRun {
  id: number; status: string; kind: string; request: ResearchRequest
  used_calls: number; max_calls: number; reserved_tokens: number; max_tokens: number; deadline: string
+ actual_tokens: number
+ result?: { degraded?: string[] | null; gaps?: string[] | null; diagnostics?: RetrievalDiagnostics }
 }
 
 // ---------------------------------------------------------------------------

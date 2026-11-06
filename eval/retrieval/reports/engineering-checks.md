@@ -78,3 +78,19 @@ race 使用临时便携 gcc，配置方法与已校验官方 SHA-256 见 ../READ
 | `server/task_llm.go` | `2bdabb6b2ba010f020506efb888ba6e0d2fc3e25e72ca83e266e14a4485efb5c` |
 | `web/src/components/RetrievalEvidence.tsx` | `b3d77c8dada0d8ca73e3eb8b6ea35e28319c317eb4278117ad4abfe27a018e64` |
 | `web/src/pages/task/ResearchTab.tsx` | `90efd8f22e07b855460162957548f386911b3bbe87a86f9a8c2fdb3a1e019178` |
+
+## S6 检索部署检查（2026-11-06）
+
+Windows amd64，本机真实 PostgreSQL，真实 WPS、mmdc、PaddleOCR。连接信息不进入报告。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go vet ./...` | 退出码 0 |
+| `go test -race -count=1 -p 1 ./...` | 467 个测试 / 子测试通过，0 失败，0 竞态报告；4 项可选跳过（文档引擎长稳、真实模型契约、两个浏览器用例） |
+| `npm --prefix web run build` / `test:unit` | 通过；94/94 |
+| `tools/local-models/test_service.py` | 9/9（真实模型） |
+| 真实组件故障演练 | 42 项通过（本地模型 + 3 份真实招标 DOCX，973 个分块） |
+| 真实百炼切换与回滚 | 7 项通过，用量约 300 token |
+| 旧库升级演练 | 通过；再次迁移幂等 |
+
+模型报告：[`synthetic-local-models.json`](synthetic-local-models.json)。合成集的 nDCG 没有显示本地模型优于词法基线，不构成业务质量证据。默认并行运行时 `TestExportCancelDuringRealRefresh` 存在跨包竞争，见 [`AGENT_TOOL_SKILLS_PLAN.md`](../../../AGENT_TOOL_SKILLS_PLAN.md) 12.10。

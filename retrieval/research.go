@@ -29,12 +29,13 @@ type Facet struct {
 	Role   string `json:"role"`
 }
 type ResearchResult struct {
-	Degraded []string               `json:"degraded"`
-	RunID    int64                  `json:"run_id"`
-	Status   string                 `json:"status"`
-	Jobs     []db.RetrievalJob      `json:"jobs"`
-	Evidence []db.RetrievalEvidence `json:"evidence"`
-	Gaps     []string               `json:"gaps"`
+	Diagnostics *Diagnostics           `json:"diagnostics,omitempty"`
+	Degraded    []string               `json:"degraded"`
+	RunID       int64                  `json:"run_id"`
+	Status      string                 `json:"status"`
+	Jobs        []db.RetrievalJob      `json:"jobs"`
+	Evidence    []db.RetrievalEvidence `json:"evidence"`
+	Gaps        []string               `json:"gaps"`
 }
 type Coordinator struct {
 	Service      *Service
@@ -251,6 +252,7 @@ func (c *Coordinator) worker(ctx context.Context, run *db.RetrievalRun, j db.Ret
 	err = json.Unmarshal(j.Spec, &f)
 	gaps := []string{}
 	degraded := []string{}
+	var diagnostics *Diagnostics
 	seen := map[string]bool{}
 	rounds := 0
 	for err == nil && rounds < 3 {
@@ -260,7 +262,7 @@ func (c *Coordinator) worker(ctx context.Context, run *db.RetrievalRun, j db.Ret
 			break
 		}
 		seen[f.Query] = true
-		evidence, e := c.searchFacet(ctx, run, f, actor, req, &degraded)
+		evidence, e := c.searchFacet(ctx, run, f, actor, req, &degraded, &diagnostics)
 		if e != nil {
 			err = e
 			break
@@ -330,7 +332,7 @@ func (c *Coordinator) worker(ctx context.Context, run *db.RetrievalRun, j db.Ret
 	}
 	end, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
-	err = c.Service.DB.FinishRetrievalJob(end, run.TenantID, j.ID, token, status, map[string]any{"rounds": rounds, "gaps": gaps, "degraded": degraded})
+	err = c.Service.DB.FinishRetrievalJob(end, run.TenantID, j.ID, token, status, map[string]any{"rounds": rounds, "gaps": gaps, "degraded": uniqueStrings(degraded), "diagnostics": diagnostics})
 	if errors.Is(err, db.ErrLeaseLost) {
 		return nil
 	}
@@ -359,17 +361,20 @@ func (c *Coordinator) result(ctx context.Context, run *db.RetrievalRun) (Researc
 	r := ResearchResult{RunID: run.ID, Status: current.Status, Jobs: jobs, Evidence: ev, Gaps: []string{}}
 	for _, j := range jobs {
 		var v struct {
-			Degraded []string `json:"degraded"`
-			Gaps     []string `json:"gaps"`
-			Gap      string   `json:"gap"`
+			Diagnostics *Diagnostics `json:"diagnostics"`
+			Degraded    []string     `json:"degraded"`
+			Gaps        []string     `json:"gaps"`
+			Gap         string       `json:"gap"`
 		}
 		_ = json.Unmarshal(j.Result, &v)
 		r.Degraded = append(r.Degraded, v.Degraded...)
+		r.Diagnostics = mergeDiagnostics(r.Diagnostics, v.Diagnostics)
 		r.Gaps = append(r.Gaps, v.Gaps...)
 		if v.Gap != "" {
 			r.Gaps = append(r.Gaps, v.Gap)
 		}
 	}
+	r.Degraded = uniqueStrings(r.Degraded)
 	for _, e := range ev {
 		if e.Status != "verified" || e.Relation != "supports" {
 			r.Gaps = append(r.Gaps, fmt.Sprintf("evidence %d: %s (%s)", e.ID, e.Reason, e.Status))
@@ -382,4 +387,56 @@ func (c *Coordinator) result(ctx context.Context, run *db.RetrievalRun) (Researc
 		r.Status = "partial"
 	}
 	return r, nil
+}
+
+func uniqueStrings(values []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, v := range values {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func mergeDiagnostics(dst, src *Diagnostics) *Diagnostics {
+	if src == nil {
+		return dst
+	}
+	if dst == nil {
+		copy := *src
+		return &copy
+	}
+	if dst.Mode == "" || src.Mode == "lexical_only" {
+		dst.Mode = src.Mode
+	}
+	if dst.EmbeddingModel == "" {
+		dst.EmbeddingModel = src.EmbeddingModel
+	}
+	if dst.RerankerModel == "" {
+		dst.RerankerModel = src.RerankerModel
+	}
+	if dst.Preprocessing == "" {
+		dst.Preprocessing = src.Preprocessing
+	}
+	if dst.IndexState == "" {
+		dst.IndexState = src.IndexState
+	}
+	if dst.FusedCandidates == 0 {
+		dst.FusedCandidates = src.FusedCandidates
+	}
+	if dst.RerankedCandidates == 0 {
+		dst.RerankedCandidates = src.RerankedCandidates
+	}
+	if dst.Failures == nil {
+		dst.Failures = map[string]string{}
+	}
+	for k, v := range src.Failures {
+		if dst.Failures[k] == "" {
+			dst.Failures[k] = v
+		}
+	}
+	return dst
 }

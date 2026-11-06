@@ -212,7 +212,7 @@ var impacts = map[Capability]string{
 	Mermaid:     "新生成的架构图、甘特图、组织图保持未渲染，导出时插入源码占位框；已渲染的图表与设备表不受影响。",
 	OCR:         "扫描件与无文本层的 PDF 页面无法识别，这类文件上传会被拒绝，不会当作空白文档导入。",
 	EnhancedPDF: "复杂 PDF 使用内置解析器（版面与框线表格还原）；增强解析后端尚未交付。",
-	Embedding:   "知识库检索只使用全文、关键词与 256 维哈希向量，不是语义检索。",
+	Embedding:   "语义通道不可用，知识库检索只使用全文与关键词召回。",
 	Reranker:    "知识库检索结果不经语义重排，按融合得分排序。",
 }
 
@@ -292,4 +292,11 @@ func Sanitize(s string) string {
 		s = string(r[:300]) + "…"
 	}
 	return s
+}
+
+var reModelEndpoint = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+// SanitizeModel also removes endpoint addresses from model diagnostics exposed to HTTP and agents.
+func SanitizeModel(s string) string {
+	return Sanitize(reModelEndpoint.ReplaceAllString(s, "<endpoint>"))
 }

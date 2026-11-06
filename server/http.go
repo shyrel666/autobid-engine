@@ -40,8 +40,9 @@ type APIConfig struct {
 	// OCR 识别扫描件与无文本层 PDF 页面；为 nil 时扫描件上传返回 422。
 	OCR ingest.OCRProvider
 	// Embedder 为知识库分块与检索生成向量；为 nil 时使用 db.DefaultEmbedder()。
-	Embedder  db.Embedder
-	Retrieval *retrieval.Service
+	Embedder    db.Embedder
+	Retrieval   *retrieval.Service
+	IndexRunner *retrieval.IndexRunner
 	// SectionWriter 执行章节 AI 撰写；为 nil 时使用任务 Worker 模型（无可用 Profile 时派发返回 503）。
 	SectionWriter SectionWriter
 	// ComplianceVerifier 是响应矩阵核验器；为 nil 时使用确定性 compliance.RuleVerifier（LLM 核验未接入生产）。
@@ -161,8 +162,12 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/knowledge/documents/{kid}", a.deleteKnowledge)
 	mux.HandleFunc("GET /api/knowledge/search", a.searchKnowledge)
 	mux.HandleFunc("GET /api/knowledge/indexes", a.listKnowledgeIndexes)
+	mux.HandleFunc("GET /api/knowledge/retrieval-status", a.retrievalStatus)
+	mux.HandleFunc("GET /api/knowledge/index-events", a.knowledgeIndexEvents)
 	mux.HandleFunc("POST /api/knowledge/indexes", a.buildKnowledgeIndex)
 	mux.HandleFunc("POST /api/knowledge/indexes/{indexID}/activate", a.activateKnowledgeIndex)
+	mux.HandleFunc("POST /api/knowledge/indexes/{indexID}/cancel", a.cancelKnowledgeIndex)
+	mux.HandleFunc("DELETE /api/knowledge/indexes/{indexID}", a.deleteKnowledgeIndex)
 	mux.HandleFunc("GET /api/retrieval/runs/{runID}", a.getRetrievalRun)
 	mux.HandleFunc("POST /api/tasks/{id}/research", a.withTask(a.researchTask))
 	mux.HandleFunc("GET /api/tasks/{id}/retrieval-runs", a.withTask(a.taskRetrievalRuns))

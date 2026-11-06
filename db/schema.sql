@@ -932,6 +932,68 @@ CREATE TABLE IF NOT EXISTS knowledge_indexes (
     UNIQUE (tenant_id,id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_active_index ON knowledge_indexes(tenant_id) WHERE active;
+
+-- S6: durable, fenced index builds. Inputs and the original retry/deadline budget are immutable.
+ALTER TABLE knowledge_indexes
+    ADD COLUMN IF NOT EXISTS request_key TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS total_chunks INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS embedded_chunks INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS reused_chunks INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS reused_from BIGINT,
+    ADD COLUMN IF NOT EXISTS cursor_chunk_id BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS max_attempts INT NOT NULL DEFAULT 3,
+    ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS lease_token BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS lease_owner TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS activated_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE knowledge_indexes DROP CONSTRAINT IF EXISTS knowledge_indexes_status_check;
+ALTER TABLE knowledge_indexes DROP CONSTRAINT IF EXISTS ck_knowledge_indexes_status;
+ALTER TABLE knowledge_indexes ADD CONSTRAINT ck_knowledge_indexes_status
+    CHECK (status IN ('queued','building','ready','failed','cancelled'));
+UPDATE knowledge_indexes SET status='failed',active=false,error='interrupted before upgrade',error_code='INTERRUPTED'
+    WHERE status='building' AND lease_token=0;
+ALTER TABLE knowledge_indexes DROP CONSTRAINT IF EXISTS ck_knowledge_indexes_active_ready;
+ALTER TABLE knowledge_indexes ADD CONSTRAINT ck_knowledge_indexes_active_ready CHECK (NOT active OR status='ready');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_index_active_build ON knowledge_indexes(tenant_id) WHERE status IN ('queued','building');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_index_request ON knowledge_indexes(tenant_id,request_key) WHERE request_key<>'';
+
+CREATE OR REPLACE FUNCTION knowledge_indexes_guard() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.model,NEW.dimension,NEW.preprocessing,NEW.tenant_id,NEW.request_key,NEW.request_hash,
+        NEW.deadline_at,NEW.max_attempts,NEW.created_by) IS DISTINCT FROM
+       (OLD.model,OLD.dimension,OLD.preprocessing,OLD.tenant_id,OLD.request_key,OLD.request_hash,
+        OLD.deadline_at,OLD.max_attempts,OLD.created_by) THEN
+        RAISE EXCEPTION 'knowledge index inputs are immutable' USING ERRCODE='23514';
+    END IF;
+    IF OLD.status IN ('ready','failed','cancelled') AND NEW.status<>OLD.status THEN
+        RAISE EXCEPTION 'knowledge index is terminal' USING ERRCODE='23514';
+    END IF;
+    NEW.updated_at := now();
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS knowledge_indexes_guard ON knowledge_indexes;
+CREATE TRIGGER knowledge_indexes_guard BEFORE UPDATE ON knowledge_indexes
+    FOR EACH ROW EXECUTE FUNCTION knowledge_indexes_guard();
+
+CREATE TABLE IF NOT EXISTS knowledge_index_events (
+    id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default',
+    index_id BIGINT NOT NULL DEFAULT 0,
+    event TEXT NOT NULL CHECK (event IN ('build_requested','build_ready','build_failed','build_cancelled',
+        'activated','rolled_back','deleted','model_configured')),
+    from_index_id BIGINT, model TEXT NOT NULL DEFAULT '', dimension INT NOT NULL DEFAULT 0,
+    detail JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_index_events ON knowledge_index_events(tenant_id,id DESC);
 CREATE TABLE IF NOT EXISTS knowledge_embeddings (
     tenant_id TEXT NOT NULL DEFAULT 'default', index_id BIGINT NOT NULL, chunk_id BIGINT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
     content_hash TEXT NOT NULL, embedding float8[] NOT NULL,
@@ -939,6 +1001,8 @@ CREATE TABLE IF NOT EXISTS knowledge_embeddings (
     PRIMARY KEY (tenant_id,index_id,chunk_id),
     FOREIGN KEY (tenant_id,index_id) REFERENCES knowledge_indexes(tenant_id,id) ON DELETE CASCADE
 );
+-- The primary key leads with index_id: embedding reuse and the chunk FK cascade both look up by chunk.
+CREATE INDEX IF NOT EXISTS idx_knowledge_embeddings_chunk ON knowledge_embeddings(tenant_id,chunk_id);
 CREATE TABLE IF NOT EXISTS retrieval_runs (
     id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', task_id BIGINT,
     request_key TEXT NOT NULL, request_hash TEXT NOT NULL, request JSONB NOT NULL,

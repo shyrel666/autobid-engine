@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "models": {
+    "embedding": {
+      "model_id": "Xenova/bge-small-zh-v1.5",
+      "revision": "75c43b069aac4d136ba6bc1122f995fedcfd2781",
+      "model_dtype": "float32",
+      "max_input_length": 512,
+      "files": [
+        {
+          "role": "onnx",
+          "repo_path": "onnx/model.onnx",
+          "path": "model.onnx",
+          "sha256": "69a0b846f4f116b5e6aabf9546ea6754d02264f3211a13a1bd69b31b8040749a"
+        },
+        {
+          "role": "tokenizer",
+          "repo_path": "tokenizer.json",
+          "path": "tokenizer.json",
+          "sha256": "48cea5d44424912a6fd1ea647bf4fe50b55ab8b1e5879c3275f80e339e8fae26"
+        }
+      ]
+    },
+    "reranker": {
+      "model_id": "Xenova/bge-reranker-base",
+      "revision": "280bcc27a84e0b898c251e06fddb25171bd9b101",
+      "model_dtype": "int8",
+      "max_input_length": 512,
+      "files": [
+        {
+          "role": "onnx",
+          "repo_path": "onnx/model_int8.onnx",
+          "path": "model_int8.onnx",
+          "sha256": "2059d8ef0b6e935b4845e11b38c9af9e9e2e7b91f69fc99efe03254e0a7da8d3"
+        },
+        {
+          "role": "tokenizer",
+          "repo_path": "tokenizer.json",
+          "path": "tokenizer.json",
+          "sha256": "48564c5c7d3fa64d85d95e65414a542385f88b0f128fd8d4163fd7a57f2be05c"
+        }
+      ]
+    }
+  }
+}

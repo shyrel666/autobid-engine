@@ -2,7 +2,10 @@ import { useRef, useState } from 'react'
 import { AlertTriangle, BookOpen, Eye, FileUp, RefreshCw, Search, Star, Table2, Trash2, Upload } from 'lucide-react'
 import { api, errorText } from '../api/client'
 import type { KnowledgeCategory, KnowledgeDocument, KnowledgeHit, KnowledgeUploadResp, RetrievalResult } from '../api/types'
-import { RetrievalEvidence, KnowledgeIndexes } from '../components/RetrievalEvidence'
+import { RetrievalEvidence } from '../components/RetrievalEvidence'
+import { DegradedNotice, SemanticStatusBar, SemanticStatusCard, useRetrievalStatus } from '../features/retrieval/SemanticStatus'
+import { IndexManager } from '../features/retrieval/IndexManager'
+import { hitSourceText } from '../features/retrieval/retrieval-status'
 import { TableView } from '../components/TableView'
 import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Modal, Select, Spinner, Tabs, TextArea, cx, useConfirm, useToast } from '../components/ui'
 import { useAsync } from '../hooks/useAsync'
@@ -265,7 +268,7 @@ function HitCard({ h, maxFts }: { h: KnowledgeHit; maxFts: number }) {
         </div>
       </div>
       <div className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
-        引用：doc #{c.doc_id} · seq {c.seq} · {c.section_code || '—'} · {c.file_name || '文本录入'} · 命中词 {h.matched_terms.length ? h.matched_terms.join('、') : '（向量召回）'}
+        引用：doc #{c.doc_id} · seq {c.seq} · {c.section_code || '—'} · {c.file_name || '文本录入'} · {hitSourceText(h)}
         {h.tags.length > 0 && ` · 标签 ${h.tags.join('、')}`}
         <Button size="sm" variant="ghost" className="ml-2" onClick={() => setOpen(!open)}>{open ? '收起' : '查看正文与表格'}</Button>
       </div>
@@ -282,6 +285,7 @@ function HitCard({ h, maxFts }: { h: KnowledgeHit; maxFts: number }) {
 }
 
 function SearchTab() {
+  const retrieval = useRetrievalStatus()
   const [form, setForm] = useState({ q: '', product: '', tags: '', prefer_tables: false, categories: new Set<KnowledgeCategory>() })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -301,6 +305,8 @@ function SearchTab() {
       setError(errorText(e))
     } finally {
       setBusy(false)
+      // 这次检索本身可能发现模型故障或恢复：状态条不能和刚返回的结果相互矛盾。
+      void retrieval.reload()
     }
   }
   const toggleCat = (c: KnowledgeCategory) => setForm((f) => {
@@ -311,6 +317,7 @@ function SearchTab() {
 
   return (
     <div className="space-y-4">
+      <SemanticStatusBar retrieval={retrieval} />
       <Card title={<><Search className="size-4 text-blue-600" /> 混合检索预览</>}>
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="检索词" hint="空格分隔；词间 OR，命中越多越靠前" className="md:col-span-2">
@@ -334,7 +341,7 @@ function SearchTab() {
         </div>
         <div className="mt-2"><ErrorBanner error={error} /></div>
       </Card>
-      {result && <Card><p className="text-sm">检索记录 #{result.run_id} · {result.cached ? '缓存命中' : '新检索'}</p>{result.degraded.length > 0 && <p className="mt-1 text-sm text-amber-700">降级：{result.degraded.map(reason => ({ semantic_model_unconfigured: '语义模型未配置', semantic_index_missing_or_stale: '语义索引缺失或过期', semantic_channel_failed: '语义检索失败或超预算', reranker_unconfigured: '重排模型未配置', reranker_failed: '重排失败或超预算', rerank_truncated: '预算内只重排了排名靠前的候选' }[reason] ?? reason)).join('；')}</p>}</Card>}
+      {result && <Card><div className="space-y-3"><p className="text-sm">检索记录 #{result.run_id} · {result.cached ? '缓存命中' : '新检索'}</p><DegradedNotice degraded={result.degraded} diagnostics={result.diagnostics} /></div></Card>}
       {result && <RetrievalEvidence key={result.run_id} runID={result.run_id} />}
       {hits && (hits.length === 0 ? <Card><Empty>没有命中，尝试更少或更宽泛的关键词</Empty></Card> : (
         <div className="space-y-2">
@@ -346,13 +353,18 @@ function SearchTab() {
   )
 }
 
+function IndexesTab() {
+  const retrieval = useRetrievalStatus()
+  return <div className="space-y-4"><SemanticStatusCard retrieval={retrieval} /><IndexManager retrieval={retrieval} /></div>
+}
+
 export default function KnowledgePage() {
   const [tab, setTab] = useState<'library' | 'search' | 'indexes'>('library')
   return (
     <PageFrame title="企业方案知识库" description="沉淀历史标书、标准技术方案、产品规格书与技术白皮书；写作检索复用时引用附带文档、章节与页码。历史承诺不等于当前能力，引用前请核验。">
       <div className="space-y-4">
         <Tabs value={tab} onChange={setTab} tabs={[{ key: 'library', label: '文档库' }, { key: 'search', label: '检索预览' }, { key: 'indexes', label: '语义索引' }]} />
-        {tab === 'library' ? <LibraryTab /> : tab === 'search' ? <SearchTab /> : <KnowledgeIndexes />}
+        {tab === 'library' ? <LibraryTab /> : tab === 'search' ? <SearchTab /> : <IndexesTab />}
       </div>
     </PageFrame>
   )

@@ -1,12 +1,12 @@
 package retrieval
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -225,12 +225,14 @@ func (s *Service) capture(ctx context.Context, t, actor string, runID int64, h d
 	return e, err
 }
 
+// sameJSON compares JSON values, not bytes: a json.Marshal round trip escapes <, > and & inside RawMessage,
+// which would make every real table containing them look like a changed source.
 func sameJSON(a, b json.RawMessage) bool {
-	var x, y bytes.Buffer
-	if json.Compact(&x, a) != nil || json.Compact(&y, b) != nil {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
 		return false
 	}
-	return bytes.Equal(x.Bytes(), y.Bytes())
+	return reflect.DeepEqual(x, y)
 }
 
 // Evidence always rechecks the source, even if a trigger or a cache entry was missed.

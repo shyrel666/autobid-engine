@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/toolhealth"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -20,12 +22,16 @@ const Strategy = "hybrid-rrf-v2" // v2: query-side encoding for asymmetric model
 const Preprocessing = "title-path-metadata-body-v2"
 
 type Service struct {
-	DB       *db.DB
-	Embedder db.Embedder
-	Reranker Reranker
-	flights  singleflight.Group
-	mu       sync.Mutex
-	cache    map[string]cacheEntry
+	DB                 *db.DB
+	Embedder           db.Embedder
+	Reranker           Reranker
+	Health             *toolhealth.Registry
+	ChannelTimeout     time.Duration
+	MaxRerank          int
+	IndexBuildDeadline time.Duration
+	flights            singleflight.Group
+	mu                 sync.Mutex
+	cache              map[string]cacheEntry
 }
 type cacheEntry struct {
 	Raw   []byte
@@ -42,6 +48,7 @@ type Result struct {
 	Strategy    string            `json:"strategy"`
 	Timings     map[string]int64  `json:"timings_ms"`
 	Cached      bool              `json:"cached"`
+	Diagnostics Diagnostics       `json:"diagnostics"`
 }
 
 func New(pg *db.DB, e db.Embedder, r Reranker) *Service {
@@ -70,63 +77,6 @@ func validateQuery(q db.KnowledgeQuery) error {
 	}
 	return nil
 }
-func (s *Service) BuildIndex(ctx context.Context, t, actor string, dimension int) (db.KnowledgeIndex, error) {
-	return s.buildIndex(ctx, t, actor, dimension, Preprocessing)
-}
-func (s *Service) BuildBaselineIndex(ctx context.Context, t, actor string, dimension int) (db.KnowledgeIndex, error) {
-	return s.buildIndex(ctx, t, actor, dimension, "title-path-body-v1")
-}
-func (s *Service) buildIndex(ctx context.Context, t, actor string, dimension int, prep string) (db.KnowledgeIndex, error) {
-	if s.Embedder == nil {
-		return db.KnowledgeIndex{}, fmt.Errorf("semantic embedding service is not configured")
-	}
-	x, err := s.DB.StartKnowledgeIndex(ctx, t, s.Embedder.Model(), prep, actor, dimension)
-	if err != nil {
-		return x, err
-	}
-	build := func() error {
-		var after int64
-		for {
-			chunks, err := s.DB.IndexChunks(ctx, t, after, 32)
-			if err != nil {
-				return err
-			}
-			if len(chunks) == 0 {
-				break
-			}
-			texts := make([]string, len(chunks))
-			for i, c := range chunks {
-				texts[i] = c.Document.Title + " " + c.Chunk.SectionPath + " " + c.Chunk.Content
-				if prep == Preprocessing {
-					texts[i] = c.Document.Title + " " + c.Chunk.SectionPath + " " + string(c.Document.Extra) + " " + c.Chunk.Content
-				}
-			}
-			vectors, err := s.Embedder.Embed(ctx, texts)
-			if err != nil {
-				return err
-			}
-			if err = s.DB.PutKnowledgeEmbeddings(ctx, x, chunks, vectors); err != nil {
-				return err
-			}
-			after = chunks[len(chunks)-1].Chunk.ID
-		}
-		return nil
-	}
-	err = build()
-	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if ferr := s.DB.FinishKnowledgeIndex(finishCtx, x, err); ferr != nil {
-		return x, ferr
-	}
-	if err != nil {
-		x.Status = "failed"
-		x.Error = err.Error()
-	} else {
-		x.Status = "ready"
-	}
-	return x, err
-}
-
 func Fuse(channels ...[]db.KnowledgeHit) []db.KnowledgeHit {
 	byID := map[int64]*db.KnowledgeHit{}
 	for _, ch := range channels {
@@ -244,7 +194,7 @@ func (s *Service) candidates(ctx context.Context, q db.KnowledgeQuery) (Result, 
 	if s.Reranker != nil {
 		rank = s.Reranker.Model()
 	}
-	b, _ := json.Marshal([]any{q, epoch, active, model, rank, Strategy, "server-tenant-scope-v1"})
+	b, _ := json.Marshal([]any{q, epoch, active, model, rank, s.embeddingDimension(), s.maxRerank(), Strategy, "server-tenant-scope-v1"})
 	cacheKey := db.ContentHash(string(b))
 	s.mu.Lock()
 	entry, ok := s.cache[cacheKey]
@@ -267,7 +217,7 @@ func (s *Service) candidates(ctx context.Context, q db.KnowledgeQuery) (Result, 
 		if err != nil {
 			return r, err
 		}
-		latest, e := s.DB.KnowledgeEpoch(work, q.TenantID)
+		latest, e := s.DB.KnowledgeEpoch(ctx, q.TenantID)
 		if e != nil {
 			return r, e
 		}
@@ -300,6 +250,21 @@ func (s *Service) candidates(ctx context.Context, q db.KnowledgeQuery) (Result, 
 }
 func (s *Service) retrieve(ctx context.Context, q db.KnowledgeQuery, epoch int64, idx *db.KnowledgeIndex) (Result, error) {
 	r := Result{Hits: []db.KnowledgeHit{}, Degraded: []string{}, Epoch: epoch, Strategy: Strategy, Timings: map[string]int64{}}
+	r.Diagnostics = Diagnostics{Mode: "lexical_only", IndexState: s.IndexState(idx, epoch), Preprocessing: Preprocessing, Failures: map[string]string{}}
+	if s.Embedder != nil {
+		r.Diagnostics.EmbeddingModel = toolhealth.SanitizeModel(s.Embedder.Model())
+	}
+	if s.Reranker != nil {
+		r.Diagnostics.RerankerModel = toolhealth.SanitizeModel(s.Reranker.Model())
+	}
+	if run, ok := ctx.Value(budgetKey{}).(*db.RetrievalRun); ok {
+		usageCtx := ctx
+		ctx = WithUsageSink(ctx, func(tokens int64) {
+			writeCtx, cancel := context.WithTimeout(context.WithoutCancel(usageCtx), 3*time.Second)
+			defer cancel()
+			_ = s.DB.RecordRetrievalUsage(writeCtx, run.TenantID, run.ID, int(min(tokens, int64(math.MaxInt32))))
+		})
+	}
 	start := time.Now()
 	cq := q
 	cq.Limit = 50
@@ -314,7 +279,7 @@ func (s *Service) retrieve(ctx context.Context, q db.KnowledgeQuery, epoch int64
 	var dense []db.KnowledgeHit
 	if s.Embedder == nil {
 		r.Degraded = append(r.Degraded, "semantic_model_unconfigured")
-	} else if idx == nil || idx.Model != s.Embedder.Model() || idx.Epoch != epoch || idx.Preprocessing != Preprocessing {
+	} else if r.Diagnostics.IndexState != IndexStateCurrent {
 		r.Degraded = append(r.Degraded, "semantic_index_missing_or_stale")
 	} else {
 		r.IndexID = idx.ID
@@ -323,16 +288,27 @@ func (s *Service) retrieve(ctx context.Context, q db.KnowledgeQuery, epoch int64
 		var v [][]float64
 		e := s.reserve(ctx, 1, len(text)+256)
 		if e == nil {
-			v, e = db.EmbedQuery(ctx, s.Embedder, []string{text})
+			channel, cancel := s.channelContext(ctx)
+			v, e = db.EmbedQuery(channel, s.Embedder, []string{text})
+			cancel()
+			if e == nil {
+				e = db.ValidateVectors(v, 1, idx.Dimension)
+			}
+			s.modelHealth(ctx, toolhealth.Embedding, e)
 		}
-		if e == nil {
-			e = db.ValidateVectors(v, 1, idx.Dimension)
+		if e != nil {
+			r.Diagnostics.Failures["embedding"] = modelFailure(e)
 		}
 		if e == nil {
 			dense, e = s.DB.RetrievalCandidates(ctx, cq, idx.ID, v[0])
+			if e != nil {
+				r.Diagnostics.Failures["embedding"] = "vector search failed"
+			}
 		}
 		if e != nil {
 			r.Degraded = append(r.Degraded, "semantic_channel_failed")
+		} else {
+			r.Diagnostics.Mode = "hybrid"
 		}
 		r.Timings["semantic"] = time.Since(start).Milliseconds()
 	}
@@ -340,22 +316,29 @@ func (s *Service) retrieve(ctx context.Context, q db.KnowledgeQuery, epoch int64
 	if len(hits) > 100 {
 		hits = hits[:100]
 	}
+	r.Diagnostics.FusedCandidates = len(hits)
 	if s.Reranker == nil {
 		r.Degraded = append(r.Degraded, "reranker_unconfigured")
 	} else if len(hits) > 0 {
 		start = time.Now()
-		texts := make([]string, len(hits))
+		maxN := min(len(hits), s.maxRerank())
+		texts := make([]string, maxN)
 		query := q.Text + " " + strings.Join(q.MustTerms, " ")
-		bound, n := 256, len(hits)
-		cost := make([]int, len(hits))
-		for i, h := range hits {
+		bound, n := 256, maxN
+		cost := make([]int, maxN)
+		for i, h := range hits[:maxN] {
 			texts[i] = h.Citation.DocTitle + " " + h.Chunk.SectionPath + " " + string(h.Metadata) + " " + h.Chunk.Content
 			cost[i] = len(texts[i]) + len(query) + 32
 		}
 		// Within a budgeted run rerank the fused head that fits the remaining reservation; the tail keeps RRF order.
 		if left, ok := s.tokensLeft(ctx); ok {
+			// A research run still has to pay for reasoning and follow-up searches: reranking a full head of real
+			// tender chunks would otherwise reserve everything and leave bounded follow-up unreachable.
+			if run, isRun := ctx.Value(budgetKey{}).(*db.RetrievalRun); isRun && run.Kind == "research" {
+				left /= 2
+			}
 			n = 0
-			for n < len(hits) && bound+cost[n] <= left {
+			for n < maxN && bound+cost[n] <= left {
 				bound += cost[n]
 				n++
 			}
@@ -370,22 +353,30 @@ func (s *Service) retrieve(ctx context.Context, q db.KnowledgeQuery, epoch int64
 			e = s.reserve(ctx, 1, bound)
 		}
 		if e == nil {
-			scores, e = s.Reranker.Rank(ctx, query, texts[:n])
-		}
-		for _, score := range scores {
-			if math.IsNaN(score) || math.IsInf(score, 0) {
-				e = fmt.Errorf("invalid score")
+			channel, cancel := s.channelContext(ctx)
+			scores, e = s.Reranker.Rank(channel, query, texts[:n])
+			cancel()
+			if e == nil && len(scores) != n {
+				e = fmt.Errorf("incomplete reranker results")
 			}
+			for _, score := range scores {
+				if math.IsNaN(score) || math.IsInf(score, 0) {
+					e = fmt.Errorf("invalid score")
+				}
+			}
+			s.modelHealth(ctx, toolhealth.Reranker, e)
 		}
 		if e != nil || len(scores) != n {
 			r.Degraded = append(r.Degraded, "reranker_failed")
+			r.Diagnostics.Failures["reranker"] = modelFailure(e)
 		} else {
+			r.Diagnostics.RerankedCandidates = n
 			head := hits[:n]
 			for i := range head {
 				head[i].Score = scores[i]
 			}
 			sort.SliceStable(head, func(i, j int) bool { return head[i].Score > head[j].Score })
-			if n < len(hits) {
+			if n < maxN {
 				r.Degraded = append(r.Degraded, "rerank_truncated")
 			}
 		}
@@ -397,4 +388,43 @@ func (s *Service) retrieve(ctx context.Context, q db.KnowledgeQuery, epoch int64
 	r.Hits = hits
 	r.Total = len(hits)
 	return r, nil
+}
+
+func (s *Service) maxRerank() int {
+	if s.MaxRerank <= 0 {
+		return 100
+	}
+	return min(s.MaxRerank, 100)
+}
+
+func (s *Service) channelContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	duration := s.ChannelTimeout
+	if duration <= 0 {
+		duration = 18 * time.Second
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		duration = min(duration, time.Until(deadline)-2*time.Second)
+	}
+	return context.WithTimeout(ctx, duration)
+}
+
+func (s *Service) modelHealth(caller context.Context, cap toolhealth.Capability, err error) {
+	if s.Health == nil || caller.Err() != nil || errors.Is(err, db.ErrRetrievalBudget) {
+		return
+	}
+	if err == nil {
+		s.Health.Recover(cap)
+	} else {
+		s.Health.Degrade(cap, errors.New(toolhealth.SanitizeModel(err.Error())))
+	}
+}
+
+func modelFailure(err error) string {
+	if errors.Is(err, db.ErrRetrievalBudget) {
+		return "budget"
+	}
+	if err == nil {
+		return "invalid model result"
+	}
+	return toolhealth.SanitizeModel(err.Error())
 }

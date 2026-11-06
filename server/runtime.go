@@ -97,18 +97,40 @@ func ProbeRuntime(ctx context.Context, reg *toolhealth.Registry, ocr ingest.OCRP
 		reg.SetUnconfigured(toolhealth.Embedding, db.DefaultEmbedder().Model(), "未配置语义向量模型（AUTOBID_EMBEDDING_URL）")
 	} else {
 		go reg.Probe(ctx, toolhealth.Embedding, emb.Model(), func(ctx context.Context) (toolhealth.Result, error) {
-			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-			return toolhealth.Result{Version: emb.Model()}, retrieval.SelfTestEmbedder(ctx, emb)
+			err := retryModelSelfTest(ctx, func(ctx context.Context) error { return retrieval.SelfTestEmbedder(ctx, emb) })
+			return toolhealth.Result{Version: modelServiceVersion(emb)}, err
 		})
 	}
 	if rank == nil {
 		reg.SetUnconfigured(toolhealth.Reranker, "", "未配置语义重排模型（AUTOBID_RERANKER_URL）")
 	} else {
 		go reg.Probe(ctx, toolhealth.Reranker, rank.Model(), func(ctx context.Context) (toolhealth.Result, error) {
-			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-			return toolhealth.Result{Version: rank.Model()}, retrieval.SelfTestReranker(ctx, rank)
+			err := retryModelSelfTest(ctx, func(ctx context.Context) error { return retrieval.SelfTestReranker(ctx, rank) })
+			return toolhealth.Result{Version: modelServiceVersion(rank)}, err
 		})
+	}
+}
+
+func modelServiceVersion(model interface{ Model() string }) string {
+	v := model.Model()
+	if m, ok := model.(*retrieval.HTTPModel); ok && m.Info().ServedVersion != "" {
+		v += " (service " + m.Info().ServedVersion + ")"
+	}
+	return toolhealth.SanitizeModel(v)
+}
+
+func retryModelSelfTest(ctx context.Context, test func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	for {
+		err := test(ctx)
+		if !errors.Is(err, retrieval.ErrModelTransient) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(2 * time.Second):
+		}
 	}
 }

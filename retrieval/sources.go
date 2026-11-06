@@ -9,7 +9,7 @@ import (
 	"github.com/autobid/autobid-engine/db"
 )
 
-func (c *Coordinator) searchFacet(ctx context.Context, run *db.RetrievalRun, f Facet, actor string, req ResearchRequest, degraded *[]string) ([]db.RetrievalEvidence, error) {
+func (c *Coordinator) searchFacet(ctx context.Context, run *db.RetrievalRun, f Facet, actor string, req ResearchRequest, degraded *[]string, diagnostics **Diagnostics) ([]db.RetrievalEvidence, error) {
 	out := []db.RetrievalEvidence{}
 	if f.Domain == "knowledge" {
 		q := req.Query
@@ -21,6 +21,7 @@ func (c *Coordinator) searchFacet(ctx context.Context, run *db.RetrievalRun, f F
 			return nil, err
 		}
 		*degraded = append(*degraded, result.Degraded...)
+		*diagnostics = &result.Diagnostics
 		for _, h := range result.Hits {
 			e, err := c.Service.capture(ctx, run.TenantID, actor, run.ID, h)
 			if err != nil {

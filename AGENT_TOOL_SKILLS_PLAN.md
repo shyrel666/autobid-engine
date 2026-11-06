@@ -40,7 +40,13 @@
   - 人工采用 import 候选（同事务 `PersistTender`）、拒绝候选、导入候选不推进 `source_epoch` 而采用后推进；结构化缺口与逐行 OCR 原件定位。
   - 新技能 `document-processing`（`document_parse_submit` / `status` / `result` / `cancel`），只开放 `source_kind=tender_file`，强制候选模式并同事务订阅当前意图；宿主范围新增 `allowed_file_ids`。
   - 本机 PaddleOCR 3.7.0 服务（`tools/paddleocr`），HTTP 协议增加请求 ID、内容哈希与执行版本；`/file-processing-records/{id}/reject` 与材料处理页的候选核对、采用、拒绝和作业控制。
-- **尚未实施**：S5b、S5c、S6、S7。没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
+- **S6 已 E 收口（2026-11-06，本机验证，见第 9 节与 12.10）**：
+  - 模型层沿用 `tei` / `compatible` / `dashscope` 协议，增加每模型超时、截断、查询前缀、重排候选上限，以及 `INFO_URL` 服务端修订核对（声明与实际不符时自检失败）；暂时故障 `ErrModelTransient` 与确定性失败分开。
+  - 运行中的模型失败与恢复写入 `toolhealth`（预算不足、调用方取消不计入）；通道级超时保证模型挂起时仍返回词法结果；服务商用量写入 `retrieval_runs.actual_tokens`。
+  - 索引构建改为持久化作业（`knowledge_indexes` 增加租约、尝试、截止、游标、请求键，守卫触发器冻结输入与终态；`retrieval.IndexRunner` 后台执行、崩溃后从游标接续）；重建按内容指纹复用同模型向量（含失败 / 取消的构建）；启用前核对模型、维度、预处理，回滚与切换写入审计表 `knowledge_index_events`。
+  - `GET /api/knowledge/retrieval-status` 与 `tool_runtime_status` 的 `semantic_retrieval` 同源回显状态、原因、模型与索引；`/api/knowledge/indexes` 的构建 / 启用 / 取消 / 删除带机器可读错误码。
+  - 可选本地模型包 `tools/local-models`（ONNX + TEI 协议，默认关闭，`AUTOBID_LOCAL_MODELS=1` 显式启用）；前端 `features/retrieval/`、知识库与证据检索页显示业务语言状态，技术信息只在诊断详情。
+- **尚未实施**：S5b、S5c、S7。没有 `deploy/` 目录。本文依赖的 R1 代码（`section_write_jobs`、`intent_inputs/outputs/completion`、`execution_scope`）已随提交 `b22a30c` 入库，但 R1/R2 尚未 E 收口（见[可靠性计划](docs/RELIABILITY_PLAN.md)）。S0 文档核对已完成，可启动首版工程实现。分域候选扩展、并发与业务效果的不确定项见第 12 节。
 
 适用项目：AutoBid Engine。本文中的 Skill 指项目提供给 Agent 的业务技能（`bidtools.Skills()`），不是 Codex 桌面插件。
 
@@ -84,7 +90,7 @@
 | --- | --- | --- |
 | Skills / Tools | `bidtools/skills.go` 有 **6** 个 Skill；`agent/worker.go` 经 `Skill` 解锁、`SearchExtraTools` 获取 Schema；`server/task_llm.go:LLMService.Resolve` 装配 Worker；Planner 尚未挂载业务工具 | 新增 3 个 Skill，复用 knowledge-reuse；Planner 只读注入、宿主授权 |
 | 文档 | `filework.Processor.process` 首次导入直接 PersistTender；reparse 将完整 PreparedTender 存入 FileProcessingRecord.Payload，Preview 仅为差异摘要；Adopt 目前只支持 reparse；固定队列已有幂等/租约/取消 | Agent 首次导入候选模式、人工采用 import 分支、解析后端与结果分页（**S5a 已实现**：`filework/route.go`、`agent.go`、`candidate.go`、`bidtools/document_jobs.go`，见 12.9） |
-| 检索 | `retrieval/providers.go`、版本化索引、核验与 knowledge-reuse 已有 | 健康探测、版本回显与可选模型部署，不重写协议 |
+| 检索 | `retrieval/providers.go`、版本化索引、核验与 knowledge-reuse 已有 | 健康探测、版本回显与可选模型部署，不重写协议（**S6 已实现**：`retrieval/index_build.go`、`retrieval/status.go`、`db/knowledge_index_jobs.go`、`tools/local-models`，见 12.10） |
 | 图表 | `export.BuildChartSource` 支持 architecture/gantt/org/equipment_table；`export.Renderer.RenderPNG` 与 `export.MMDC`；proposal_charts 已有 source_hash、pending、修订绑定、产物路径/哈希 | 期望修订围栏、持久化渲染作业、幂等取消、结构化图表计划（**S3 已实现**：`db/chart_jobs.go`、`export/chart_jobs.go`，见 12.7） |
 | 导出 | `db.CreateExportJobs` 冻结快照；**CompleteExportJob、FailExportJob、Heartbeat 已检查 lease_token + running**；export/runner.go 异步执行 | 全生命周期请求幂等、cancelled、严格最终稿策略与完成通知；复用已有围栏，没有 FinishExportJob 这个待修补接口（**S4 已实现**：`db/export_requests.go`、`export/export_jobs.go`，见 12.8） |
 | 导出引擎 | **2026-11-03 已实现**：`export.Service.Office` 是文档引擎接口（`export/office.go`，含按 `AUTOBID_OFFICE_ENGINE` 探测与启动自检），实现为 WPS/Word COM 自动化（`office_windows.go` + `office_com.ps1`）；`Execute` 在引擎为 nil 时 PDF 永久失败，DOCX 只写 updateFields 占位；`/api/export/status` 返回 `office_engine` / `office_version` | 作业结果记录引擎名与版本（**S4 已实现**：`export_jobs.office_engine` / `office_version`）；多作业排队已在 S1 验证（引擎固定串行） |
@@ -412,7 +418,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 | S4 导出（2026-11-04 已交付，见 12.8） | `features/proposal/export/ExportPage.tsx`、`ExportParts.tsx` 接入预检阻断、请求组、各格式状态、取消与下载 | 明确区分预览/最终稿；多格式部分失败逐项展示；提交响应丢失后同键重发不重复生成；权限不足/版本冲突有明确提示 |
 | S5a 解析（2026-11-04 已交付，见 12.9） | `features/proposal/documents/FixedWorkflow.tsx` 接入解析能力、候选模式、分页对照、人工采用及作业控制 | 区分处理中、候选待确认、已采用、失败/取消；不将 OCR 完成标成证据已核验；采用后刷新文档、要求、大纲及导出门禁 |
 | S5b/S5c 条件扩展 | `pages/KnowledgePage.tsx` 及企业证据对应页面随分域协议一起设计，页面落点在该阶段确认 | 知识候选、索引生效与企业证据核验分开；未实现来源类型不出现在可提交选项中 |
-| S6 检索 | `pages/KnowledgePage.tsx`、`pages/task/ResearchTab.tsx` 显示当前索引/模型状态、检索降级原因与证据状态 | 模型故障不冒充正常语义检索，模型切换不混用索引；技术信息只在诊断详情中展示 |
+| S6 检索（2026-11-06 已交付，见 12.10） | `pages/KnowledgePage.tsx`、`pages/task/ResearchTab.tsx` 显示当前索引/模型状态、检索降级原因与证据状态 | 模型故障不冒充正常语义检索，模型切换不混用索引；技术信息只在诊断详情中展示 |
 | S7 整体验收 | 连通上述页面，验证权限、关闭能力、刷新恢复、升级后的历史记录 | 业务用户只用浏览器完成所声明范围的全流程，无需安装依赖 |
 
 ### 8.2 前后端契约与状态更新规则
@@ -425,7 +431,7 @@ X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环�
 
 ## 9. 分阶段实施与退出标准
 
-S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2、S3、S4、S5a 外均未验收。
+S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除已勾选的 S1、S2、S3、S4、S5a、S6 外均未验收。
 
 各阶段的工作与退出标准同时包含第 8.1 节对应的前端交付及第 8.2 节联调要求，按“后端服务 → API/类型 → 页面接入 → 联调验收”闭环推进。
 
@@ -439,12 +445,12 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 | [x] E S5a 招标解析 Skill（2026-11-04） | tender_file、candidate_only、人工 import 采用、原生解析/PaddleOCR | 真实 OCR、完整候选、原件定位、幂等采用、source_epoch 失效通过；不开放知识/企业来源。**结果**见 12.9 |
 | [ ] E S5b 知识库增强解析（条件阶段） | 先设计知识原件/候选/采用/索引失效，再实现；MinerU 按评测决定 | 分域表/API 设计与实现验收，不能借用招标表或改写已激活索引 |
 | [ ] E S5c 企业证据 OCR（条件阶段） | 先设计原件版本/页级候选/采用/可采性失效，再实现 | OCR 仅产待核验结果，原件变化传播失效，不声称业务可采性已通过 |
-| [ ] E S6 检索部署 | providers/健康回显/可选本地模型 | 真实接口、索引重建回滚与降级；无稳定收益保持既有模型和单 Agent |
+| [x] E S6 检索部署（2026-11-06） | providers/健康回显/可选本地模型 | 真实接口、索引重建回滚与降级；无稳定收益保持既有模型和单 Agent。**结果**见 12.10（默认配置与单 Agent 不变，本地模型默认关闭） |
 | [ ] E S7 一体交付 | 前端、端到端、升级恢复、离线/运维 | 浏览器完成声明范围，本机全量验证通过；S5b/c 未完成时明确首版只含招标解析 |
 | [ ] V 外部验证 | 真实材料、保留集、专家 | 按 D0~D5/检索协议验收，目前缺材料 |
 | [ ] P 试点 | 受控真实企业/项目 | ROADMAP 发布门槛，不由 E 自动升级 |
 
-默认顺序：S1 → S2 → S3 → S4 → S5a → S6 → S7（S1~S5a 已 E 收口）。S5b/c 是单独设计与验收的扩展，不以尚未冻结的分域 Schema 阻塞首版，未完成不声称三域全覆盖。S1 的编码与验收都在本机完成；mmdc 需先在本机安装。R2 与基础工程衔接，未完成不开放高影响入口。每阶段退出后重估工作量，不承诺固定周期或未经测量的 GPU 容量。
+默认顺序：S1 → S2 → S3 → S4 → S5a → S6 → S7（S1~S6 已 E 收口）。S5b/c 是单独设计与验收的扩展，不以尚未冻结的分域 Schema 阻塞首版，未完成不声称三域全覆盖。S1 的编码与验收都在本机完成；mmdc 需先在本机安装。R2 与基础工程衔接，未完成不开放高影响入口。每阶段退出后重估工作量，不承诺固定周期或未经测量的 GPU 容量。
 
 ## 10. 验证矩阵与测量口径
 
@@ -820,6 +826,86 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 - PDF 扫描页只识别页面中面积最大的一张图像；不渲染整页矢量内容，CCITT / JBIG2 等编码的扫描图仍记为缺口。
 - 人工采用 / 拒绝仍以 `X-Autobid-User` 作审计声明，不是 R2 可信身份；Agent 不能采用候选（首版不注册采用工具）。
 - 单页 OCR 有 2 分钟超时，固定解析作业默认截止 15 分钟；大批量扫描件的排队与资源占用未测量。
+
+### 12.10 S6 收口记录（2026-11-06，E 级，本机）
+
+**交付内容**（对应 2、4.3、6、8.1 S6 行、9、10 检索行、11）：
+
+| 落点 | 实现 |
+| --- | --- |
+| schema | `knowledge_indexes` 以 `ADD COLUMN IF NOT EXISTS` 增加请求键 / 哈希、总数 / 新算 / 复用计数、`reused_from`、`cursor_chunk_id`、尝试预算、`deadline_at`、租约、`retry_after`、`error_code`、起止与启用时间；旧库内联状态 CHECK 替换为含 `queued` / `cancelled` 的 `ck_knowledge_indexes_status`，`ck_knowledge_indexes_active_ready` 保证只有 ready 能启用；升级时把遗留 `building` 孤儿行置为 `failed` + `INTERRUPTED`；部分唯一索引保证每租户至多一个活跃构建、请求键全生命周期唯一；触发器 `knowledge_indexes_guard` 冻结模型 / 维度 / 预处理 / 请求键 / 截止时间 / 尝试预算并拒绝终态之后的状态变化；审计表 `knowledge_index_events`（不设外键，索引删除后审计保留）；`idx_knowledge_embeddings_chunk` |
+| db | `db/knowledge_index_jobs.go`：`SubmitKnowledgeIndexBuild`（目录行锁 → 幂等 → 活跃构建 → 分块数 → 入队）、`ClaimKnowledgeIndexBuild`（按租户，领取时结束耗尽 / 到期作业，来源 epoch 变化时清空重来）、`HeartbeatKnowledgeIndexBuild`、`ReusableEmbeddings`（同租户同模型 / 维度 / 预处理、指纹相同，含 failed / cancelled）、`PutIndexBatch`（令牌围栏，向量 / 计数 / 游标同事务；`FOR KEY SHARE` 处理并发删分块）、`Finish` / `Release` / `Cancel` / `Delete`、`ActivateKnowledgeIndex`（`IndexActivationError` 码 not_ready / documents_changed / coverage_incomplete，写 activated / rolled_back 事件）、`NoteConfiguredModels` |
+| 模型层 | `retrieval/providers.go`：`_TIMEOUT_SECONDS`、`_TRUNCATE`（仅 tei）、`_INFO_URL`、`AUTOBID_EMBEDDING_QUERY_PREFIX`、`AUTOBID_RERANKER_MAX_CANDIDATES`；`ErrModelTransient`（连接失败、429/502/503/504）；`ModelInfo` 安全回显（不含 URL / 密钥）；`Served` 与自检中的修订核对；`WithUsageSink` |
+| 服务层 | `retrieval/service.go`：`Diagnostics`（模式、模型、索引状态、融合 / 重排条数、脱敏原因），`IndexState` 是检索与状态接口共用的唯一判定，非 current 时不调用 embedding；通道级超时（`ChannelTimeout`，默认 18 秒）；模型成败写 `toolhealth`；`retrieval/index_build.go`：`SubmitIndexBuild`、`ActivateIndex`（model_unconfigured / model_mismatch / dimension_mismatch / preprocessing_mismatch）、`IndexRunner`；`retrieval/status.go`：`RetrievalStatus` 四态 semantic / degraded / lexical_only / empty |
+| HTTP | `GET /api/knowledge/retrieval-status`、`GET /api/knowledge/index-events`、`POST /api/knowledge/indexes`（202 + `replayed`；503 `runtime_unavailable`、409 `build_active` / `idempotency_conflict`、422 `nothing_to_index`）、`POST .../activate`（409 + 原因码）、`POST .../cancel`（409 `already_terminal`）、`DELETE .../{id}`（409 `index_in_use`）；响应不含模型地址 |
+| Agent | `tool_runtime_status` 增加 `semantic_retrieval`；`kb_search_*` 增加 `retrieval_mode` / `index_state`，`lexical_only` 时给 `degraded_note`（没有命中不代表知识库没有）；`kb_research` 透出 `diagnostics`。未新增任何写工具：构建、启用、回滚只给人 |
+| 运行 | `tools/local-models`（`service.py`、`fetch_models.py`、`models.lock.json`、`requirements*.txt`、`test_service.py`）；`start.bat` 在 `AUTOBID_LOCAL_MODELS=1` 且未配置 `AUTOBID_EMBEDDING_URL` 时启动；登记见 `docs/LOCAL_RUNTIME.md` 3.4 / 4.2 |
+| 前端 | `api/types.ts` / `client.ts`；`features/retrieval/retrieval-status.ts`（纯逻辑，单测）、`SemanticStatus.tsx`（状态卡、状态条、降级说明）、`IndexManager.tsx`（构建进度、取消、启用 / 回滚确认、删除、事件记录）；`pages/KnowledgePage.tsx`、`pages/task/ResearchTab.tsx`、`components/RetrievalEvidence.tsx`（证据汇总） |
+
+**实施时选定的细节**：
+
+- **降级码不变**：`semantic_index_missing_or_stale` 等现有码保持，评测与测试依赖；具体原因放进 `Diagnostics.IndexState` 和 `reasons` 的 `index_*`。
+- **重排上限是配置，不算降级**：`AUTOBID_RERANKER_MAX_CANDIDATES` 不产生 `rerank_truncated`；只有预算造成的截断才产生。
+- **研究运行的重排只用剩余预算的一半**：真实招标分块下，一次重排能占满 48000 预留，后续补查永远排不上。总预算与默认值不变，`search` 类运行不受影响。
+- **构建结束时不比较 epoch**：构建期间文档变化的索引仍为 ready，启用时以 `documents_changed` 拒绝；重建靠复用很便宜，不让长构建追着文档变化重跑。
+- **回滚须先切回旧模型**：`ActivateIndex` 核对当前配置，服务配的是新模型时不能启用旧模型索引。回滚顺序是改配置、重启、启用旧索引。
+- **未配置 `INFO_URL` 时修订仍只是配置声明**：托管模型（百炼）无法核对权重，本地服务可以。
+
+**业务决策（无稳定收益保持既有模型和单 Agent）**：同一合成集（28 题保留集，`-groups A,B,C -repeat 1`）nDCG@10：
+
+| 组 | 本地模型 | 百炼 |
+| --- | --- | --- |
+| A 词法基线 | 0.9473 | 0.9473 |
+| B 语义 | 0.9473 | 0.9473 |
+| C 融合重排 | 0.9473 | 0.9649 |
+
+Recall@20 均为 1（集合太小，必然饱和）。本地模型在该集上没有优于词法基线；百炼略高，但样本不构成质量证据。因此默认配置不变：继续用现有百炼配置，`AUTOBID_RETRIEVAL_MULTI_AGENT` 保持 false，本地模型只作可选能力。百炼临时授权 2026-11-29 到期后，未配置模型时检索如实退回全文与关键词；是否改用本地模型由用户决定。
+
+**验证结果**：
+
+- `go vet ./...` 通过；真实 PostgreSQL 下 `go test -race -count=1 -p 1 ./...`：**467 条测试 / 子测试通过，0 失败，0 竞态报告**，26 个包通过；4 项可选跳过（`TestOfficeLargeDocumentAndSoak`、`TestLiveModelContract`、两个浏览器用例，需显式环境变量开启）。配置了本机 WPS、mmdc 与 PaddleOCR，真实组件用例实际执行。`TestLiveModelContract` 另用本地模型开启运行并通过。
+- 默认并行的 `go test -race ./...` 有 1 个失败：`TestExportCancelDuringRealRefresh`。该用例快照“调用前已存在的 WPS 自动化进程”并断言它们不被结束，并行时快照到了 `server` 包真实导出启动的进程，后者正常退出即被判失败。单独运行、S6 与未改动的基线代码都通过，`-p 1` 全量通过。这是 S4 用例的跨包竞争，与 S6 无关，未修改；真实导出用例须串行运行（`-p 1`）。
+- 新增测试 43 个函数，覆盖约定的全部场景：`retrieval/s6_test.go`、`s6_providers_test.go`、`db/knowledge_index_jobs_test.go`、`server/s6_retrieval_test.go`、`bidtools/s6_retrieval_test.go`、`toolhealth/s6_test.go`。
+- 前端 `npm --prefix web run build` 通过；`test:unit` 94/94 通过（S6 新增 55 条）。本地模型 `test_service.py` 9/9 通过（真实模型）。
+- **真实组件演练**（真实服务二进制 + 隔离库 + 真实模型服务 + 3 份真实招标 DOCX，973 个分块），42 项通过：
+  - 全量构建 973 块 28.1 秒（34.6 块/秒）；新增 1 份文档后重建 0.8 秒，只算 1 块、复用 973 块。
+  - 构建中杀服务进程：租约到期后接管（`attempts=2`），已写入的页不重算，`embedded` 不重复计数。
+  - 构建中杀模型服务：回队列带 `retry_after`，截止时间不变，恢复后完成，最终 `embedded=974=total`。
+  - 模型切换：旧索引不再参与（`index_id=0`），启用旧模型索引返回 `model_mismatch`；切回后 `rollback_ready`，启用即恢复，不重算。
+  - 运行中杀模型服务：词法结果照常返回，两个降级码与脱敏原因齐全，健康降为 `degraded`，状态响应不含地址；服务恢复后下一次检索自动恢复。
+  - 模型挂起（只接受连接不回应）：`AUTOBID_RETRIEVAL_CHANNEL_TIMEOUT_SECONDS=3` 时 6.1 秒返回词法结果与两个降级码，不报错。
+  - 审计记录包含 `model_configured`（每次切换一条）、`build_requested`、`build_ready`、`activated`、`rolled_back`。
+- **真实百炼演练**（7 项通过，用量约 300 token）：本地 512 维索引不用于 1024 维的百炼模型；真实重建、混合检索 0.91 秒；服务商用量写入 `actual_tokens`（295）；切回本地后启用旧索引，不重算。
+- **旧库升级演练**：HEAD 的 schema + 活动索引 + 遗留 `building` 孤儿行，经 `cmd/migrate` 两次：活动索引不变，孤儿行变为 `failed` + `INTERRUPTED`，第二次幂等；约束、索引、触发器都生效，冻结列与终态写入被拒绝，第二个活跃构建被唯一索引拒绝。
+- **本地模型实测**（本机 CPU i7-12700H，6 线程，中位数）：
+
+  | 文本长度 | embedding（32 条） | rerank 30 条 | rerank 100 条 |
+  | --- | --- | --- | --- |
+  | 约 70 字（200 字节） | 160 ms | 338 ms | 1.0 s |
+  | 约 200 字（600 字节） | 466 ms | 899 ms | 2.8 s |
+  | 约 470 字（1400 字节，真实分块 p90） | 1.2 s | 2.4 s | 8.4 s |
+
+  服务峰值工作集约 2.2 GB。带重排的混合检索端到端 2.4~2.9 秒。
+
+**验收中发现并修正**（均为真实数据才暴露，合成测试没有覆盖）：
+
+- **检索被真实表格打断（S6 之前就有）**：候选结果经 singleflight 做一次 JSON 往返，`json.Marshal` 把 `RawMessage` 里的 `<`、`>`、`&` 转义，`sameJSON` 又按字节比较。命中的表格只要含这些字符，整次检索返回 500 `retrieval conflict`。已改为按 JSON 值比较，回归测试 `TestSearchCapturesTableWithEscapableCharacters`。
+- **研究的有界补查在真实数据上走不到（S6 之前就有）**：见上方预算细节；回归测试 `TestResearchRerankLeavesBudgetForFollowUp`。浏览器实测修复前调用 3 次、预留 45724 后预算耗尽，修复后调用 4 次、预留 36440，走到补查一步。
+- **取消构建误报模型故障**、**语义通道正常但过滤后 0 命中被误报为只做了全文检索**、**Runner 跨租户抢作业**、**构建中删分块的外键竞态**、**失败构建的向量不能复用**：代码审查发现，已修正并加测试。
+- **页面**：状态条在检索后不刷新，结果写“只做了全文检索”而顶部仍是绿色“语义检索正常”；引用行在模型宕机时写“向量召回”；新建索引标“可切换/回滚”；研究缺口有英文漏出；运行记录全部展开。已修正，并在浏览器复验。
+- **本地模型**：embedding 截断时 `Encoding.truncate` 丢 `[SEP]`，改用分词器截断。服务初测报告的 rerank 耗时（100 条 0.5 秒）用的是短文本，上表为真实长度的重测。
+
+**边界（未包含在 S6）**：
+
+- 检索质量没有结论：只有 32 题合成集，没有人工标注语料；本地模型与百炼的差异不构成业务证据。V/P 继续待验证。
+- 本地重排只开 30 条候选（`start.bat`），真实表格分块下仍常见 `rerank_truncated`，这是预算内的如实标记。
+- 只配置了 CPU。本机有 RTX 3050 Laptop GPU，未测 GPU 配置。
+- 索引仍是 PostgreSQL 精确余弦，没有 pgvector / HNSW；只测到约 1000 分块，更大规模的检索延迟未测。
+- 暂时故障的尝试预算（3 次）不随进度重置；构建失败后重建能复用已写向量，不会重复付费。
+- 一个进程只有一个构建执行者；单实例部署前提不变。
+- 多 Agent 仍默认关闭，没有 E/D 对比实验。
+- 启用 / 回滚的操作人仍是 `X-Autobid-User` 审计声明，不是 R2 可信身份；Agent 没有这些操作的工具。
+- 这组检索用例没有配 LLM Profile，研究页的补查只验证到“能走到模型调用这一步”，没有真实模型补查的效果数据。
 
 ## 13. 上游参考与版本核对入口
 

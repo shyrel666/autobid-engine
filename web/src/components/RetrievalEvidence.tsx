@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { api, errorText } from '../api/client'
 import type { EvidenceClaim, RetrievalEvidence as Evidence } from '../api/types'
 import { useAsync } from '../hooks/useAsync'
-import { Button, Card, ErrorBanner, Field, Input, Select, Badge } from './ui'
+import { Button, Card, Empty, ErrorBanner, Field, Input, Select, Badge, Spinner } from './ui'
 import { TableView } from './TableView'
+import { evidenceSummary } from '../features/retrieval/retrieval-status'
 
 function EvidenceItem({ evidence, refresh }: { evidence: Evidence; refresh: () => void }) {
   const [claim, setClaim] = useState<EvidenceClaim>({ text: '', parameter: '', operator: '<=', value: 0, unit: '秒', product: '', version: '' })
@@ -32,22 +33,12 @@ function EvidenceItem({ evidence, refresh }: { evidence: Evidence; refresh: () =
 }
 export function RetrievalEvidence({ runID }: { runID: number }) {
   const data = useAsync(() => api.retrievalEvidence(runID), [runID])
+  const summary = evidenceSummary(data.data)
   return <Card title="证据与核验" actions={<Button onClick={() => void data.reload()}>刷新有效性</Button>}>
     <ErrorBanner error={data.error} />
+    {data.data && <p className="mb-3 text-sm text-muted">已核验 {summary.verified} · 待核验 {summary.pending} · 来源失效 {summary.stale}</p>}
+    {data.loading && !data.data && <Spinner />}
+    {data.data?.length === 0 && <Empty>暂无证据；没有命中不代表知识库没有相关内容，请调整检索条件或核对原文。</Empty>}
     <div className="space-y-2">{data.data?.map(e => <EvidenceItem key={e.id} evidence={e} refresh={() => void data.reload()} />)}</div>
-  </Card>
-}
-
-export function KnowledgeIndexes() {
-  const data = useAsync(() => api.knowledgeIndexes(), [])
-  const [dimension, setDimension] = useState(1024)
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const run = async (action: () => Promise<unknown>) => { setBusy(true); setError(''); try { await action(); await data.reload() } catch(e) { setError(errorText(e)) } finally { setBusy(false) } }
-  return <Card title="语义索引">
-    <p className="mb-3 text-sm text-slate-500">服务端配置模型后按实际维度构建。构建完成再激活；来源变更后需重建。可激活同一来源快照的旧索引以回滚。</p>
-    <div className="flex items-end gap-2"><Field label="模型维度"><Input type="number" min={1} max={8192} value={dimension} onChange={e => setDimension(Number(e.target.value))} /></Field><Button loading={busy} onClick={() => void run(() => api.buildKnowledgeIndex(dimension))}>构建</Button><Button onClick={() => void data.reload()}>刷新</Button></div>
-    <ErrorBanner error={error || data.error} />
-    <div className="mt-3 space-y-2">{data.data?.map(i => <div key={i.id} className="flex items-center gap-2 text-sm"><span>#{i.id} · {i.model} · {i.dimension} 维 · {i.status}</span>{i.active ? <Badge tone="green">当前索引</Badge> : <Button disabled={busy || i.status !== 'ready'} onClick={() => void run(() => api.activateKnowledgeIndex(i.id))}>激活</Button>}{i.error && <span>{i.error}</span>}</div>)}</div>
   </Card>
 }

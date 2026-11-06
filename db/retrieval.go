@@ -13,18 +13,6 @@ import (
 var ErrRetrievalConflict = errors.New("retrieval conflict")
 var ErrRetrievalBudget = errors.New("retrieval budget exhausted")
 
-type KnowledgeIndex struct {
-	ID            int64  `json:"id"`
-	TenantID      string `json:"tenant_id"`
-	Model         string `json:"model"`
-	Dimension     int    `json:"dimension"`
-	Preprocessing string `json:"preprocessing"`
-	Epoch         int64  `json:"epoch"`
-	Status        string `json:"status"`
-	Active        bool   `json:"active"`
-	Error         string `json:"error"`
-}
-
 func ValidateVectors(v [][]float64, n, dim int) error {
 	if len(v) != n {
 		return fmt.Errorf("embedding count: got %d want %d", len(v), n)
@@ -50,32 +38,6 @@ func (d *DB) KnowledgeEpoch(ctx context.Context, tenant string) (int64, error) {
 	var n int64
 	err := d.QueryRowContext(ctx, `SELECT COALESCE((SELECT epoch FROM knowledge_catalogs WHERE tenant_id=$1),0)`, tenantOr(tenant)).Scan(&n)
 	return n, err
-}
-func (d *DB) KnowledgeIndexes(ctx context.Context, tenant string) ([]KnowledgeIndex, error) {
-	rows, err := d.QueryContext(ctx, `SELECT id,tenant_id,model,dimension,preprocessing,epoch,status,active,error FROM knowledge_indexes WHERE tenant_id=$1 ORDER BY id DESC`, tenantOr(tenant))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []KnowledgeIndex{}
-	for rows.Next() {
-		var x KnowledgeIndex
-		if err := rows.Scan(&x.ID, &x.TenantID, &x.Model, &x.Dimension, &x.Preprocessing, &x.Epoch, &x.Status, &x.Active, &x.Error); err != nil {
-			return nil, err
-		}
-		out = append(out, x)
-	}
-	return out, rows.Err()
-}
-func (d *DB) StartKnowledgeIndex(ctx context.Context, tenant, model, prep, actor string, dim int) (KnowledgeIndex, error) {
-	x := KnowledgeIndex{TenantID: tenantOr(tenant), Model: model, Dimension: dim, Preprocessing: prep, Status: "building"}
-	var err error
-	x.Epoch, err = d.KnowledgeEpoch(ctx, tenant)
-	if err != nil {
-		return x, err
-	}
-	err = d.QueryRowContext(ctx, `INSERT INTO knowledge_indexes(tenant_id,model,dimension,preprocessing,epoch,status,created_by,updated_by) VALUES($1,$2,$3,$4,$5,'building',$6,$6) RETURNING id`, x.TenantID, model, dim, prep, x.Epoch, actor).Scan(&x.ID)
-	return x, err
 }
 func ChunkFingerprint(doc *KnowledgeDocument, c *KnowledgeChunk) string {
 	b, _ := json.Marshal([]any{doc.ContentHash, doc.Title, doc.Extra, doc.ParseMeta, doc.Category, c.SectionPath, c.Content, c.Tables, c.BBoxMeta, c.PageStart, c.PageEnd})
@@ -107,62 +69,6 @@ func (d *DB) IndexChunks(ctx context.Context, tenant string, after int64, limit 
 		out = append(out, IndexChunk{c, doc})
 	}
 	return out, rows.Err()
-}
-func (d *DB) PutKnowledgeEmbeddings(ctx context.Context, x KnowledgeIndex, chunks []IndexChunk, v [][]float64) error {
-	if err := ValidateVectors(v, len(chunks), x.Dimension); err != nil {
-		return err
-	}
-	return d.InTx(ctx, func(tx *sql.Tx) error {
-		for i, c := range chunks {
-			res, err := tx.ExecContext(ctx, `INSERT INTO knowledge_embeddings(tenant_id,index_id,chunk_id,content_hash,embedding,created_by,updated_by)
- SELECT $1,$2,c.id,$4,$5::float8[],i.created_by,i.created_by FROM knowledge_chunks c JOIN knowledge_indexes i ON i.id=$2 AND i.tenant_id=$1
- WHERE c.id=$3 AND c.tenant_id=$1 AND i.status='building' ON CONFLICT(tenant_id,index_id,chunk_id) DO UPDATE SET content_hash=EXCLUDED.content_hash,embedding=EXCLUDED.embedding`, x.TenantID, x.ID, c.Chunk.ID, ChunkFingerprint(c.Document, c.Chunk), v[i])
-			if err != nil {
-				return err
-			}
-			n, _ := res.RowsAffected()
-			if n != 1 {
-				return ErrRetrievalConflict
-			}
-		}
-		return nil
-	})
-}
-func (d *DB) FinishKnowledgeIndex(ctx context.Context, x KnowledgeIndex, buildErr error) error {
-	status, msg := "ready", ""
-	if buildErr != nil {
-		status, msg = "failed", buildErr.Error()
-	}
-	_, err := d.ExecContext(ctx, `UPDATE knowledge_indexes SET status=$3,error=$4 WHERE tenant_id=$1 AND id=$2 AND status='building'`, x.TenantID, x.ID, status, msg)
-	return err
-}
-
-// Activation and rollback both require an intact snapshot. A partial or stale build cannot become active.
-func (d *DB) ActivateKnowledgeIndex(ctx context.Context, tenant string, id int64, actor string) error {
-	tenant = tenantOr(tenant)
-	return d.InTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_catalogs(tenant_id) VALUES($1) ON CONFLICT DO NOTHING`, tenant); err != nil {
-			return err
-		}
-		var epoch int64
-		if err := tx.QueryRowContext(ctx, `SELECT epoch FROM knowledge_catalogs WHERE tenant_id=$1 FOR UPDATE`, tenant).Scan(&epoch); err != nil {
-			return err
-		}
-		var ok bool
-		err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM knowledge_indexes i WHERE i.id=$2 AND i.tenant_id=$1 AND i.status='ready' AND i.epoch=$3
-    AND NOT EXISTS(SELECT 1 FROM knowledge_chunks c WHERE c.tenant_id=$1 AND NOT EXISTS(SELECT 1 FROM knowledge_embeddings e WHERE e.tenant_id=$1 AND e.index_id=i.id AND e.chunk_id=c.id AND cardinality(e.embedding)=i.dimension)))`, tenant, id, epoch).Scan(&ok)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return ErrRetrievalConflict
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE knowledge_indexes SET active=false,updated_by=$2 WHERE tenant_id=$1 AND active`, tenant, actor); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE knowledge_indexes SET active=true,updated_by=$3 WHERE tenant_id=$1 AND id=$2`, tenant, id, actor)
-		return err
-	})
 }
 
 type RetrievalRun struct {

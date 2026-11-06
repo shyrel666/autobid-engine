@@ -124,6 +124,9 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	retriever := retrieval.New(pg, embedding, reranker)
+	if err := retriever.ConfigureFromEnv(); err != nil {
+		return err
+	}
 	hub := server.NewHub()
 	var recordBodies atomic.Bool
 	recordBodies.Store(envBool("AUTOBID_RECORD_BODIES"))
@@ -134,6 +137,7 @@ func run(logger *slog.Logger) error {
 	// 启动时并行自检文档引擎（WPS / Word）与 mermaid-cli 并记日志；不可用时 PDF 任务明确失败、DOCX 标注目录页码未刷新，
 	// 图表保持 unrendered。OCR / embedding / reranker 在后台自检（见下方 ProbeRuntime）。
 	runtimeHealth := toolhealth.New()
+	retriever.Health = runtimeHealth
 	exporter := export.NewServiceFromEnv(pg, exportDir, logger, runtimeHealth)
 	hostname, _ := os.Hostname()
 	// 扫描件 OCR：AUTOBID_OCR_URL（本机 OCR 服务，如 tools/paddleocr）→ PATH 中的 tesseract → 不可用（扫描件上传返回 422）。
@@ -237,6 +241,31 @@ func run(logger *slog.Logger) error {
 
 	// 4. HTTP/SSE 控制面。WriteTimeout 为 0：SSE 是长连接，单个处理器自行控制生命周期。
 	server.ProbeRuntime(engineCtx, runtimeHealth, ocr, embedding, reranker)
+	var indexRunner *retrieval.IndexRunner
+	if embedding != nil {
+		lastIndexStatus := "" // OnChange also fires for every page of progress; the runner calls it from one goroutine
+		indexRunner = &retrieval.IndexRunner{Service: retriever, TenantID: db.DefaultTenant, Owner: fmt.Sprintf("%s/%d/indexes", hostname, os.Getpid()), Logger: logger,
+			OnChange: func(x *db.KnowledgeIndex) {
+				if key := fmt.Sprintf("%d/%s", x.ID, x.Status); key != lastIndexStatus {
+					lastIndexStatus = key
+					logger.Info("knowledge index changed", "id", x.ID, "status", x.Status, "embedded", x.EmbeddedChunks, "reused", x.ReusedChunks, "total", x.TotalChunks)
+				}
+			}}
+		indexRunner.Start(engineCtx)
+	}
+	embeddingID, rerankerID, embeddingDimension := "", "", 0
+	if embedding != nil {
+		embeddingID = embedding.Model()
+		if m, ok := embedding.(*retrieval.HTTPModel); ok {
+			embeddingDimension = m.Dimension
+		}
+	}
+	if reranker != nil {
+		rerankerID = reranker.Model()
+	}
+	if err := pg.NoteConfiguredModels(engineCtx, db.DefaultTenant, map[string]any{"embedding": embeddingID, "embedding_dimension": embeddingDimension, "reranker": rerankerID}, "server"); err != nil {
+		logger.Warn("record configured retrieval models failed", "err", toolhealth.SanitizeModel(err.Error()))
+	}
 	// 导出执行者：先回收租约已过期的 running 任务（上次进程中断），再轮询 queued 任务。
 	runner := &export.Runner{Service: exporter, Owner: fmt.Sprintf("%s/%d", hostname, os.Getpid()), Logger: logger,
 		Workers: envInt("AUTOBID_EXPORT_WORKERS", 2),
@@ -267,7 +296,7 @@ func run(logger *slog.Logger) error {
 		close(fileRunnerDone)
 	}
 	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
-		Retrieval: retriever, Export: exporter, ExportRunner: runner, FileStore: fileStore, FileRunner: fileRunner, Runtime: runtimeHealth})
+		Retrieval: retriever, IndexRunner: indexRunner, Export: exporter, ExportRunner: runner, FileStore: fileStore, FileRunner: fileRunner, Runtime: runtimeHealth})
 	go api.RunSectionJobs(engineCtx)
 	srv := &http.Server{
 		Addr:              addr,

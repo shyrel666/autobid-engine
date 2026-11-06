@@ -146,6 +146,45 @@ start "autobid-ocr" /min "%AB_OCR_PY%" -X utf8 "%CD%\tools\paddleocr\service.py"
 set "AUTOBID_OCR_URL=http://127.0.0.1:%AUTOBID_OCR_PORT%/ocr"
 :ocr_done
 
+rem 本机语义模型（可选，见 docs/LOCAL_RUNTIME.md 3.4）：默认不启用，只有设置 AUTOBID_LOCAL_MODELS=1 才启动。
+rem 已配置 AUTOBID_EMBEDDING_URL（如云端模型）时以现有配置为准，不覆盖；切换模型后须在知识库“语义索引”页重建并启用。
+if not "%AUTOBID_LOCAL_MODELS%"=="1" goto models_done
+set "AB_LM_DIR=%CD%\tools\local-models"
+if not defined AUTOBID_LOCAL_MODELS_PORT set "AUTOBID_LOCAL_MODELS_PORT=18766"
+if defined AUTOBID_EMBEDDING_URL (
+    echo [autobid] 已配置 AUTOBID_EMBEDDING_URL，保持现有语义模型，不启动本机模型服务。
+    goto models_done
+)
+if not exist "%AB_LM_DIR%\.venv\Scripts\python.exe" (
+    echo [autobid] 未安装本机模型环境，跳过；安装方法见 docs/LOCAL_RUNTIME.md 3.4。 1>&2
+    goto models_done
+)
+if not exist "%AB_LM_DIR%\models\env.bat" (
+    echo [autobid] 未下载本机模型，跳过；安装方法见 docs/LOCAL_RUNTIME.md 3.4。 1>&2
+    goto models_done
+)
+echo [autobid] 启动本机语义模型服务，端口 %AUTOBID_LOCAL_MODELS_PORT% ...
+start "autobid-models" /min "%AB_LM_DIR%\.venv\Scripts\python.exe" -X utf8 "%AB_LM_DIR%\service.py" --port %AUTOBID_LOCAL_MODELS_PORT%
+call "%AB_LM_DIR%\models\env.bat"
+set "AB_LM_URL=http://127.0.0.1:%AUTOBID_LOCAL_MODELS_PORT%"
+set "AUTOBID_EMBEDDING_URL=%AB_LM_URL%/embedding/embed"
+set "AUTOBID_EMBEDDING_INFO_URL=%AB_LM_URL%/embedding/info"
+set "AUTOBID_EMBEDDING_MODEL=bge-small-zh-v1.5"
+set "AUTOBID_EMBEDDING_DIMENSION=512"
+set "AUTOBID_EMBEDDING_FORMAT=tei"
+set "AUTOBID_EMBEDDING_MAX_BATCH=16"
+set "AUTOBID_EMBEDDING_TRUNCATE=1"
+set "AUTOBID_EMBEDDING_TIMEOUT_SECONDS=60"
+set "AUTOBID_EMBEDDING_QUERY_PREFIX=为这个句子生成表示以用于检索相关文章："
+set "AUTOBID_RERANKER_URL=%AB_LM_URL%/reranker/rerank"
+set "AUTOBID_RERANKER_INFO_URL=%AB_LM_URL%/reranker/info"
+set "AUTOBID_RERANKER_MODEL=bge-reranker-base-int8"
+set "AUTOBID_RERANKER_FORMAT=tei"
+set "AUTOBID_RERANKER_TRUNCATE=1"
+set "AUTOBID_RERANKER_TIMEOUT_SECONDS=60"
+if not defined AUTOBID_RERANKER_MAX_CANDIDATES set "AUTOBID_RERANKER_MAX_CANDIDATES=30"
+:models_done
+
 if not defined AUTOBID_HTTP_ADDR set "AUTOBID_HTTP_ADDR=127.0.0.1:8080"
 if not defined AUTOBID_WEB_DIR set "AUTOBID_WEB_DIR=%CD%\web\dist"
 if not exist "%AUTOBID_WEB_DIR%\index.html" (

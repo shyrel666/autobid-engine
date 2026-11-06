@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/internal/tool"
+	"github.com/autobid/autobid-engine/retrieval"
 	"github.com/autobid/autobid-engine/toolhealth"
 )
 
@@ -22,11 +24,20 @@ func (k *Kit) RuntimeTools() []tool.CoreTool {
 	if k.runtime == nil {
 		return nil
 	}
-	return []tool.CoreTool{RuntimeStatusTool(k.runtime)}
+	multi := k.research != nil && k.research.MultiEnabled
+	return []tool.CoreTool{runtimeStatusTool(k.runtime, k.retrieval, k.tenant, multi)}
 }
 
 // RuntimeStatusTool 构造 tool_runtime_status。
-func RuntimeStatusTool(reg *toolhealth.Registry) tool.CoreTool {
+func RuntimeStatusTool(reg *toolhealth.Registry, services ...*retrieval.Service) tool.CoreTool {
+	var svc *retrieval.Service
+	if len(services) > 0 {
+		svc = services[0]
+	}
+	return runtimeStatusTool(reg, svc, db.DefaultTenant, false)
+}
+
+func runtimeStatusTool(reg *toolhealth.Registry, svc *retrieval.Service, tenant string, multi bool) tool.CoreTool {
 	caps := []any{"all"}
 	for _, c := range toolhealth.All {
 		caps = append(caps, string(c))
@@ -35,11 +46,11 @@ func RuntimeStatusTool(reg *toolhealth.Registry) tool.CoreTool {
 		Name: ToolRuntimeStatus,
 		Description: "查询本机运行能力的功能自检状态：office（WPS / Word 文档引擎，决定 PDF 与最终稿导出）、mermaid（图表渲染）、ocr（扫描件识别）、" +
 			"enhanced_pdf（增强 PDF 解析）、embedding / reranker（语义检索模型）。state 为 unconfigured / starting / healthy / degraded / self_test_failed；" +
-			"available=false 时依赖该能力的工作会失败或降级，应如实记录缺口，不要反复重试。",
+			"available=false 时依赖该能力的工作会失败或降级，应如实记录缺口，不要反复重试。查询 all / embedding / reranker 时同时返回语义检索与活动索引状态。",
 		Schema: obj(map[string]any{
 			"capability": map[string]any{"type": "string", "enum": caps, "description": "要查询的能力，默认 all"},
 		}),
-	}, func(_ context.Context, in json.RawMessage) (tool.Result, error) {
+	}, func(ctx context.Context, in json.RawMessage) (tool.Result, error) {
 		args, err := decode[struct {
 			Capability string `json:"capability"`
 		}](in)
@@ -55,6 +66,19 @@ func RuntimeStatusTool(reg *toolhealth.Registry) tool.CoreTool {
 		default:
 			return tool.Errorf("INVALID_ARGUMENT: unknown capability %q", args.Capability), nil
 		}
-		return tool.JSON(map[string]any{"capabilities": list}), nil
+		out := map[string]any{"capabilities": list}
+		if svc != nil && (args.Capability == "" || args.Capability == "all" || args.Capability == "embedding" || args.Capability == "reranker") {
+			status, err := svc.Status(ctx, tenant)
+			if err != nil {
+				out["semantic_retrieval_error"] = "semantic retrieval status unavailable"
+			} else {
+				semantic := map[string]any{"state": status.State, "reasons": status.Reasons, "index_state": status.IndexState, "strategy": status.Strategy, "multi_agent_enabled": multi}
+				if x := status.ActiveIndex; x != nil {
+					semantic["active_index"] = map[string]any{"id": x.ID, "model": x.Model, "dimension": x.Dimension, "epoch": x.Epoch}
+				}
+				out["semantic_retrieval"] = semantic
+			}
+		}
+		return tool.JSON(out), nil
 	})
 }

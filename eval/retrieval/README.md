@@ -77,17 +77,32 @@ export AUTOBID_RERANKER_FORMAT=dashscope
 - **用量**：响应中的 `usage.total_tokens` 会累计到 `HTTPModel.TokensUsed()`，评测报告的 `provider_reported_tokens` 记录整次运行的用量。按实测，中文大约每字 1 个 token，嵌入每条另有约 14 token 的固定开销；重排按查询与全部候选的总长度计费。真实分块下，单次搜索的重排输入受 64000 字节的预留上限约束，约 2 万 token，所以 1M 额度大约够 50 次满额重排。
 - **本机网络**：Windows 自带的 `curl`（schannel）连接 dashscope 时证书吊销检查会失败，需要加 `--ssl-no-revoke`；Go 客户端不受影响。模型名称和 revision 为配置声明，部署方须固定实际权重修订；接口不验证服务器权重文件。响应校验数量、索引、维度、有限数及非零向量；HTTP 默认 20 秒、无自动重试/重定向。
 
-1. 配好模型，启动服务器，知识库页面 →「语义索引」→ 按模型实际维度构建。
-2. 检查 `ready` 后激活。构建与激活分开；文档 epoch、模型、维度、预处理和 embedding 覆盖率须一致。
-3. 修改模型修订/维度/预处理时重新构建；同一文档 epoch 的旧索引可再次激活回滚。旧文档快照的索引拒绝激活。
-4. 构建为同步分页任务；中断留下的 building 记录不参与检索，可重新构建。它不是后台自动续建服务。
+其它可选变量（缺省时行为不变）：
+
+| 变量 | 取值 | 含义 |
+| --- | --- | --- |
+| `{EMBEDDING,RERANKER}_TIMEOUT_SECONDS` | 1..600，默认 20 | 单次模型请求超时 |
+| `{EMBEDDING,RERANKER}_TRUNCATE` | `1` / `true` | 仅 `tei`：超长文本由服务截断。未设置时超长文本返回 413，构建失败 |
+| `{EMBEDDING,RERANKER}_INFO_URL` | URL | TEI `/info` 形状的接口。配置后自检核对 `model_sha` 与 `REVISION`，不一致时自检失败 |
+| `AUTOBID_EMBEDDING_QUERY_PREFIX` | 文本 | 只加在检索查询前（BGE 中文模型的检索指令），不影响文档编码 |
+| `AUTOBID_RERANKER_MAX_CANDIDATES` | 1..100，默认 100 | 每次最多重排的候选数；这是配置上限，不算降级 |
+| `AUTOBID_RETRIEVAL_CHANNEL_TIMEOUT_SECONDS` | 1..19，默认 18 | 单个模型通道的上限，超时只降级，词法结果照常返回 |
+| `AUTOBID_INDEX_BUILD_DEADLINE_SECONDS` | 1..86400，默认 7200 | 构建作业首次提交时固定的截止时间 |
+
+可选的本机模型包见 [docs/LOCAL_RUNTIME.md](../../docs/LOCAL_RUNTIME.md) 3.4，默认不启用。
+
+1. 配好模型，启动服务器，知识库页面 →「语义索引」→「构建语义索引」。构建在后台执行，关闭页面不影响；页面显示进度，可取消。
+2. 构建完成后由人确认启用。文档 epoch、模型、维度、预处理和 embedding 覆盖率须一致，否则拒绝并返回原因码。
+3. 修改模型修订 / 维度 / 预处理时重新构建。同一文档 epoch 的旧索引可再次启用以回滚；回滚旧模型的索引要先把服务配置切回旧模型。旧文档快照的索引拒绝启用。
+4. 文档变化后活动索引过期，语义通道下线并如实报告 `documents_changed`。重建时，同模型、同维度、同预处理的历史索引（含失败或取消的构建）里内容指纹相同的向量直接复用，只为变化的分块调用模型。
+5. 构建是持久化作业（`retrieval.IndexRunner`）：每页向量、计数和游标同事务写入，崩溃后租约到期由下次领取从游标接续；模型暂时不可用时回队列，在原截止时间与 3 次尝试内重试。每租户至多一个活跃构建；模型配置在提交后变化时作业以 `RUNTIME_UNAVAILABLE` 失败，不写向量。
 
 预处理版本 `title-path-metadata-body-v2` 包含标题、章节路径、产品/版本元数据及正文，均为原始数据，无 LLM 派生上下文。保留旧 HashEmbedder 仅用于原有入库/消融 A；语义通道不会静默使用 HashEmbedder 冒充模型。当前使用 PostgreSQL `float8[]` 精确余弦；评测报告记录 pgvector 可用性，不创建 HNSW，也不宣称 ANN 性能。
 
 ## 运行、预算与核验边界
 
-- 搜索每路召回 50，RRF 常数 60，融合最多 100 条重排；搜索最多返回 50 条，捕获前 12 条证据。在有预算的运行中，只重排融合排名靠前、且能放进剩余预留额度的那部分候选，其余候选保持 RRF 顺序，并标记 `rerank_truncated`；连一条都放不下时才是 `reranker_failed`（策略版本 `hybrid-rrf-v2`）。原因是真实招标分块平均约 600 字节、p90 约 1400 字节，100 条候选约 8 万字节，超过单次搜索 64000 的预留上限。按 v1 的做法，真实数据上重排会被整体跳过。评测 Top-20 排名与最终证据集合明确分开。表格偏好只作通道内同分排序，不覆盖相关性。
-- 搜索预算 4 次调用、64000 预留 token、45 秒；research 预算如上。调用包括逻辑源检索、embedding、rerank、规划/补查模型。模型调用按 UTF-8 输入字节的保守 token 上界预留，reasoner 另预留 2048 输出及 framing；失败不退额度。已知 reasoner 用量写入 `actual_tokens`；embedding/rerank 的服务端用量只在进程内累计（`TokensUsed()`），尚未写入运行记录。
+- 搜索每路召回 50，RRF 常数 60，融合最多 100 条重排；搜索最多返回 50 条，捕获前 12 条证据。在有预算的运行中，只重排融合排名靠前、且能放进剩余预留额度的那部分候选，其余候选保持 RRF 顺序，并标记 `rerank_truncated`；连一条都放不下时才是 `reranker_failed`（策略版本 `hybrid-rrf-v2`）。research 运行的重排最多用剩余预留的一半，否则一次重排就占满预算，后续补查排不上；`search` 运行不受此限。`AUTOBID_RERANKER_MAX_CANDIDATES` 先于预算生效，且不算降级。原因是真实招标分块平均约 600 字节、p90 约 1400 字节，100 条候选约 8 万字节，超过单次搜索 64000 的预留上限。按 v1 的做法，真实数据上重排会被整体跳过。评测 Top-20 排名与最终证据集合明确分开。表格偏好只作通道内同分排序，不覆盖相关性。
+- 搜索预算 4 次调用、64000 预留 token、45 秒；research 预算如上。调用包括逻辑源检索、embedding、rerank、规划/补查模型。模型调用按 UTF-8 输入字节的保守 token 上界预留，reasoner 另预留 2048 输出及 framing；失败不退额度。已知 reasoner 用量写入 `actual_tokens`；embedding / rerank 的服务商用量（响应 `usage.total_tokens`，百炼有、TEI 没有）在预算运行内同样写入，索引构建不是运行，只累计在 `TokensUsed()`。
 - 单次预算内的查询由 singleflight 去重；跨运行仅共享不可变成功缓存，避免把一个运行的付费调用归到另一个预算。缓存键包含租户、过滤器、索引 epoch、模型和策略，TTL 1 分钟，上限 128 条；返回深拷贝，降级结果不缓存。调用取消会传递至模型 HTTP。
 - research 子任务租约 20 秒并续租，最多 2 次领取；崩溃后重发同一 `request_key` 和原请求恢复。已完成子任务不重跑；最多再尝试一次丢失响应的外部调用，费用已预留且不退款，不能保证第三方请求恰好一次。需要重发请求才接管，没有后台轮询自动重启模型调用。原截止时间不延长。
 - 来源分域存储。知识库强制 tenant 过滤；招标按 task 过滤；Phase 7 前资信/招标仅允许 default 租户。HTTP 固定 default，当前仍是单团队 Bearer Token 鉴权，不代表已实现 RBAC。
@@ -99,8 +114,12 @@ export AUTOBID_RERANKER_FORMAT=dashscope
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET/POST | `/api/knowledge/indexes` | 列表/同步构建 |
-| POST | `/api/knowledge/indexes/{indexID}/activate` | 激活/回滚 |
+| GET | `/api/knowledge/retrieval-status` | 当前语义检索状态、原因、模型与索引 |
+| GET/POST | `/api/knowledge/indexes` | 列表 / 提交后台构建（202，带 `request_key` 幂等） |
+| POST | `/api/knowledge/indexes/{indexID}/activate` | 启用 / 回滚（409 带原因码） |
+| POST | `/api/knowledge/indexes/{indexID}/cancel` | 取消构建 |
+| DELETE | `/api/knowledge/indexes/{indexID}` | 删除非活动索引 |
+| GET | `/api/knowledge/index-events` | 构建、启用、回滚、模型变更审计 |
 | GET | `/api/retrieval/runs/{runID}` | 请求、预算与结果快照 |
 | GET | `/api/retrieval/runs/{runID}/evidence` | 当前证据有效性 |
 | POST | `/api/retrieval/runs/{runID}/evidence/{evidenceID}/verify` | 结构化指标核验 |
@@ -115,3 +134,11 @@ Agent 使用 `kb_read_evidence`、`kb_verify_evidence`、`kb_research`；旧 `kb
 真实 PostgreSQL 上执行：索引构建/切换/回滚/过期拒绝，来源删除失效、错型号/单位/条件/表格歧义、租户隔离、缓存拷贝、模型故障降级、预分配预算、并发协调、幂等重放、重启租约接管、旧持有者写回拒绝、终态门禁和取消。HTTP 契约测试覆盖证据核验、来源删除和多 Agent 默认拒绝。
 
 检查命令：`go vet ./...`、`go test -race ./... -count=1`、`cd web && npm run build`。Windows cgo 编译器使用官方 [w64devkit v2.10.0](https://github.com/skeeto/w64devkit/releases/tag/v2.10.0) 解压到忽略的 `tmp/phase4-toolchain`，已核对 GitHub release 的 SHA-256 `18d0a4c71a166f8401ab6305781bec5882b40b5e06ba9807c61cb5f3b3c6325e`；仅本次进程设置 `CGO_ENABLED=1` 与 `CC`，未修改全局 PATH。最终结果见同目录 `reports/engineering-checks.md`。
+
+## S6 检索部署（2026-11-06）
+
+状态判定：`GET /api/knowledge/retrieval-status` 与 Agent 工具 `tool_runtime_status` 的 `semantic_retrieval` 同源，`state` 为 `semantic` / `degraded` / `lexical_only` / `empty`，不发起模型调用。检索结果的 `diagnostics` 记录模式、模型、索引状态、融合与重排条数和脱敏后的失败原因。
+
+模型层失败写入 `toolhealth`（预算不足与调用方取消不计入），下一次成功后恢复。模型挂起时通道超时只产生降级，词法结果照常返回。
+
+同一合成集（`-groups A,B,C -repeat 1`）的本地模型结果：[`reports/synthetic-local-models.json`](reports/synthetic-local-models.json)。nDCG@10 为 A / B / C 均 0.947，百炼的 C 组为 0.965；Recall@20 均为 1。这个集太小，只说明本地模型没有表现出优于词法基线的收益，不是质量结论。因此默认配置与单 Agent 不变，本地模型保持可选。实测与故障演练见 [`AGENT_TOOL_SKILLS_PLAN.md`](../../AGENT_TOOL_SKILLS_PLAN.md) 12.10。

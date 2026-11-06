@@ -1,6 +1,6 @@
 # 本机运行依赖登记
 
-登记日期：2026-11-03。对应 [AGENT_TOOL_SKILLS_PLAN.md](../AGENT_TOOL_SKILLS_PLAN.md) S1；2026-11-04 随 S5a 登记本机 OCR（PaddleOCR）。
+登记日期：2026-11-03。对应 [AGENT_TOOL_SKILLS_PLAN.md](../AGENT_TOOL_SKILLS_PLAN.md) S1；2026-11-04 随 S5a 登记本机 OCR（PaddleOCR）；2026-11-06 随 S6 登记可选的本机语义模型。
 
 本项目不做目标部署，运行、开发、测试与验收都以本机为准，见计划第 1、6 节。本文记录本机实际安装并验证过的程序、版本、位置、用途、环境变量和自检方法。
 
@@ -24,8 +24,8 @@
 | `mermaid` 图表渲染 | 用项目生成器构造中文分层架构图和甘特图，各渲染一次，PNG 要能解码，且尺寸不小于 100×50 | 已安装 |
 | `ocr` 扫描件识别 | 识别内置的中文样本图片 `ingest/ocr_selftest.png`，要识别出“招标”和“2026”，坐标落在图片范围内；服务还须回报执行版本（解析作业据此锁定） | 已安装（PaddleOCR，见 3.3） |
 | `enhanced_pdf` 增强 PDF 解析 | 尚未交付，固定为 `unconfigured` | 未交付（S5） |
-| `embedding` 语义向量 | 嵌入一句固定短文本，向量维度要等于配置值，且没有非有限值 | 按 `.env.local.bat` 配置 |
-| `reranker` 语义重排 | 对两段固定文本打分，相关段落得分要高于无关段落 | 按 `.env.local.bat` 配置 |
+| `embedding` 语义向量 | 配了 `INFO_URL` 时先核对服务端模型修订；再嵌入一句固定短文本，向量维度要等于配置值，且没有非有限值 | 按 `.env.local.bat` 配置；可选本机模型见 3.4 |
+| `reranker` 语义重排 | 配了 `INFO_URL` 时先核对服务端模型修订；再对两段固定文本打分，相关段落得分要高于无关段落 | 按 `.env.local.bat` 配置；可选本机模型见 3.4 |
 
 状态值：
 
@@ -35,7 +35,7 @@
 - `degraded`：自检通过，但最近一次实际调用失败。下一次调用成功后恢复为 `healthy`。
 - `self_test_failed`：已配置，但自检失败。
 
-文档引擎和 Mermaid 的自检在启动时并行执行，完成后才开始执行导出作业。其余三项在服务开始监听后于后台执行，自检期间状态为 `starting`。本机 OCR 服务还在加载模型时（连接被拒或 503），OCR 自检在 2 分钟内每 2 秒重试一次，不立即判为失败。
+文档引擎和 Mermaid 的自检在启动时并行执行，完成后才开始执行导出作业。其余三项在服务开始监听后于后台执行，自检期间状态为 `starting`。本机 OCR 或语义模型服务还在加载模型时（连接被拒或 503），自检在 2 分钟内每 2 秒重试一次，不立即判为失败。
 
 自检会消耗少量 embedding / reranker 额度，约几十个 token。
 
@@ -56,6 +56,8 @@
 | Python（OCR 服务） | 3.10.8 | `D:\python-3.10.8`（只用来创建虚拟环境） | 本机 OCR 服务的运行时 |
 | PaddlePaddle | 3.3.1（CPU） | `tools\paddleocr\.venv` | OCR 推理框架 |
 | PaddleOCR / PaddleX | 3.7.0 / 3.7.2 | `tools\paddleocr\.venv` | 扫描件与图片识别（`tools/paddleocr/service.py`） |
+| 语义模型运行时（可选） | onnxruntime 1.20.1、tokenizers 0.21.0、numpy 1.26.4；Python 3.10.8 | `tools\local-models\.venv` | 本机 embedding / rerank 的 CPU 推理，不装 torch |
+| 语义模型（可选） | `Xenova/bge-small-zh-v1.5`（`model.onnx`，512 维）、`Xenova/bge-reranker-base`（`model_int8.onnx`） | `tools\local-models\models` | 本机语义检索，默认不启用 |
 | OCR 模型 | `PP-OCRv5_mobile_det`、`PP-OCRv5_mobile_rec`（默认）；`PP-OCRv5_server_rec`（可选） | `tools\paddleocr\models` | 文字检测与识别；模型文件摘要写进执行版本 |
 
 授权用途由用户自行确认，不作为工程验收条件。
@@ -175,6 +177,37 @@ tesseract 仍可作为备选：安装后带上 `chi_sim` 语言包，经 PATH �
 
 - 当前是阿里云百炼的临时授权，2026-11-29 到期。
 - 密钥只放在被 Git 忽略的 `.env.local.bat` 中。
+- 授权到期后如果不配置其它模型，检索如实退回全文与关键词，页面和 Agent 都能看到原因。
+
+**可选的本机语义模型（S6）**
+
+`tools/local-models/service.py` 是只监听 `127.0.0.1` 的 HTTP 服务，协议沿用 TEI，服务端按 `format=tei` 调用，没有单独的适配代码。**默认不启用**：评测没有显示稳定收益（见 [AGENT_TOOL_SKILLS_PLAN.md](../AGENT_TOOL_SKILLS_PLAN.md) 12.10）。
+
+- `POST /embedding/embed`、`POST /reranker/rerank`：与 TEI 一致；超长且 `truncate=false` 时返回 413。
+- `GET /embedding/info`、`GET /reranker/info`：返回 `model_id`、`model_sha`（ONNX 文件 SHA-256 前 16 位，形如 `sha256:69a0b846f4f116b5`）、服务版本与引擎。服务端自检用 `model_sha` 核对配置的修订，不一致时自检失败。
+- `GET /health`：`loading` / `ready` / `failed`。加载完成前业务接口返回 503。
+- 启动时校验模型文件 SHA-256，只读 `models` 目录，运行时不联网；不打印请求文本。
+
+固定版本清单（纳入 Git）：`models.lock.json`（模型仓库提交与 SHA-256）、`requirements.txt`、`requirements.lock.txt`。`.venv`、`models`、下载缓存不纳入 Git。
+
+安装（一次性，需联网，共约 600 MB）：
+
+```powershell
+D:\python-3.10.8\python.exe -m venv tools\local-models\.venv
+tools\local-models\.venv\Scripts\python.exe -m pip install -r tools\local-models\requirements.lock.txt
+tools\local-models\.venv\Scripts\python.exe -X utf8 tools\local-models\fetch_models.py
+```
+
+`fetch_models.py` 按 `models.lock.json` 下载并校验（约 375 MB），校验不符就删除并报错；下载完成后写 `models\env.bat`（模型修订号）。Hugging Face 不通时加 `--mirror https://hf-mirror.com`。
+
+启用：
+
+1. 删除或注释 `.env.local.bat` 里的 `AUTOBID_EMBEDDING_*` 与 `AUTOBID_RERANKER_*`（已配置时 `start.bat` 保持现有模型）。
+2. 在 `.env.local.bat` 加 `set "AUTOBID_LOCAL_MODELS=1"`。
+3. 运行 `start.bat`。它在名为 `autobid-models` 的最小化窗口中启动服务（端口 `AUTOBID_LOCAL_MODELS_PORT`，默认 18766），并设置全部模型变量，重排候选上限默认 30 条。
+4. 在知识库“语义索引”页构建并启用。模型变了，旧索引不会参与检索。
+
+切回原模型：恢复 `.env.local.bat`，重启后在“语义索引”页启用旧索引，不需要重算。
 - 未配置时 `embedding` 状态为 `unconfigured`，知识库使用 256 维哈希向量，不是语义检索。
 
 ## 4. 本机验证记录（2026-11-03，E 级）
@@ -220,8 +253,24 @@ go test -count=1 -v -run TestOfficeLargeDocumentAndSoak ./export/
 | `TestRealPaddleOCRScannedPDF`（`ingest`） | 自检样本通过。两页 PDF（第 1 页文本层、第 2 页为上表的合成扫描页）按 `auto` 路由解析：只有第 2 页走 OCR，用时约 5 秒；识别出“服务器数量不少于12台”“ISO9001”“99.9%”“机架式服务器”“核心交换机”；逐行识别框共 18 条，都落在 900×1270 图像范围内并带置信度 |
 | `TestRealOCRCandidateImportEndToEnd`（`filework`） | 同一 PDF 经固定解析作业生成候选。执行版本锁定为 PaddleOCR + 两个模型的摘要；候选逐段给出页码、OCR 行数与最低置信度；人工采用后正式入库为 2 页文档，来源 epoch 推进 |
 
+### 4.2 语义检索本机验证记录（2026-11-06，E 级，S6）
+
+服务 `autobid-local-models/1.0.0`，模型修订 `sha256:69a0b846f4f116b5`（embedding）、`sha256:2059d8ef0b6e935b`（reranker）。本机 CPU i7-12700H，6 线程，下表为中位数：
+
+| 文本长度 | embedding（32 条） | rerank 30 条 | rerank 100 条 |
+| --- | --- | --- | --- |
+| 约 70 字（200 字节） | 160 ms | 338 ms | 1.0 s |
+| 约 200 字（600 字节） | 466 ms | 899 ms | 2.8 s |
+| 约 470 字（1400 字节，真实分块 p90） | 1.2 s | 2.4 s | 8.4 s |
+
+- 服务峰值工作集约 2.2 GB。
+- 3 份真实招标 DOCX（973 个分块）全量构建 28.1 秒；新增 1 份文档后重建 0.8 秒（新算 1 块，复用 973 块）。
+- 带重排的混合检索端到端 2.4~2.9 秒。
+- 故障演练（杀服务进程、杀模型服务、模型挂起、模型切换与回滚）与质量对比见 [AGENT_TOOL_SKILLS_PLAN.md](../AGENT_TOOL_SKILLS_PLAN.md) 12.10。这些只是本机小样本的工程数据，不是质量或负载结论。
+
 ## 5. 升级规则
 
 - 升级任何已登记组件后，都要重启服务重新自检，并更新本文版本表。
 - 不使用浮动的 `latest` 版本。
 - 业务请求中不执行 `npm` / `pip` 安装，也不做首次联网下载。
+- 更换语义模型或修订后要重建索引再启用；旧索引保留，可在切回原模型后直接启用。

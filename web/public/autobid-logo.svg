@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none" role="img" aria-labelledby="crest-title crest-desc">
+  <title id="crest-title">AutoBid Engine</title>
+  <desc id="crest-desc">A teal rounded hexagonal seal with a transparent letter A and two aligned document cuts.</desc>
+  <defs>
+    <linearGradient id="crest-ink" x1="48" y1="32" x2="352" y2="368" gradientUnits="userSpaceOnUse"><stop stop-color="#168d83"/><stop offset=".5" stop-color="#13877e"/><stop offset="1" stop-color="#08756e"/></linearGradient>
+    <mask id="crest-cut" x="0" y="0" width="400" height="400" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" style="mask-type:luminance">
+      <rect width="400" height="400" fill="#fff"/>
+      <path d="M96 280 152 112H192L248 280H204L193.333 248H150.667L140 280Z" fill="#000"/>
+      <path d="M158 212H186L172 170Z" fill="#fff"/>
+      <rect x="232" y="128" width="68" height="28" rx="2" fill="#000"/>
+      <rect x="252" y="184" width="48" height="28" rx="2" fill="#000"/>
+    </mask>
+  </defs>
+  <path d="M208 28.619 344.42 107.381A16 16 0 0 1 352.42 121.238V278.762A16 16 0 0 1 344.42 292.619L208 371.381A16 16 0 0 1 192 371.381L55.58 292.619A16 16 0 0 1 47.58 278.762V121.238A16 16 0 0 1 55.58 107.381L192 28.619A16 16 0 0 1 208 28.619Z" fill="url(#crest-ink)" mask="url(#crest-cut)"/>
+</svg>

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  BookOpen, Bot, Brain, Bug, ClipboardList, FileText, LayoutDashboard,
+  BookOpen, Bot, Brain, Bug, ClipboardList, LayoutDashboard,
   Library, Network, PanelLeft, Radio, Search, Settings2, ShieldAlert, Sparkles, Target, Wrench,
 } from 'lucide-react'
 import { api, getToken, setToken } from '../../api/client'
@@ -75,7 +75,7 @@ function Sidebar({ active, collapsed, pendingCount, healthy, drawer, onNavigate 
     <aside data-region="sidebar" aria-label="全局导航"
       className={cx('flex h-full shrink-0 flex-col overflow-y-auto p-3.5', collapsed ? 'w-16 gap-3' : 'gap-3.5', drawer ? 'w-full' : !collapsed && 'w-[240px]')}>
       <div className={cx('flex h-9 items-center gap-3 text-base font-semibold tracking-tight', collapsed ? 'justify-center px-0' : 'px-2')}>
-        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-link text-white" aria-hidden><FileText className="size-4" strokeWidth={1.7} /></span>
+        <img src="/autobid-logo.svg" width={28} height={28} className="size-7 shrink-0" alt={collapsed ? 'AutoBid' : ''} />
         {!collapsed && <span>AutoBid</span>}
       </div>
       {globalNav.map((g) => (

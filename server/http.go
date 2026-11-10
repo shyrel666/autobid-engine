@@ -1155,6 +1155,8 @@ type uploadDocumentReq struct {
 	Title       string `json:"title"`
 	Text        string `json:"text"`
 	WakePlanner bool   `json:"wake_planner"`
+	// BootstrapGoals 让导入完成后自动拆解招标目标并生成大纲草案（页面勾选项）。
+	BootstrapGoals bool `json:"bootstrap_goals"`
 	// DocRole 为招标包内的文件角色（tender / correction / clarification / qa / attachment，空时按标题推断），
 	// PublishedAt 为公告发布时间（RFC 3339 或 2006-01-02），决定效力先后。
 	DocRole     string `json:"doc_role"`

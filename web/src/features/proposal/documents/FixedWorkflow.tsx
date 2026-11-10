@@ -3,6 +3,7 @@ import { api, errorText } from '../../../api/client'
 import type { FixedJob, ProcessingFile, TaskMaterial } from '../../../api/processing-types'
 import { Badge, Button, ErrorBanner, Field, Input, Notice, Select } from '../../../components/ui'
 import { useAsync } from '../../../hooks/useAsync'
+import { fmtTime } from '../../../lib/format'
 import { RuntimeNotice } from '../../runtime/RuntimeStatus'
 import { executorLabel, isAgentJob, parseJobView } from './parseJobs'
 
@@ -30,7 +31,9 @@ function MaterialRow({ material, files, save }: { material: TaskMaterial; files:
   </div>
 }
 
-export function FixedWorkflow({ taskId, files, tick, refresh, show }: { taskId: number; files: ProcessingFile[]; tick: number; refresh: () => void; show: (id: number) => Promise<void> }) {
+// enabled=false：服务器关闭了材料处理。上传与重新处理不可用，但必需材料清单仍参与导出门禁、已提交的作业仍可查看和取消，
+// 所以这两部分照常显示。
+export function FixedWorkflow({ taskId, files, tick, refresh, show, enabled = true }: { taskId: number; files: ProcessingFile[]; tick: number; refresh: () => void; show: (id: number) => Promise<void>; enabled?: boolean }) {
   const materials = useAsync(() => api.materials(taskId), [taskId, tick])
   const jobs = useAsync(() => api.fixedJobs(taskId), [taskId, tick])
   const [older, setOlder] = useState<FixedJob[]>([])
@@ -63,7 +66,7 @@ export function FixedWorkflow({ taskId, files, tick, refresh, show }: { taskId: 
       <div className="flex gap-2"><Input aria-label="新增必需材料名称" placeholder="例如：设备清单附件" value={name} onChange={(e) => setName(e.target.value)} /><Button size="sm" disabled={!name.trim()} loading={busy} onClick={() => run(async () => { await api.saveMaterial(taskId, { id: 0, name: name.trim(), required: true, file_id: null, version: 0, note: '' }); setName('') })}>登记必需材料</Button></div>
       {materials.data?.map((m) => <MaterialRow key={m.id} material={m} files={files} save={(draft) => run(async () => { await api.saveMaterial(taskId, draft) })} />)}
     </div>
-    <div className="space-y-2">
+    {enabled && <div className="space-y-2">
       <p className="font-medium">上传原件后处理</p>
       <p className="text-xs text-muted">原件上传完成后可关闭页面。ZIP 在后台展开；其他文件在下方选择导入。单文件上限 64 MiB。</p>
       <RuntimeNotice capabilities={['ocr']} />
@@ -75,19 +78,20 @@ export function FixedWorkflow({ taskId, files, tick, refresh, show }: { taskId: 
         if (stored.format === 'zip') { await api.enqueueFixedJob(taskId, { file_id: stored.id, operation: 'archive', request_key: crypto.randomUUID() }); setMessage(`原件 #${stored.id} 已留存，ZIP 正在后台展开。`) }
         if (upload.current) upload.current.value = ''
       })}>上传原件</Button>
-    </div>
+    </div>}
     <div className="space-y-2">
       <p className="font-medium">后台处理作业</p>
       {allJobs.length === 0 && <p className="text-sm text-muted">尚无后台作业。</p>}
       {allJobs.map((j) => {
-        const v = parseJobView(j)
+        const v = parseJobView(j, enabled)
+        const active = j.status === 'queued' || j.status === 'running'
         const archive = j.input.operation === 'archive'
         return <div key={j.id} className="space-y-1 border-t border-line py-2 text-sm">
           <div className="flex flex-wrap items-center gap-2">
             <span>作业 #{j.id} · {archive ? 'ZIP 展开' : j.input.document_id ? `重新解析文档 #${j.input.document_id}` : '导入'} · 原件 #{j.file_id}</span>
             <Badge tone={v.tone}>{archive && j.status === 'succeeded' ? '已展开' : v.label}</Badge>
             {isAgentJob(j) && <Badge tone="blue">Agent 提交</Badge>}
-            <span className="text-xs text-muted">尝试 {j.attempts}/{j.max_attempts}</span>
+            <span className="text-xs text-muted">尝试 {j.attempts}/{j.max_attempts}{!enabled && active && j.deadline_at ? ` · 截止 ${fmtTime(j.deadline_at)}` : ''}</span>
             {v.canCancel && <Button size="sm" disabled={busy} onClick={() => run(async () => { await api.cancelFixedJob(taskId, j.id) })}>取消处理</Button>}
             {v.canRetry && <Button size="sm" disabled={busy} onClick={() => run(async () => { await api.enqueueFixedJob(taskId, { ...j.input, request_key: crypto.randomUUID() }) })}>重新处理</Button>}
             {v.canReview && j.record_id && <Button size="sm" onClick={() => void show(j.record_id!)}>{j.record_status === 'ready' ? '核对候选' : '查看候选'}</Button>}

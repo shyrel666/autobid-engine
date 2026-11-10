@@ -26,6 +26,13 @@ test('每种阻断都有确定的修复位置', () => {
   assert.equal(blockerLink(1, b('evidence_invalid'))?.href, '/tasks/1/research')
 })
 
+test('D2 阻断定位到证据与承诺页', () => {
+  for (const k of ['admissibility_missing', 'admissibility_stale', 'admissibility_manual', 'admissibility_inadmissible', 'objective_evidence_missing', 'objective_manual'])
+    assert.equal(blockerLink(1, b(k, { requirement_item_id: 8 }))?.href, '/tasks/1/evidence?requirement=8')
+  for (const k of ['commitment_stale', 'commitment_unconfirmed', 'quote_unconfirmed', 'quote_inconsistent', 'quote_over_ceiling'])
+    assert.equal(blockerLink(1, b(k))?.href, '/tasks/1/evidence')
+})
+
 test('缺失或零值标识不构造无效链接，未知类型不猜测', () => {
   assert.equal(blockerLink(1, b('section_not_approved', { section_id: 0 }))?.href, '/tasks/1/writing')
   assert.equal(blockerLink(1, b('something_new')), null)

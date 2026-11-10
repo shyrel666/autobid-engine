@@ -16,6 +16,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,8 +30,13 @@ import (
 const maxUploadBytes = 64 << 20
 
 // operator 返回请求声明的操作人（Phase 7 前仅作审计记录，不做鉴权）。
+// 请求头只能传 ASCII，页面把姓名百分号编码后发送；无法解码时按原文保留，兼容直接调用接口的客户端。
 func operator(r *http.Request) string {
-	return strings.TrimSpace(r.Header.Get("X-Autobid-User"))
+	name := r.Header.Get("X-Autobid-User")
+	if decoded, err := url.PathUnescape(name); err == nil {
+		name = decoded
+	}
+	return strings.TrimSpace(name)
 }
 
 func isMultipart(r *http.Request) bool {
@@ -116,7 +122,7 @@ func (a *API) uploadDocument(w http.ResponseWriter, r *http.Request, t *Task) {
 			return
 		}
 		req = uploadDocumentReq{TenderNo: r.FormValue("tender_no"), LotNo: r.FormValue("lot_no"), Title: r.FormValue("title"),
-			Text: r.FormValue("text"), WakePlanner: formBool(r.FormValue("wake_planner")),
+			Text: r.FormValue("text"), WakePlanner: formBool(r.FormValue("wake_planner")), BootstrapGoals: formBool(r.FormValue("bootstrap_goals")),
 			DocRole: r.FormValue("doc_role"), PublishedAt: r.FormValue("published_at")}
 		if file == nil && strings.TrimSpace(req.Text) == "" {
 			fail(w, badRequest("multipart upload requires a file field (or a text field)"))
@@ -171,9 +177,12 @@ func (a *API) uploadDocument(w http.ResponseWriter, r *http.Request, t *Task) {
 		woke = true
 	}
 	resp := map[string]any{"result": res, "planner_notified": woke}
-	if formBool(r.URL.Query().Get("bootstrap_goals")) {
-		if decomp, bErr := a.pg.BootstrapRFPGoals(r.Context(), db.DefaultTenant, t.ID, operator(r), true); bErr == nil {
-			resp["goal_decomposition"] = decomp
+	if req.BootstrapGoals || formBool(r.URL.Query().Get("bootstrap_goals")) {
+		// 文档已入库，拆解失败不回滚导入，但要让用户知道这一步没有完成。
+		if decomp, bErr := a.pg.BootstrapRFPGoals(r.Context(), db.DefaultTenant, t.ID, operator(r), true); bErr != nil {
+			resp["goals_bootstrap_error"] = "文档已导入，但自动拆解招标目标没有完成，请到要求页手动提取：" + bErr.Error()
+		} else {
+			resp["goals_bootstrapped"] = decomp
 		}
 	}
 	status := http.StatusCreated

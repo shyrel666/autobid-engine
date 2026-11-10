@@ -357,7 +357,7 @@ func (s *LLMService) Resolve(t *Task) (*agent.Planner, *agent.Worker) {
 	pc.ExtraTools = append(append(append(append([]tool.CoreTool(nil), pc.ExtraTools...), kit.RuntimeTools()...), kit.AgentJobTools()...), kit.ExportCheckTools()...)
 	wc.ExtraTools = append(append(append(append([]tool.CoreTool(nil), wc.ExtraTools...), kit.ResidentTools()...), kit.RuntimeTools()...), kit.AgentJobTools()...)
 	wc.Deferred = append(append([]tool.CoreTool(nil), wc.Deferred...), kit.DeferredTools()...)
-	wc.Skills = append(append([]tool.Skill(nil), wc.Skills...), bidtools.Skills()...)
+	wc.Skills = append(append([]tool.Skill(nil), wc.Skills...), kit.Skills()...)
 	b.pl, b.wk = agent.NewPlanner(pc), agent.NewWorker(wc)
 	s.taskAgents[t.ID] = b
 	return b.pl, b.wk

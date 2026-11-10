@@ -150,6 +150,12 @@ export const exportBlockerLabel: Record<string, string> = {
   section_not_approved: '章节未定稿', matrix_stale: '响应核验失效', matrix_failed: '响应核验未通过', matrix_unverified: '尚未核验',
   consistency_not_run: '未做一致性核验', consistency_stale: '一致性核验过期', finding_open: '一致性结论待处理', evidence_invalid: '证据失效',
   veto_pending: '否决项待核对', veto_failed: '否决项不通过', no_bid_decision: '已决策放弃投标', requirement_superseded: '章节仍引用已覆盖旧要求',
+  admissibility_missing: '证据未评估', admissibility_stale: '可采性结论失效', admissibility_manual: '可采性待人工复核', admissibility_inadmissible: '证据不可采',
+  objective_evidence_missing: '客观分缺证据', objective_manual: '客观分待人工复核', commitment_stale: '承诺已失效', commitment_unconfirmed: '承诺未确认',
+  quote_unconfirmed: '报价未确认', quote_inconsistent: '报价勾稽不一致', quote_over_ceiling: '报价超限价',
+  storyboard_missing: '缺故事板', storyboard_unapproved: '故事板未通过评审', storyboard_stale: '故事板已失效', ungrounded_claim: '正文有无据断言',
+  writing_verification_stale: '写作核验失效', writing_verification_failed: '写作核验未通过', section_self_approved: '章节自批',
+  required_material_incomplete: '必需材料未齐', requirements_source_changed: '原文已变更待重新提取',
   chart_not_final: '图表未渲染（最终稿）', office_unavailable: '文档引擎不可用（最终稿）',
 }
 

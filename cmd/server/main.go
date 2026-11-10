@@ -286,14 +286,17 @@ func run(logger *slog.Logger) error {
 	exporter.ChartWake, exporter.ExportWake = chartRunner.Wake, runner.Wake
 	chartRunner.Start(engineCtx)
 	fileRunnerDone := make(chan struct{})
+	fileJobChanged := func(j *db.FixedFileJob) {
+		hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "file-processing", Kind: "state", At: time.Now(), Summary: fmt.Sprintf("材料处理 #%d：%s", j.ID, j.Status)})
+		e.WakeAgentJobs()
+	}
 	if fileRunner != nil {
-		fileRunner.OnChange = func(j *db.FixedFileJob) {
-			hub.Publish(db.Activity{TaskID: j.TaskID, Worker: "file-processing", Kind: "state", At: time.Now(), Summary: fmt.Sprintf("材料处理 #%d：%s", j.ID, j.Status)})
-			e.WakeAgentJobs()
-		}
+		fileRunner.OnChange = fileJobChanged
 		go func() { defer close(fileRunnerDone); fileRunner.Run(engineCtx) }()
 	} else {
-		close(fileRunnerDone)
+		// 材料处理关闭时不领取作业，但关闭前已提交的作业仍按提交时固定的截止时间与尝试预算结束（S7）。
+		sweeper := &filework.Sweeper{DB: pg, Owner: fmt.Sprintf("%s/%d/files-off", hostname, os.Getpid()), OnChange: fileJobChanged}
+		go func() { defer close(fileRunnerDone); sweeper.Run(engineCtx) }()
 	}
 	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
 		Retrieval: retriever, IndexRunner: indexRunner, Export: exporter, ExportRunner: runner, FileStore: fileStore, FileRunner: fileRunner, Runtime: runtimeHealth})

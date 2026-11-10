@@ -19,6 +19,7 @@ import (
 )
 
 func (a *API) registerRuntimeRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/runtime/version", a.runtimeVersion)
 	mux.HandleFunc("GET /api/runtime/tools", a.runtimeTools)
 }
 

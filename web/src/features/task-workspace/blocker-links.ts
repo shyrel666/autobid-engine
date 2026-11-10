@@ -51,6 +51,20 @@ export function blockerLink(taskId: number, b: ExportBlocker): BlockerLink | nul
       return sec
         ? { href: taskUrl(taskId, 'writing', { sectionId: sec }), label: '去渲染章节图表' }
         : { href: taskUrl(taskId, 'writing'), label: '去章节列表' }
+    case 'admissibility_missing':
+    case 'admissibility_stale':
+    case 'admissibility_manual':
+    case 'admissibility_inadmissible':
+    case 'objective_evidence_missing':
+    case 'objective_manual':
+      return { href: taskUrl(taskId, 'evidence', { query: { requirement: req } }), label: '去证据与可采性' }
+    case 'commitment_stale':
+    case 'commitment_unconfirmed':
+      return { href: taskUrl(taskId, 'evidence'), label: '去确认承诺' }
+    case 'quote_unconfirmed':
+    case 'quote_inconsistent':
+    case 'quote_over_ceiling':
+      return { href: taskUrl(taskId, 'evidence'), label: '去核对报价' }
     case 'office_unavailable':
       return { href: taskUrl(taskId, 'export'), label: '查看运行能力' }
     case 'evidence_invalid':

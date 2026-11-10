@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/autobid/autobid-engine/db"
 )
@@ -124,7 +126,57 @@ func (a *API) addEvidenceOriginal(w http.ResponseWriter, r *http.Request) {
 		PageEnd        int    `json:"page_end"`
 		Supersede      bool   `json:"supersede"`
 	}
-	if err := decodeBody(r, &in); err != nil {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			fail(w, badRequest("证明原件上传失败，请检查文件大小（上限 32 MiB）"))
+			return
+		}
+		defer r.MultipartForm.RemoveAll()
+		in.DocumentKind, in.PageLabel = r.FormValue("document_kind"), r.FormValue("page_label")
+		in.PageStart, _ = strconv.Atoi(r.FormValue("page_start"))
+		in.PageEnd, _ = strconv.Atoi(r.FormValue("page_end"))
+		domain := r.PathValue("domain")
+		if domain != db.EvidenceDomainCredential && domain != db.EvidenceDomainPerformance {
+			fail(w, badRequest("请选择资信或业绩记录"))
+			return
+		}
+		validKind := map[string]bool{"certificate": true, "contract": true, "acceptance_report": true, "social_security": true, "product_catalog": true, "other": true}
+		if !validKind[in.DocumentKind] || in.PageStart < 1 || in.PageEnd < in.PageStart {
+			fail(w, badRequest("请选择证明材料类型并填写有效页码范围"))
+			return
+		}
+		exists, err := a.pg.EvidenceOwnerExists(r.Context(), db.DefaultTenant, domain, ownerID)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if !exists {
+			fail(w, db.ErrNotFound)
+			return
+		}
+		if a.cfg.Evidence == nil {
+			fail(w, errors.New("证明材料存储未配置，请联系管理员"))
+			return
+		}
+		f, header, err := r.FormFile("file")
+		if err != nil {
+			fail(w, badRequest("请选择证明材料原件"))
+			return
+		}
+		defer f.Close()
+		data, err := io.ReadAll(f)
+		if err != nil || len(data) == 0 {
+			fail(w, badRequest("证明材料原件为空或读取失败"))
+			return
+		}
+		in.OriginalPath, in.OriginalSHA256, err = a.cfg.Evidence.Put(db.DefaultTenant, filepath.Ext(header.Filename), data)
+		if err != nil {
+			fail(w, errors.New("证明材料原件未能保存，请检查存储空间后重试"))
+			return
+		}
+		in.Supersede = r.FormValue("supersede") == "true"
+	} else if err := decodeBody(r, &in); err != nil {
 		fail(w, badRequest("invalid JSON body: %v", err))
 		return
 	}

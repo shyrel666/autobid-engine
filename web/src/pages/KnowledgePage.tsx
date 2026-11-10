@@ -90,6 +90,7 @@ function UploadCard({ onUploaded }: { onUploaded: () => void }) {
             <FileUp className="size-6 text-slate-400" />
             {file ? <span className="font-medium text-slate-700">{file.name}（{fmtNum(Math.round(file.size / 1024))} KB）</span> : <span>点击选择或拖入文件</span>}
             <span className="text-xs text-slate-400">同一文件（相同字节）重复上传自动去重</span>
+            <span className="text-xs text-amber-700">知识库上传不经过候选核对：扫描件的识别结果直接入库，可能有错漏，写进标书前须按证据核验。增强解析尚未开放。</span>
           </button>
         </div>
       ) : (

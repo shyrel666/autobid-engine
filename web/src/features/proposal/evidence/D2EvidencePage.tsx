@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, errorText, setOperator } from '../../../api/client'
+import { api, errorText } from '../../../api/client'
 import type {
   AdmissibilityRun, BidQuote, BidQuoteValidation, Commitment, ExportReadiness, ObjectiveScoreRun,
   RequirementItem, CompanyPerformance, CompanyCredential,
@@ -7,14 +7,13 @@ import type {
 import { Button, ErrorBanner, Spinner } from '../../../components/ui'
 import { linkProps } from '../../../lib/router'
 import { taskUrl } from '../../../lib/routes'
+import { OperatorField } from '../../task-workspace/OperatorField'
+import { EvidenceInputs } from './EvidenceInputs'
 
 // D2 最小 UI：企业证据普查、要求级可采性、承诺台账、报价勾稽与导出阻断链接。
 // 浏览器端到端验收另行执行；本页与 server/d2.go 的真实路由保持一致。
 
 export default function D2EvidencePage({ taskId }: { taskId: number }) {
-  const [operator, setOperatorName] = useState(() => {
-    try { return localStorage.getItem('autobid.operator') ?? 'ui-operator' } catch { return 'ui-operator' }
-  })
   const [requirements, setRequirements] = useState<RequirementItem[]>([])
   const [runs, setRuns] = useState<AdmissibilityRun[]>([])
   const [commitments, setCommitments] = useState<Commitment[]>([])
@@ -28,8 +27,6 @@ export default function D2EvidencePage({ taskId }: { taskId: number }) {
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [tick, setTick] = useState(0)
-
-  useEffect(() => { setOperator(operator) }, [operator])
 
   useEffect(() => {
     let alive = true
@@ -68,15 +65,12 @@ export default function D2EvidencePage({ taskId }: { taskId: number }) {
           <h1 className="text-xl font-semibold">D2 证据、可采性与承诺台账</h1>
           <p className="text-sm text-muted">证据必须可采；manual 不是通过；承诺台账未确认或被修改都会阻断导出。</p>
         </div>
-        <label className="flex items-center gap-2 text-sm text-muted">
-          操作人
-          <input value={operator} onChange={(e) => setOperatorName(e.target.value)}
-            className="h-8 w-40 rounded-lg border border-line bg-canvas px-2 text-fg" aria-label="操作人" />
-        </label>
+        <OperatorField />
       </div>
       {error && <ErrorBanner error={error} />}
       {message && <div className="rounded-xl border border-line bg-panel px-3 py-2 text-sm">{message}</div>}
       {loading && <Spinner />}
+      <EvidenceInputs taskId={taskId} requirements={requirements} credentials={credentials} performance={performance} onSaved={reload} />
 
       <section className="rounded-2xl border border-line bg-panel p-4">
         <div className="flex items-center justify-between gap-3">
@@ -103,10 +97,16 @@ export default function D2EvidencePage({ taskId }: { taskId: number }) {
                 <tr key={r.id} className="border-t border-line">
                   <td className="py-2 pr-3">{r.code} {r.title}</td>
                   <td>{run ? <span className={run.verdict === 'admissible' ? 'text-ok' : 'text-danger'}>{run.verdict}/{run.status}</span> : <span className="text-muted">未评估</span>}</td>
-                  <td className="text-muted">{run?.items?.map((it) => `${it.evidence_domain}:${it.evidence_id}=${it.verdict}`).join('；') || '-'}</td>
+                  <td className="text-muted">
+                    {run?.items?.map((it) => `${it.evidence_domain}:${it.evidence_id}=${it.verdict}`).join('；') || '-'}
+                    {[...new Set([...(run?.reasons ?? []), ...(run?.items ?? []).flatMap((it) => it.reasons)].map((x) => x.message))].map((m) => <p key={m} className="text-xs text-danger">{m}</p>)}
+                  </td>
                   <td className="text-right">
                     <Button size="sm" onClick={() => act(() => api.evaluateAdmissibility(taskId, r.id), `已评估 ${r.code}`)}>评估</Button>
-                    {run?.verdict === 'manual' && (
+                    {run?.verdict === 'manual' && !run.items?.some((it) => it.verdict === 'manual') && (
+                      <span className="ml-2 text-xs text-muted">未绑定证据，先绑定再评估</span>
+                    )}
+                    {run?.verdict === 'manual' && run.items?.some((it) => it.verdict === 'manual') && (
                       <Button size="sm" variant="primary" className="ml-2" onClick={() => {
                         const manual = (run.items ?? []).filter((it) => it.verdict === 'manual')
                         const reason = window.prompt('人工复核理由（将记录操作人）')
@@ -179,7 +179,10 @@ export default function D2EvidencePage({ taskId }: { taskId: number }) {
       </section>
 
       <section className="rounded-2xl border border-line bg-panel p-4">
-        <h2 className="font-medium">客观分与业绩证据</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-medium">客观分与业绩证据</h2>
+          <Button size="sm" onClick={() => act(() => api.computeObjectiveScores(taskId), '客观分已计算')}>计算客观分</Button>
+        </div>
         <table className="mt-3 w-full text-sm">
           <thead className="text-left text-muted"><tr><th className="py-2">评分项</th><th>状态</th><th>得分</th><th>可采证据</th><th>缺口</th></tr></thead>
           <tbody>

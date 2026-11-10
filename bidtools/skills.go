@@ -15,6 +15,30 @@ const (
 	SkillDocumentProcessing = "document-processing"
 )
 
+// Skills 是按本服务器开关标注过的技能目录，供 Worker 装配。宿主没有授予的能力仍然列出，好让模型能如实说明缺口，
+// 但描述和正文开头写明当前不可用，技能目录不再“宣称可用”（计划第 11 节）。是否放行仍由各工具在执行时检查。
+func (k *Kit) Skills() []tool.Skill {
+	out := Skills()
+	for i := range out {
+		note := ""
+		switch out[i].Name {
+		case SkillDocumentProcessing:
+			if k.files == nil {
+				note = "【本服务器未启用材料处理：提交一律返回 FEATURE_DISABLED，不要调用；招标原件由人工在材料处理页导入】"
+			}
+		case SkillProposalExport:
+			if !k.exportSubmit {
+				note = "【本服务器未开放 Agent 提交导出：可以预检和查询，proposal_export_submit 返回 FEATURE_DISABLED，最终稿由人工在导出页提交】"
+			}
+		}
+		if note != "" {
+			out[i].Description = note + out[i].Description
+			out[i].Body = note + "\n\n" + out[i].Body
+		}
+	}
+	return out
+}
+
 // Skills 返回内置招投标专业技能；每个技能解锁其所属的延迟工具（§4.3 阶段 B）。
 func Skills() []tool.Skill {
 	return []tool.Skill{

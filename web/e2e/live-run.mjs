@@ -62,7 +62,10 @@ await rec.check('工作切换：活动按 node_id 精确过滤，地址 work 参
   await workButton(WORK_B).click()
   await page.waitForURL((u) => u.searchParams.get('work') !== String(a))
   const b = Number(new URL(page.url()).searchParams.get('work'))
+  // 地址先变、列表后重绘：等工作 B 的标题出现，再等列表里不再有上一项工作的条目，否则读到的是旧画面。
+  await page.getByRole('heading', { name: new RegExp(WORK_B) }).waitFor()
   await items.first().waitFor({ timeout: 30000 })
+  await page.waitForFunction((id) => [...document.querySelectorAll('[data-region="activity-scroll"] li')].every((e) => (/工作 #(\d+)/.exec(e.innerText)?.[1] ?? 'project') === id), String(b), { timeout: 10000 }).catch(() => {})
   const nodesB = await nodesOf()
   assert(nodesB.every((n) => n === String(b)), `工作 #${b} 只应显示自己的活动：${nodesB}`)
   await page.evaluate(() => history.back())

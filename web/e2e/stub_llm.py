@@ -26,22 +26,53 @@ def call(name, args):
     return {"id": "call_" + uuid.uuid4().hex[:12], "type": "function", "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}
 
 
+def writer_reply(prompt):
+    """章节 Writer：照着上下文写一段只复述招标要求的草稿，不声称任何企业事实，能通过写作核验。"""
+    start = prompt.find("{", prompt.find("以下 JSON 为章节上下文"))
+    end = prompt.rfind("\n\n只输出一个 JSON 对象")
+    ctx = json.loads(prompt[start:end]) if start >= 0 and end > start else {}
+    time.sleep(state.get("writer_delay", 0))
+    lines = [f"## {ctx.get('title', '本章')}", "", "档案扫描按目录逐项登记，扫描后进行图像清晰度复核。数据交付提供目录索引和备份清单，按批次执行验收。"]
+    for r in ctx.get("requirements") or []:
+        lines.append(f"本章响应 {r.get('code')}：{r.get('title')}。")
+    lines.append("（脚本替身模型输出，仅用于工程验收）")
+    return json.dumps({"content_md": "\n".join(lines), "summary_note": "脚本替身模型输出", "diff_summary": "初稿", "evidence_ids": [], "admissibility_item_ids": [], "commitment_ids": [], "gaps": []}, ensure_ascii=False)
+
+
+def agent_turn(tool_msgs, msgs):
+    """按 /config 下发的脚本逐轮调用工具；每个工具结果都记下来，供验收断言拒绝原因。"""
+    script = state["agent_script"]
+    with lock:
+        state["tool_results"] = [text_of(m)[:2000] for m in msgs if m.get("role") == "tool"]
+    if tool_msgs < len(script):
+        step = script[tool_msgs]
+        return None, [call(step["name"], step["args"])]
+    return "脚本替身模型：作业已提交，结果由后台事件带回。", None
+
+
 def decide(body):
     tools = {t["function"]["name"] for t in body.get("tools", [])}
     msgs = body.get("messages", [])
     tool_msgs = sum(1 for m in msgs if m.get("role") == "tool")
+    first_user = next((text_of(m) for m in msgs if m.get("role") == "user"), "")
+    if "只输出一个 JSON 对象" in first_user and "content_md" in first_user:
+        return writer_reply(first_user), None
     if "add_intent" in tools:
         if tool_msgs == 0:
             with lock:
                 state["planner_calls"] += 1
                 first = state["planner_calls"] <= 1
             if first:
+                if state.get("agent_script"):
+                    return None, [call("add_intent", {"summary": "解析招标原件并生成架构图", "rationale": "脚本替身模型的验收意图", "priority": 8})]
                 return None, [
                     call("add_intent", {"summary": "核对投标人资格条款与资信证明", "rationale": "资格条款决定能否投标", "priority": 8}),
                     call("add_intent", {"summary": "核对评分表技术部分的响应要点", "rationale": "评分项影响技术标得分", "priority": 6}),
                 ]
         return "规划完成：已派发资格核对与评分核对两项工作。", None
     # worker
+    if state.get("agent_script"):
+        return agent_turn(tool_msgs, msgs)
     last = msgs[-1] if msgs else {}
     started = any(m.get("role") == "assistant" for m in msgs)
     # 运行中的引导由 PreToolUse 拦下一次工具调用投递（工具结果以「操作员纠偏指令」开头）；
@@ -77,12 +108,22 @@ class H(BaseHTTPRequestHandler):
         self.send_response(404); self.end_headers()
 
     def do_POST(self):
-        if self.path == "/reset":
-            with lock:
-                state.update(planner_calls=0, requests=0, guidance=[])
-            self.send_response(204); self.end_headers(); return
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
+        if self.path == "/reset":
+            with lock:
+                state.update(planner_calls=0, requests=0, guidance=[], writer_delay=0)
+            self.send_response(204); self.end_headers(); return
+        if self.path == "/config":
+            with lock:
+                state.update(body)
+            self.send_response(204); self.end_headers(); return
+        if self.path.endswith("/embeddings"):
+            time.sleep(state.get("embed_delay", 0))
+            inputs = body.get("input") or []
+            raw = json.dumps({"data": [{"index": i, "embedding": [1.0, 0.5, 0.25]} for i in range(len(inputs))], "model": body.get("model"), "usage": {"total_tokens": len(inputs)}}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+            return
         with lock:
             state["requests"] += 1
         text, calls = decide(body)

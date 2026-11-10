@@ -5,7 +5,7 @@ import { BASE, TOKEN, api, assert, launch, newPage, recorder, saveSection, seedP
 
 const rec = recorder('scenarios')
 const browser = await launch()
-const only = process.argv.slice(2)
+const only = process.argv.slice(2).length ? process.argv.slice(2) : (process.env.E2E_SCENARIOS ? process.env.E2E_SCENARIOS.split(',') : [])
 const want = (n) => (only.length ? only.includes(n) : n !== 'export-runtime-failure')
 const stamp = new Date().toISOString().slice(11, 19).replaceAll(':', '')
 const textarea = (page) => page.getByLabel('章节正文（Markdown）')
@@ -26,11 +26,13 @@ async function refocus(page) {
 const toast = (page, re) => page.locator('[role=status], [role=alert]').filter({ hasText: re }).first()
 
 let writing
-if (['upload-guard', 'history-guard', 'token-expiry', 'concurrent-save'].some(want)) writing = await seedProject('writing', `界面联调·写作 ${stamp}`)
+if (['history-guard', 'token-expiry', 'concurrent-save'].some(want)) writing = await seedProject('writing', `界面联调·写作 ${stamp}`)
 
 if (want('upload-guard')) await rec.check('导入招标文件对话框：有填写或上传中关闭需确认，导入成功后直接关闭', async () => {
+  // 导入新文件会让已批准的大纲失效，所以这里用单独的项目，不影响后面的写作场景。
+  const uploads = await seedProject('writing', `界面联调·导入 ${stamp}`)
   const { page, context, errors } = await newPage(browser)
-  await page.goto(`${BASE}/tasks/${writing.id}/documents`)
+  await page.goto(`${BASE}/tasks/${uploads.id}/documents`)
   const open = async () => { await page.getByRole('button', { name: '导入文件' }).click(); await dlg.waitFor() }
   const dlg = page.getByRole('dialog', { name: '导入招标文件' })
   const ask = page.getByRole('alertdialog', { name: '放弃未保存的修改？' })
@@ -205,9 +207,9 @@ if (want('export-failure')) await rec.check('导出失败：创建请求失败�
   assert((await api('GET', `/api/tasks/${ready.id}/exports`)).jobs.length === 0, '失败时不应有导出任务')
   await page.unroute('**/api/tasks/*/exports')
   await page.getByRole('button', { name: '锁定版本并导出' }).click()
-  await toast(page, /已创建导出任务/).waitFor()
+  await toast(page, /已提交.*导出请求组/).waitFor()
   const row = page.locator('tr').filter({ hasText: 'DOCX' }).first()
-  await row.getByText('已生成').waitFor({ timeout: 240000 })
+  await row.getByRole('button', { name: /KB|MB|B$/ }).waitFor({ timeout: 240000 })
   await page.route('**/api/tasks/*/exports/*/download', (route) => route.fulfill({ status: 410, contentType: 'application/json', body: JSON.stringify({ error: 'artifact missing' }) }))
   await row.getByRole('button', { name: /KB|MB|B$/ }).click()
   await toast(page, /HTTP 410/).waitFor()
@@ -221,7 +223,7 @@ if (want('export-runtime-failure')) await rec.check('导出执行失败（文档
   await page.goto(`${BASE}/tasks/${ready.id}/export`)
   await page.getByText('可以导出').waitFor()
   await page.getByRole('button', { name: '锁定版本并导出' }).click()
-  await toast(page, /已创建导出任务/).waitFor()
+  await toast(page, /已提交.*导出请求组/).waitFor()
   const pdf = page.locator('tr').filter({ hasText: 'PDF' }).first()
   await pdf.getByText('失败', { exact: true }).waitFor({ timeout: 300000 })
   const text = await pdf.innerText()
@@ -269,7 +271,7 @@ if (want('evidence-stale')) await rec.check('证据失效：来源删除后章�
   assert(!readiness.ready, '证据失效后导出门禁应阻断')
   await page.getByRole('link', { name: '成稿导出' }).first().click()
   await page.waitForURL(/\/export/)
-  await page.getByText(/项阻止导出/).waitFor()
+  await page.getByText(/项阻止(最终稿|导出)/).waitFor()
   await shot(page, 'S6-evidence-stale-export')
   const kinds = [...new Set(readiness.blockers.map((b) => b.kind))]
   const link = page.locator('section[aria-label] li a').first()

@@ -184,6 +184,18 @@ func (d *DB) UpsertCompanyPerformance(ctx context.Context, p *CompanyPerformance
 	return &out, created, nil
 }
 
+// EvidenceOwnerExists 判断证明原件要挂靠的资信或业绩记录是否存在且未删除。
+func (d *DB) EvidenceOwnerExists(ctx context.Context, tenant, domain string, id int64) (bool, error) {
+	table := "company_credentials"
+	if domain == EvidenceDomainPerformance {
+		table = "company_performance"
+	}
+	var exists bool
+	err := d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL)`,
+		tenantOr(tenant), id).Scan(&exists)
+	return exists, err
+}
+
 // GetCompanyPerformance 读取租户内一条业绩（含已软删除记录，供可采性判定为不可采）。
 func (d *DB) GetCompanyPerformance(ctx context.Context, tenant string, id int64) (*CompanyPerformance, error) {
 	p, err := scanPerformance(d.QueryRowContext(ctx, `SELECT `+performanceCols+` FROM company_performance WHERE tenant_id=$1 AND id=$2`, tenantOr(tenant), id))

@@ -1,6 +1,7 @@
 // AutoBid 控制面 HTTP 客户端：所有 /api/* 请求携带 Authorization: Bearer <token>；
 // SSE（EventSource 无法设置请求头）改用 ?token=。401 时广播 autobid:unauthorized 以弹出令牌设置。
 
+import { d3ErrorMessage } from '../lib/d3-errors'
 import type { ProcessingFile, ProcessingRecord, ProcessingDetail, TaskMaterial, FixedJobInput, FixedJob } from './processing-types'
 import type {
   Activity, Asset, CompanyCredential, CreateTaskReq, CredentialReq, DocumentWithChunks, EntityEdge, Finding,
@@ -76,6 +77,8 @@ export function errorText(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 0) return `网络错误：${err.message}`
     if (err.status === 401) return '未授权：请检查 API Token'
+    const business = d3ErrorMessage(err.code, err.message)
+    if (business) return business
     return `HTTP ${err.status}：${err.message}`
   }
   return err instanceof Error ? err.message : String(err)
@@ -87,7 +90,8 @@ async function send(method: string, path: string, body?: unknown, extraHeaders?:
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
   const operator = getOperator()
-  if (operator) headers['X-Autobid-User'] = operator
+  // 请求头只能是 ASCII，中文姓名直接放进去会让 fetch 整个请求失败。
+  if (operator) headers['X-Autobid-User'] = encodeURIComponent(operator)
   const form = body instanceof FormData
   const blob = body instanceof Blob
   if (blob) headers['Content-Type'] = body.type || 'application/octet-stream'
@@ -251,6 +255,9 @@ export const api = {
 
   // D2：企业证据、可采性、承诺台账与报价
   listPerformance: (includeDeleted = false) => get<CompanyPerformance[]>(`/api/company/performance${includeDeleted ? '?include_deleted=1' : ''}`),
+  savePerformance: (input: Partial<CompanyPerformance>) => post<CompanyPerformance>('/api/company/performance', input),
+  uploadEvidenceOriginal: (domain: 'credential' | 'performance', ownerId: number, file: File, input: { document_kind: string; page_label: string; page_start: number; page_end: number }) =>
+    post<EvidenceOriginal>(`/api/company/evidence/${domain}/${ownerId}/originals`, formData({ ...input, page_start: String(input.page_start), page_end: String(input.page_end) }, file)),
   listOriginals: (domain: 'credential' | 'performance', ownerId: number) =>
     get<EvidenceOriginal[]>(`/api/company/evidence/${domain}/${ownerId}/originals`),
   listBindings: (taskId: number, reqId: number) => get<EvidenceBinding[]>(`${t(taskId)}/requirements/${reqId}/evidence-bindings`),
@@ -270,6 +277,8 @@ export const api = {
   signOffCommitment: (taskId: number, code: string, note: string) =>
     post<Commitment>(`${t(taskId)}/commitments/${encodeURIComponent(code)}/signoff`, { note }),
   listQuotes: (taskId: number) => get<BidQuote[]>(`${t(taskId)}/quotes`),
+  createQuote: (taskId: number, input: { lot: string; declared_total: string; currency: string; ceiling?: string; note: string; items: { line_no: number; code: string; name: string; unit_price: string; quantity: string; line_amount: string }[] }) =>
+    post<BidQuote>(`${t(taskId)}/quotes`, input),
   validateQuote: (taskId: number, quoteId: number) => post<BidQuoteValidation>(`${t(taskId)}/quotes/${quoteId}/validate`),
   confirmQuote: (taskId: number, quoteId: number) =>
     post<{ quote: BidQuote; validation: BidQuoteValidation }>(`${t(taskId)}/quotes/${quoteId}/confirm`),
@@ -388,6 +397,7 @@ export const api = {
   exportTemplates: () => get<{ templates: ExportTemplate[]; default_template_hash: string }>('/api/export/templates'),
   runtimeTools: (capability?: RuntimeCapability) =>
     get<{ capabilities: RuntimeCapabilityStatus[]; now: string }>(`/api/runtime/tools${qs({ capability })}`),
+  runtimeVersion: () => get<{ revision: string; modified: boolean; go_version: string; schema_checksum: string; started_at: string }>('/api/runtime/version'),
   uploadTemplate: (file: File, name: string) => json<ExportTemplate>('POST', '/api/export/templates', formData({ name }, file)),
   deleteTemplate: (templateID: number) => del(`/api/export/templates/${templateID}`),
   defaultTemplate: () => blob('/api/export/templates/default/file'),

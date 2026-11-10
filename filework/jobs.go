@@ -208,6 +208,43 @@ func (r *Runner) Run(ctx context.Context) {
 	wg.Wait()
 }
 
+// Sweeper runs instead of the Runner while file processing is switched off. It claims nothing; it only
+// enforces the deadline and attempt budget fixed at submission (db.SweepFixedFileJobs), so a job queued
+// before the switch-off still ends and a waiting Agent intent is woken. Re-enabling file processing
+// before the deadline lets the Runner pick the job up again.
+type Sweeper struct {
+	DB       *db.DB
+	Owner    string
+	Every    time.Duration // default 30s
+	TaskID   int64         // 0 sweeps every task; tests restrict it to their own task
+	OnChange func(*db.FixedFileJob)
+}
+
+func (s *Sweeper) Run(ctx context.Context) {
+	every := s.Every
+	if every <= 0 {
+		every = 30 * time.Second
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		changed, err := s.DB.SweepFixedFileJobs(ctx, s.Owner, s.TaskID)
+		if err != nil && ctx.Err() == nil {
+			slog.Warn("fixed file job sweep failed", "error", err)
+		}
+		for _, j := range changed {
+			if s.OnChange != nil {
+				s.OnChange(j)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 // retryDelay backs off after a transient runtime failure; RetryDelay overrides it (tests).
 func (r *Runner) retryDelay(j *db.FixedFileJob) time.Duration {
 	if r.RetryDelay > 0 {

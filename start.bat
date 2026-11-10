@@ -122,8 +122,14 @@ if errorlevel 1 (
     echo [autobid] 若 AutoBid 正在运行，请先停止再重建。 1>&2
     goto fail
 )
+echo [autobid] 构建运维工具...
+go build -o "bin\autobid-ops.exe" ./cmd/autobid-ops
+if errorlevel 1 (
+    echo [autobid] 运维工具构建失败。 1>&2
+    goto fail
+)
 if defined AB_BUILD_ONLY (
-    echo [autobid] 构建完成: bin\autobid.exe 与 web\dist
+    echo [autobid] 构建完成: bin\autobid.exe、bin\autobid-ops.exe 与 web\dist
     exit /b 0
 )
 

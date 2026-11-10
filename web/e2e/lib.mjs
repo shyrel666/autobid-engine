@@ -58,8 +58,9 @@ export function sectionBody(detail, extra = '') {
  * seedProject 通过公开 API 构造测试项目。stage=writing：要求已确认、大纲已批准；
  * stage=ready：每章保存并定稿、矩阵与一致性核验完成，可以导出。
  */
-export async function seedProject(stage, name) {
-  const t = await api('POST', '/api/tasks', { name, description: '界面联调样例（隔离测试库）', goal: '完成视频监控扩容工程技术标的合规核对与编写', start: false })
+export async function seedProject(stage, name, extra = {}) {
+  // 这些场景验证编辑、冲突与导出界面，不验证写作门禁（门禁由 s7-flow 覆盖），所以按项目约定显式用 legacy_writing。
+  const t = await api('POST', '/api/tasks', { name, description: '界面联调样例（隔离测试库）', goal: '完成视频监控扩容工程技术标的合规核对与编写', start: false, legacy_writing: true, ...extra })
   const id = t.task?.id ?? t.id
   await api('POST', `/api/tasks/${id}/documents`, { tender_no: 'SPJK-2026-018', title: '视频监控扩容工程招标文件', text: TENDER, wake_planner: false })
   const ex = await api('POST', `/api/tasks/${id}/requirements/extract`)

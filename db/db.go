@@ -48,6 +48,14 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 	return &DB{DB: sqlDB}, nil
 }
 
+// SchemaGeneration 是 schema.sql 的单调代际号，每次修改 schema.sql 都要加一（TestSchemaGenerationBumped 校验）。
+// 校验和只能判断“不同”，判断不了“更新”：旧程序连上升级过的库时，迁移器会重放旧 DDL 并改写约束和触发器。
+// 代际号让本版本之后的程序拒绝这种连接。更早的程序没有这段检查，它们的回退只能走恢复备份，见 docs/OPERATIONS.md。
+const SchemaGeneration = 1
+
+// ErrSchemaNewer 表示数据库已被更新版本的程序升级过，当前程序不能继续迁移或运行。
+var ErrSchemaNewer = errors.New("数据库已被更新版本的程序升级，当前程序不能连接；请换回新版程序，或按 docs/OPERATIONS.md 恢复升级前的备份")
+
 // Migrate 在一个事务内执行嵌入的 schema.sql，可在每次启动时调用。
 // 库内已记录相同 schema 校验和时直接返回：schema.sql 中的 DROP/CREATE TRIGGER 会取 AccessExclusive 锁，
 // 若每次启动都重放，会与其他实例的在途写入死锁。
@@ -64,19 +72,29 @@ func (d *DB) Migrate(ctx context.Context) error {
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
 			return fmt.Errorf("migrate version table: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE schema_version ADD COLUMN IF NOT EXISTS generation INT NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("migrate version generation: %w", err)
+		}
 		var current string
-		err := tx.QueryRowContext(ctx, `SELECT checksum FROM schema_version WHERE id = 1`).Scan(&current)
+		var generation int
+		err := tx.QueryRowContext(ctx, `SELECT checksum, generation FROM schema_version WHERE id = 1`).Scan(&current, &generation)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("migrate read version: %w", err)
 		}
+		if generation > SchemaGeneration {
+			return fmt.Errorf("%w (database generation %d, this program %d)", ErrSchemaNewer, generation, SchemaGeneration)
+		}
 		if current == checksum {
-			return nil
+			if generation < SchemaGeneration {
+				_, err = tx.ExecContext(ctx, `UPDATE schema_version SET generation = $1 WHERE id = 1`, SchemaGeneration)
+			}
+			return err
 		}
 		if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
 			return fmt.Errorf("migrate schema: %w", err)
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO schema_version(id, checksum) VALUES (1, $1)
-			ON CONFLICT (id) DO UPDATE SET checksum = EXCLUDED.checksum, applied_at = now()`, checksum)
+		_, err = tx.ExecContext(ctx, `INSERT INTO schema_version(id, checksum, generation) VALUES (1, $1, $2)
+			ON CONFLICT (id) DO UPDATE SET checksum = EXCLUDED.checksum, generation = EXCLUDED.generation, applied_at = now()`, checksum, SchemaGeneration)
 		return err
 	})
 }

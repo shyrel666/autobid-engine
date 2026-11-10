@@ -68,6 +68,13 @@ Phase 1 ~ 6B 的工程能力（双图存储、解析、知识库、要求清单�
   - **验证**：真实 PostgreSQL 全量竞态 387 条通过、0 失败；真实 PaddleOCR 识别与候选导入端到端通过；前端构建与单测 39/39 通过，浏览器验收通过（详见该计划 12.9）。
   - **边界**：OCR 质量只有 1 页合成扫描样本；知识库（S5b）与企业证明材料（S5c）来源未开放；不改变 D0~D5 的 V/P 状态。
 - [x] E **合稿 Skill、导出请求组与严格最终稿策略**（2026-11-04，[`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S4）：`export_requests`（请求键全生命周期幂等、快照指纹首次冻结、请求组与全部格式作业 / 订阅同事务创建）与 `export_jobs` 的严格策略、执行版本、截止时间、取消终态和实际引擎记录；最终稿 `export-final/v1` 要求 WPS / Word 真实刷新目录、图表已渲染、成稿回读目录 / 图片 / 表格，引擎不可用时拒绝而不降级，预览稿只能是 `preview_only`；新技能 `proposal-export`（Agent 提交默认关闭，R2 可信身份完成前不开放）、`/export-requests*` 与导出页的请求组、逐格式状态、取消与下载。真实 PostgreSQL 全量竞态 377 条通过、0 失败，真实 WPS + mmdc 严格最终稿端到端通过，前端构建与单测 33/33 通过，浏览器验收通过（详见该计划 12.8）。真实企业模板、交易平台导入与外部评审未验证；不改变 D0~D5 的 V/P 状态。
+- [x] E **一体交付、运维与升级恢复**（2026-11-10，[`AGENT_TOOL_SKILLS_PLAN.md`](AGENT_TOOL_SKILLS_PLAN.md) S7）：
+  - **范围**：首版解析范围只含招标文件（知识库增强解析 S5b、企业证明材料 OCR 候选 S5c 未实施）。业务用户只用浏览器即可完成：新建项目，招标原件解析与采用（含真实 OCR），要求与否决项，证据、承诺与报价，大纲，故事板评审，写作与定稿，真实图表，严格最终稿 DOCX / PDF 下载。
+  - **运维**：`ops.bat`（只读检查、备份、校验、只写空库空目录的恢复）与 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)；`/api/runtime/version`；`schema_version.generation` 让本版本之后的程序拒绝连接更新的库（演练实测旧程序连上已升级的库会静默改写约束，回退只能恢复备份）；离线安装步骤与第三方授权登记（[`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md)）。
+  - **关闭能力**：文档引擎可显式关闭；材料处理关闭后，在途作业仍按原截止时间与尝试预算结束并唤醒等待的意图，页面仍可处理必需材料与作业；技能目录与 `tool_runtime_status` 如实报告服务器开关。
+  - **联调修复**：上传自动拆解从不生效、故事板字段不一致、写作门禁默认开启但页面不能编写故事板、证据与承诺无处录入、中文操作人名让请求失败、多种导出阻断显示“未知”等（见 [`docs/S7_ACCEPTANCE.md`](docs/S7_ACCEPTANCE.md) 第 4 节）。
+  - **验证**：真实 PostgreSQL 全量竞态 492 条通过、0 失败（真实 WPS、mmdc、PaddleOCR）；浏览器验收 7 个套件全部通过（全流程 30/30、真实招标 4/4、Agent 6/6、关闭能力 9/9、崩溃恢复 6/6、既有场景 6/6 与实时运行 6/6）；升级恢复演练 12 项通过；前端单测 106/106（详见该计划 12.11 与 [`docs/S7_ACCEPTANCE.md`](docs/S7_ACCEPTANCE.md)）。
+  - **边界**：浏览器验收的模型为脚本替身；没有可信身份（Agent 导出入口保持关闭）；没有真实断网、长时间运行与负载测试；历史数据为合成。不改变 D0~D5 的 V/P 状态。
 
 - [x] E **ARTEX 推演与长文上下文增强**（2026-11-01）：按 [`docs/ARTEX架构技术标系统解析.md`](docs/ARTEX架构技术标系统解析.md) 与 [`docs/implementation_plan.md`](docs/implementation_plan.md) 落地三大运行期机制，验收见 [`docs/walkthrough.md`](docs/walkthrough.md)：① Goals 目标分解器（`db/rfp_goals.go` `BootstrapRFPGoals` 串联要求拆解、`assets` 同步、四大图谱 Goal 根节点 `G-VETO/G-DEVIATION/G-SCORING/G-OUTLINE` 幂等初始化与 `v1 draft` 大纲生成）；② Intent `Mandate` 硬件门禁、确定性 `Watchdog` 跑偏纠偏/熔断（`server/watchdog.go`）与 `AddHint` 锚点事件直通；③ 章节上下文 `UsableEvidence/SpilledEvidence` 分离、`read_chunk` 分页预算与 `prepareContext` 两级 `ToolResult` Spill + 工具回合边界压缩（消除连续工具调用 `413` 崩溃）。不改变 D0~D5 外部验证（V/P）状态。
 

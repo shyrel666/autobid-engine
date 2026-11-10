@@ -8,6 +8,7 @@ export interface Task {
   status: string // running / paused / done / failed / timeout …
   paused: boolean
   queued: boolean
+  grounded_writing_required?: boolean
   timeout_seconds: number
   plan_heartbeat_seconds: number
   first_run_at?: string
@@ -372,6 +373,7 @@ export interface UploadDocumentResp {
   }
   planner_notified: boolean
   goals_bootstrapped?: RFPGoalDecompResult
+  goals_bootstrap_error?: string
 }
 
 export interface ArchiveEntry {
@@ -1053,10 +1055,10 @@ export interface IntentMandate {
   require_writeback?: boolean
 }
 export interface RFPGoalBootstrap {
-  code: string; node_id: number; title: string; summary: string; anchors?: number[]; created: boolean
+  goal_code: string; node_id: number; summary: string; anchors?: number[]; created: boolean
 }
 export interface RFPGoalDecompResult {
-  extract: ExtractResult; synced_assets: number; goals: RFPGoalBootstrap[]
+  extract_result?: ExtractResult; synced_assets: number; goals: RFPGoalBootstrap[]
   outline_id?: number; outline_version?: number; outline_created: boolean
 }
 export interface ExtractRequirementsResp {
@@ -1401,7 +1403,7 @@ export interface ObjectiveScoreRun {
 export type StoryboardStatus = 'draft' | 'pending_pink_review' | 'pink_approved' | 'pink_rejected' | 'stale' | 'superseded'
 
 export interface StoryboardScoringPoint {
-  requirement_id: number; requirement_code: string; our_approach: string; buyer_benefit: string; evidence_refs: string[]
+  requirement_code: string; scoring_point: string; our_approach: string; buyer_benefit: string; evidence_refs?: string[]
 }
 
 export interface StoryboardChartPlan {

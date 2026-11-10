@@ -1,6 +1,6 @@
 # 本机运行依赖登记
 
-登记日期：2026-11-03。对应 [AGENT_TOOL_SKILLS_PLAN.md](../AGENT_TOOL_SKILLS_PLAN.md) S1；2026-11-04 随 S5a 登记本机 OCR（PaddleOCR）；2026-11-06 随 S6 登记可选的本机语义模型。
+登记日期：2026-11-03。对应 [AGENT_TOOL_SKILLS_PLAN.md](../AGENT_TOOL_SKILLS_PLAN.md) S1；2026-11-04 随 S5a 登记本机 OCR（PaddleOCR）；2026-11-06 随 S6 登记可选的本机语义模型；2026-11-10 随 S7 登记离线安装步骤（3.5）、运维与浏览器验收用到的工具（3.6）。日常运维步骤见 [OPERATIONS.md](OPERATIONS.md)。
 
 本项目不做目标部署，运行、开发、测试与验收都以本机为准，见计划第 1、6 节。本文记录本机实际安装并验证过的程序、版本、位置、用途、环境变量和自检方法。
 
@@ -59,6 +59,9 @@
 | 语义模型运行时（可选） | onnxruntime 1.20.1、tokenizers 0.21.0、numpy 1.26.4；Python 3.10.8 | `tools\local-models\.venv` | 本机 embedding / rerank 的 CPU 推理，不装 torch |
 | 语义模型（可选） | `Xenova/bge-small-zh-v1.5`（`model.onnx`，512 维）、`Xenova/bge-reranker-base`（`model_int8.onnx`） | `tools\local-models\models` | 本机语义检索，默认不启用 |
 | OCR 模型 | `PP-OCRv5_mobile_det`、`PP-OCRv5_mobile_rec`（默认）；`PP-OCRv5_server_rec`（可选） | `tools\paddleocr\models` | 文字检测与识别；模型文件摘要写进执行版本 |
+| PostgreSQL 客户端工具 | `pg_dump` / `pg_restore` 16.15 | `C:\Program Files\PostgreSQL\16\bin` | `ops.bat backup` / `restore`（S7） |
+| playwright-core（仅验收） | 1.57.0，随 playwright-go 安装 | `C:\Users\LENOVO\AppData\Local\ms-playwright-go\1.57.0\package` | 浏览器验收脚本 `web/e2e/*.mjs`，不是运行依赖 |
+| Chrome for Testing 无头版（仅验收） | 148.0.7778.96（Playwright 浏览器修订 1223） | `C:\Users\LENOVO\AppData\Local\ms-playwright\chromium_headless_shell-1223` | 同上 |
 
 授权用途由用户自行确认，不作为工程验收条件。
 
@@ -71,7 +74,7 @@
 
 无需额外配置，按 6.1 节的规则选择：
 
-- `AUTOBID_OFFICE_ENGINE`：`auto`（默认，WPS 优先、Word 备选）、`wps` 或 `word`。
+- `AUTOBID_OFFICE_ENGINE`：`auto`（默认，WPS 优先、Word 备选）、`wps`、`word` 或 `off`。`off` 不探测或启动任何文档引擎，运行能力为 `unconfigured`；拒绝 PDF 与严格最终稿，只允许 DOCX 预览稿。已有产物仍可下载。重新启用 WPS / Word 后须重启服务并通过启动自检。
 - `AUTOBID_OFFICE_TIMEOUT_SECONDS`：单次刷新超时，默认 180 秒。
 - `AUTOBID_EXPORT_WORKERS`：导出作业执行者数，默认 2；引擎内仍串行。
 - `AUTOBID_EXPORT_JOB_DEADLINE_SECONDS`：导出作业从首次提交起的截止时长，默认 1800 秒（S4）；回收、暂停恢复与重试都不延长。
@@ -210,6 +213,34 @@ tools\local-models\.venv\Scripts\python.exe -X utf8 tools\local-models\fetch_mod
 切回原模型：恢复 `.env.local.bat`，重启后在“语义索引”页启用旧索引，不需要重算。
 - 未配置时 `embedding` 状态为 `unconfigured`，知识库使用 256 维哈希向量，不是语义检索。
 
+### 3.5 离线安装与模型导入（S7）
+
+运行时不联网：OCR 与语义模型服务只读本地 `models` 目录，Mermaid-CLI 不下载浏览器，业务请求中不执行 npm / pip 安装。安装阶段的下载可以在另一台联网机器上完成，再复制过来：
+
+1. **Mermaid-CLI**：在联网机器上按 3.2 执行 `npm ci`（设置 `PUPPETEER_SKIP_DOWNLOAD=true`），把 `tools\mermaid-cli\node_modules` 整个目录复制到本机同一位置。本机另需 Chrome 或 Edge。
+2. **Python 依赖**：在系统、架构与 Python 版本（3.10，Windows x64）都和本机一致的联网机器上执行 `python -m pip download -r tools\paddleocr\requirements.lock.txt -d wheelhouse\paddleocr`（镜像参数同 3.3）。把 `wheelhouse` 复制过来，在本机新建虚拟环境，再执行 `pip install --no-index --find-links wheelhouse\paddleocr -r tools\paddleocr\requirements.lock.txt`。语义模型同理。不要直接复制 `.venv`：它记录了创建它的 Python 路径。
+3. **模型**：在联网机器上运行 `fetch_models.py`，把 `tools\paddleocr\models`、`tools\local-models\models` 复制到本机同一位置。语义模型服务启动时校验模型文件 SHA-256（3.4）；OCR 服务把模型文件摘要写进执行版本，换了模型时，按旧版本提交的解析作业会失败，不会悄悄改用新模型（3.3）。
+4. **字体**：使用 Windows 自带的微软雅黑与黑体，无需导入。
+
+组件与模型的授权声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。这套离线步骤没有在第二台机器上实测。
+
+### 3.6 运维工具与浏览器验收（S7）
+
+运维命令都经 `ops.bat` 读取 `.env.local.bat` 后运行 `bin\autobid-ops.exe`（`start.bat` 一并构建），停机、备份、恢复、升级、回退的步骤见 [OPERATIONS.md](OPERATIONS.md)。`pg_dump` 依次从 `AUTOBID_PG_BIN`、PATH、`C:\Program Files\PostgreSQL\16\bin` 查找。
+
+浏览器验收不属于运行依赖，业务人员不需要。维护人员复跑时设置：
+
+| 变量 | 说明 |
+| --- | --- |
+| `AUTOBID_TEST_DATABASE_URL` | 测试用 PostgreSQL；每个套件新建并删除自己的隔离库，库名为 `autobid` 时拒绝执行 |
+| `PLAYWRIGHT_MODULE` | playwright 或 playwright-core 模块目录；未设置时浏览器套件跳过 |
+| `BROWSER_EXECUTABLE` | Chromium 可执行文件；本机用上表的无头版（Playwright 自带的修订 1200 未安装） |
+| `AUTOBID_MMDC_PATH` / `AUTOBID_MMDC_BROWSER` / `AUTOBID_OCR_URL` | 真实 Mermaid 与 OCR，传给被测服务 |
+| `E2E_REAL_TENDER` | 真实招标验收使用的开发集文件（`ccgp_2026-10-06/` 中的一份，不入库） |
+| `AUTOBID_S7_DRILL=1` | 执行升级恢复演练 `cmd/upgrade-drill` |
+
+命令与结果见 [S7_ACCEPTANCE.md](S7_ACCEPTANCE.md)。这些套件会启动真实 WPS，持 `export/officetest` 文件锁串行运行；本机服务运行时不要跑。
+
 ## 4. 本机验证记录（2026-11-03，E 级）
 
 测试命令（PowerShell，需 `CGO_ENABLED=1`、`CC=gcc` 与 `AUTOBID_TEST_DATABASE_URL`）：
@@ -272,6 +303,7 @@ go test -count=1 -v -run TestOfficeLargeDocumentAndSoak ./export/
 
 ## 5. 升级规则
 
+- 升级前先 `ops.bat check` 确认没有在途作业，停机后备份并校验，步骤见 [OPERATIONS.md](OPERATIONS.md) 第 5 节。
 - 升级任何已登记组件后，都要重启服务重新自检，并更新本文版本表。
 - 不使用浮动的 `latest` 版本。
 - 业务请求中不执行 `npm` / `pip` 安装，也不做首次联网下载。

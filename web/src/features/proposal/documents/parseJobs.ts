@@ -36,8 +36,21 @@ export function executorLabel(executor: string | undefined): string {
   return `${parser} + ${parts[0]}${models.length ? `（${models.join(' / ')}）` : ''}`
 }
 
-/** 固定解析作业的状态：作业状态与候选业务状态分开。 */
-export function parseJobView(j: FixedJob): StateView & { canCancel: boolean; canRetry: boolean; canReview: boolean } {
+type JobView = StateView & { canCancel: boolean; canRetry: boolean; canReview: boolean }
+
+/** 固定解析作业的状态：作业状态与候选业务状态分开。
+ *  enabled=false 表示服务器关闭了材料处理：作业不会执行，只能取消；到提交时固定的截止时间后由服务器结束。
+ *  重新处理和核对候选都要等重新启用，所以不给入口。 */
+export function parseJobView(j: FixedJob, enabled = true): JobView {
+  const view = jobStateView(j)
+  if (enabled) return view
+  const active = j.status === 'queued' || j.status === 'running'
+  return { ...view, canRetry: false, canReview: false,
+    label: active ? '已停止执行' : view.label, tone: active ? 'amber' : view.tone,
+    note: active ? '材料处理已关闭，这个作业不会执行；到提交时固定的截止时间后自动结束，也可以现在取消。重新启用后，截止前会继续处理' : view.note }
+}
+
+function jobStateView(j: FixedJob): JobView {
   const base = { canCancel: false, canRetry: false, canReview: false }
   if (j.status === 'queued' || j.status === 'running') {
     const retrying = j.status === 'queued' && j.error_code === 'RUNTIME_UNAVAILABLE' && j.attempts > 0

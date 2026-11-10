@@ -61,7 +61,7 @@
 1. `db.Open` + `Migrate`（schema 校验和未变时跳过）。
 2. 组装组件：`retrieval.New` → `Hub` → `LLMService` → `intercept.New` → `Manager`（Hook 工厂装配 `guard`）→ `Engine`，再 `svc.Bind(e)`。
 3. 启动恢复：`RestoreHealth`（熔断状态）→ `ic.Start`（回收等待方已失联的审批）→ `ReapExpiredIntents` → `e.Start`（周期租约回收）→ 对全部 running / paused 任务执行 `LoadTask` + `Engine.Run`。
-4. 后台执行器：`export.Runner`、`export.ChartRunner`（S3 图表渲染）、`filework.Runner`（`AUTOBID_FILE_PROCESSING_ENABLED` 时）、`API.RunSectionJobs`。各执行器使用自己的租约表：`export_jobs`、`chart_render_jobs`、`fixed_file_jobs`、`section_write_jobs`；检索子任务另用 `retrieval_jobs`。
+4. 后台执行器：`export.Runner`、`export.ChartRunner`（S3 图表渲染）、`filework.Runner`（`AUTOBID_FILE_PROCESSING_ENABLED` 时；关闭时改跑只结束超预算作业的 `filework.Sweeper`）、`API.RunSectionJobs`。各执行器使用自己的租约表：`export_jobs`、`chart_render_jobs`、`fixed_file_jobs`、`section_write_jobs`；检索子任务另用 `retrieval_jobs`。
 5. 启动 HTTP/SSE。退出顺序：`srv.Shutdown` → `Engine.StopAll`（以 `task_deleted` 原因取消，在途 Intent 回到 open 供下次重领）→ 取消引擎 Context。引擎 Context 必须与信号 Context 分离，否则信号会先取消执行树，在途 Intent 会被误判为执行失败。
 
 **Planner / Worker 运行时（`server/engine.go`、`server/manager.go`、`agent/`）**
@@ -123,6 +123,13 @@
 
 ### 2.2 阶段增量记录
 
+**2026-11-10 S7 一体交付（E 级）**：按 [`AGENT_TOOL_SKILLS_PLAN.md`](./AGENT_TOOL_SKILLS_PLAN.md) S7 落地，收口记录见该计划 12.11 与 [`docs/S7_ACCEPTANCE.md`](docs/S7_ACCEPTANCE.md)，运维手册 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)。首版解析范围只含招标文件（S5b / S5c 未实施）。
+- **运维工具**：`ops.bat` → `cmd/autobid-ops` → `internal/ops`。`check` 只读、不迁移、不启动 WPS，检查数据库版本、在途作业（暂停的项目只提示）与数据目录；`backup` 先 `pg_dump` 再复制 `filework` / `exports` / `evidence`，`manifest.json` 记录逐文件 SHA-256，不含模型主密钥；`verify`；`restore` 只写空库和空目录。`start.bat` 同时构建 `binutobid-ops.exe`。离线安装与模型导入步骤见 `docs/LOCAL_RUNTIME.md` 3.5，组件与模型的授权声明登记在 `docs/THIRD_PARTY_NOTICES.md`（升级或新增本机组件时同步更新）。
+- **版本与回退**：`GET /api/runtime/version`（`internal/buildinfo`，读 Go 内嵌的 VCS 信息）。`schema_version.generation` 是单调代际号：**修改 `db/schema.sql` 必须把 `db.SchemaGeneration` 加一，并同步更新 `db/schema_generation_test.go` 的 `generationSchemaHash`**；程序遇到代际更高的库时 `Migrate` 返回 `ErrSchemaNewer` 并拒绝启动。这只保护本版本之后的回退：实测旧程序连上已升级的库会重放旧 DDL、改写约束函数与触发器，所以回退只能恢复升级前的备份。
+- **能力关闭**：`AUTOBID_OFFICE_ENGINE=off` 不探测、不启动文档引擎（最终稿与 PDF 拒绝，只允许 DOCX 预览稿）。材料处理关闭时不建 Runner，改跑 `filework.Sweeper`（`db.SweepFixedFileJobs`）：只按领取时的规则结束超出原截止时间 / 尝试预算的作业（`BUDGET_EXHAUSTED`，终态事件唤醒等待的意图），租约过期的 running 退回队列，不领取、不延长；文档页仍显示必需材料清单（仍参与导出门禁）与作业列表（只能取消）。Worker 技能目录用 `Kit.Skills()` 按服务器开关标注不可用技能，`tool_runtime_status` 查询 all 时返回 `features`（`file_processing`、`agent_export`）。
+- **前端**：修正上传自动拆解（`goals_bootstrapped` / `extract_result` / `goal_code`）与故事板字段的前后端契约；章节写作页可编写、提交、批准 / 退回故事板（`StoryboardCard`，作者与批准人分离按“当前操作人”判定）、插入受控引用（`ReferenceBar`）、运行写作核验；证据页可录入资信、业绩、证明原件（multipart 上传）、要求绑定、承诺与报价（`EvidenceInputs`）。`X-Autobid-User` 由页面百分号编码（请求头只能是 ASCII），服务端 `operator()` 解码。导出阻断项的标签与修复链接覆盖 `db/` 中的全部阻断种类（`e2e.TestEveryExportBlockerHasAPageAction` 守护，新增阻断种类须同步 `blocker-links.ts` 与 `format.ts`）。
+- **验收工具**：`e2e/`（Go 测试启动真实服务进程 + 隔离库 + 真实 WPS / Mermaid / PaddleOCR，只有模型是脚本替身 `web/e2e/stub_llm.py`；需 `PLAYWRIGHT_MODULE`，未设置时跳过）与 `cmd/upgrade-drill`（`AUTOBID_S7_DRILL=1`，用 `8b48a4b` 真实旧程序造历史数据并演练升级、备份、恢复与回退；临时目录 `.s7-tmp/`）。两者都持 `export/officetest` 文件锁，运行方式见 `docs/S7_ACCEPTANCE.md`。
+
 **2026-11-06 S6 检索部署（E 级）**：按 [`AGENT_TOOL_SKILLS_PLAN.md`](./AGENT_TOOL_SKILLS_PLAN.md) S6 落地，收口记录见该计划 12.10。
 - **表（域 D）**：`knowledge_indexes` 兼作持久化构建作业（`queued/building/ready/failed/cancelled`，请求键、尝试预算、首次提交固定的 `deadline_at`、租约、`cursor_chunk_id`、新算 / 复用计数）；部分唯一索引保证每租户至多一个活跃构建；触发器 `knowledge_indexes_guard` 冻结模型 / 维度 / 预处理等输入与终态；`knowledge_index_events` 审计构建、启用、回滚、模型变更（不设外键）。
 - **存储层 `db/knowledge_index_jobs.go`**：`SubmitKnowledgeIndexBuild`、`ClaimKnowledgeIndexBuild(ctx, tenant, owner, lease)`、`HeartbeatKnowledgeIndexBuild`、`ReusableEmbeddings`（同模型 / 维度 / 预处理、内容指纹相同才复用，含 failed / cancelled）、`PutIndexBatch`（令牌围栏，向量 / 计数 / 游标同事务）、`ActivateKnowledgeIndex`（`IndexActivationError` 原因码）。`KnowledgeIndex` 的查询列用 `knowledgeIndexCols`。
@@ -172,7 +179,7 @@
 
 - `cmd/server/`、`cmd/migrate/`：服务启动入口与数据库迁移 CLI。
 - `db/`：**PostgreSQL（`pgx/v5`）存储层**。
-  - **迁移机制**：当前 `db.Migrate(ctx)` 通过 `//go:embed schema.sql` 读取 `db/schema.sql`，对比 `schema_version` 表中的 SHA-256 校验和并在 `pg_advisory_xact_lock` 下执行幂等 DDL（注意：当前**不读取** `db/migrations/` 目录；新增表或字段必须以幂等语法写入 `db/schema.sql`，或先显式改造迁移器）。
+  - **迁移机制**：当前 `db.Migrate(ctx)` 通过 `//go:embed schema.sql` 读取 `db/schema.sql`，对比 `schema_version` 表中的 SHA-256 校验和并在 `pg_advisory_xact_lock` 下执行幂等 DDL（注意：当前**不读取** `db/migrations/` 目录；新增表或字段必须以幂等语法写入 `db/schema.sql`，或先显式改造迁移器）。S7 起 `schema_version` 另记单调代际号 `generation`：每次修改 `schema.sql` 都要把 `db.SchemaGeneration` 加一并更新 `generationSchemaHash`（`TestSchemaGenerationBumped` 校验），代际更高的库会被拒绝连接。
   - **数据域划分**：
     1. `assets` + `entity_edges`：仅存储招标文件静态要素（`tender`、`lot`、`clause`、`qualification`、`scoring_item`、`commercial_item`）；
     2. `explorations` + `exploration_nodes` + `findings`：存储任务推演过程节点与核验结论产出物；

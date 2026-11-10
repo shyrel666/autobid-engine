@@ -1,0 +1,2 @@
+# cmd.exe misparses batch files without CRLF, especially with Chinese text.
+*.bat text eol=crlf

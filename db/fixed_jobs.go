@@ -194,6 +194,13 @@ func (d *DB) GetTenderParseJob(ctx context.Context, tenant string, taskID, id in
 	return j, nil
 }
 
+// exhaustFixedJobSQL ends a job whose original deadline or attempt budget is used up ($1 job, $2 actor).
+// Claim and SweepFixedFileJobs share it, so a job ends the same way whether or not a runner exists.
+const exhaustFixedJobSQL = `UPDATE fixed_file_jobs SET status='failed',error_code='BUDGET_EXHAUSTED',
+	error='执行次数或截止时间已耗尽'||CASE WHEN error<>'' THEN '；最近一次：'||left(error,300) ELSE '' END,
+	lease_token=lease_token+1,lease_until=NULL,retry_after=NULL,updated_at=now(),updated_by=$2
+	WHERE id=$1 AND (status='queued' OR (status='running' AND lease_until<now())) AND (attempts>=max_attempts OR deadline_at<=now())`
+
 // Claim also reclaims expired leases. Attempts and the original deadline never reset.
 func (d *DB) ClaimFixedFileJob(ctx context.Context, owner string, lease time.Duration, taskID int64) (*FixedFileJob, error) {
 	var id, tid int64
@@ -218,10 +225,7 @@ func (d *DB) ClaimFixedFileJob(ctx context.Context, owner string, lease time.Dur
 		if paused {
 			return nil
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE fixed_file_jobs SET status='failed',error_code='BUDGET_EXHAUSTED',
-			error='执行次数或截止时间已耗尽'||CASE WHEN error<>'' THEN '；最近一次：'||left(error,300) ELSE '' END,
-			lease_token=lease_token+1,lease_until=NULL,retry_after=NULL,updated_at=now(),updated_by=$2
-			WHERE id=$1 AND (status='queued' OR (status='running' AND lease_until<now())) AND (attempts>=max_attempts OR deadline_at<=now())`, id, owner)
+		_, err := tx.ExecContext(ctx, exhaustFixedJobSQL, id, owner)
 		if err != nil {
 			return err
 		}
@@ -232,6 +236,77 @@ func (d *DB) ClaimFixedFileJob(ctx context.Context, owner string, lease time.Dur
 		return err
 	})
 	return out, err
+}
+
+// SweepFixedFileJobs keeps the budget fixed at submission meaningful while file processing is
+// switched off and no runner claims jobs. It applies only the claim-time rules: a job past its
+// original deadline or attempt budget ends as BUDGET_EXHAUSTED (the terminal update publishes the
+// job event, which wakes a waiting Agent intent), and a running job whose lease expired returns to
+// the queue. Paused tasks are skipped, as at claim time. Nothing is started or extended, and only
+// jobs that change are locked, so the export snapshot fence is not bumped needlessly. taskID 0 sweeps
+// every task (the server); tests pass their own task. Returns the jobs it changed.
+func (d *DB) SweepFixedFileJobs(ctx context.Context, owner string, taskID int64) ([]*FixedFileJob, error) {
+	rows, err := d.QueryContext(ctx, `SELECT j.id,j.task_id,j.tenant_id FROM fixed_file_jobs j JOIN tasks t ON t.id=j.task_id
+		WHERE NOT t.paused AND ($1::bigint=0 OR j.task_id=$1)
+		  AND ((j.status='queued' AND (j.attempts>=j.max_attempts OR j.deadline_at<=now())) OR (j.status='running' AND j.lease_until<now()))
+		ORDER BY j.id LIMIT 100`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	type candidate struct {
+		id, task int64
+		tenant   string
+	}
+	var cands []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.task, &c.tenant); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		cands = append(cands, c)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	var changed []*FixedFileJob
+	for _, c := range cands {
+		var out *FixedFileJob
+		err := d.Transaction(ctx, func(tx *DB) error {
+			if err := tx.LockFileProcessingTask(ctx, c.tenant, c.task); err != nil {
+				return err
+			}
+			var paused bool
+			if err := tx.QueryRowContext(ctx, `SELECT paused FROM tasks WHERE id=$1`, c.task).Scan(&paused); err != nil {
+				return err
+			}
+			if paused {
+				return nil
+			}
+			j, err := scanFixedJob(tx.QueryRowContext(ctx, exhaustFixedJobSQL+` RETURNING `+fixedJobCols, c.id, owner))
+			if !errors.Is(err, ErrNotFound) {
+				out = j
+				return err
+			}
+			j, err = scanFixedJob(tx.QueryRowContext(ctx, `UPDATE fixed_file_jobs SET status='queued',lease_token=lease_token+1,lease_until=NULL,lease_owner='',updated_at=now(),updated_by=$2
+				WHERE id=$1 AND status='running' AND lease_until<now() RETURNING `+fixedJobCols, c.id, owner))
+			if errors.Is(err, ErrNotFound) {
+				return nil // changed by someone else since the scan
+			}
+			out = j
+			return err
+		})
+		if errors.Is(err, ErrNotFound) {
+			continue // task deleted since the scan
+		}
+		if err != nil {
+			return changed, err
+		}
+		if out != nil {
+			changed = append(changed, out)
+		}
+	}
+	return changed, nil
 }
 func (d *DB) HeartbeatFixedFileJob(ctx context.Context, j *FixedFileJob, lease time.Duration) error {
 	res, err := d.ExecContext(ctx, `UPDATE fixed_file_jobs SET lease_until=LEAST(deadline_at,now()+$3*interval '1 second') WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_until>now() AND deadline_at>now()`, j.ID, j.LeaseToken, lease.Seconds())

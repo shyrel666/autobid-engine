@@ -51,7 +51,7 @@ type officeEngine interface {
 
 // OfficeOptions 选择引擎与单次刷新超时。
 type OfficeOptions struct {
-	Engine  string // auto（默认：WPS 优先，Word 备选）/ wps / word
+	Engine  string // auto（默认：WPS 优先，Word 备选）/ wps / word / off（不探测、不启动）
 	Timeout time.Duration
 }
 
@@ -63,8 +63,10 @@ func engineOrder(engine string) ([]string, error) {
 		return []string{EngineWPS}, nil
 	case EngineWord:
 		return []string{EngineWord}, nil
+	case "off":
+		return nil, nil
 	}
-	return nil, fmt.Errorf("%w: unknown engine %q (want auto, wps or word)", ErrOfficeUnavailable, engine)
+	return nil, fmt.Errorf("%w: unknown engine %q (want auto, wps, word or off)", ErrOfficeUnavailable, engine)
 }
 
 // DetectOffice 按顺序探测文档引擎，返回第一个通过自检的引擎；全部不可用时返回各候选的原因。
@@ -72,6 +74,9 @@ func DetectOffice(ctx context.Context, opt OfficeOptions) (Office, error) {
 	order, err := engineOrder(opt.Engine)
 	if err != nil {
 		return nil, err
+	}
+	if len(order) == 0 {
+		return nil, fmt.Errorf("%w: %w: 文档引擎已关闭，请启用 WPS 或 Word 后提交最终稿；当前仅可生成 DOCX 预览稿", ErrOfficeUnavailable, ErrNotInstalled)
 	}
 	if opt.Timeout <= 0 {
 		opt.Timeout = 3 * time.Minute

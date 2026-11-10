@@ -132,12 +132,13 @@ export function UploadCard({ taskID, onUploaded, bare, dirtyRef }:
             {result.result.lot_asset_id ? ` · 标段实体 #${result.result.lot_asset_id}` : ''}{result.planner_notified ? ' · 已通知 Planner' : ''}
             {'goals_bootstrapped' in result && result.goals_bootstrapped && (
               <div className="mt-1 text-xs text-slate-600">
-                目标分解：提取要求 {result.goals_bootstrapped.extract.created + result.goals_bootstrapped.extract.updated + result.goals_bootstrapped.extract.unchanged} 条 ·
+                目标分解：提取要求 {(result.goals_bootstrapped.extract_result?.created ?? 0) + (result.goals_bootstrapped.extract_result?.updated ?? 0) + (result.goals_bootstrapped.extract_result?.unchanged ?? 0)} 条 ·
                 同步要素 {result.goals_bootstrapped.synced_assets} 个 ·
-                初始化图谱目标节点 {(result.goals_bootstrapped.goals ?? []).map((g) => `${g.code}(#${g.node_id})`).join('、') || '无'}
+                初始化图谱目标节点 {(result.goals_bootstrapped.goals ?? []).map((g) => `${g.goal_code}(#${g.node_id})`).join('、') || '无'}
                 {result.goals_bootstrapped.outline_created ? ` · 已生成大纲草案 v${result.goals_bootstrapped.outline_version}` : ''}
               </div>
             )}
+            {'goals_bootstrap_error' in result && result.goals_bootstrap_error && <div className="mt-1 flex items-center gap-1 text-amber-700"><AlertTriangle className="size-3.5" />{result.goals_bootstrap_error}</div>}
             {result.result.warnings?.map((w) => <div key={w} className="mt-1 flex items-center gap-1 text-amber-700"><AlertTriangle className="size-3.5" />{w}</div>)}
           </div>
         ) : (

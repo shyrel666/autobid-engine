@@ -127,9 +127,14 @@ export function ProcessingPanel({ documents, selected }: { documents: DocumentWi
     finally { setBusy(false) }
   }
   if (!files.data && !files.error) return null
-  if (files.data && !files.data.enabled) return <Notice tone="info">材料处理未启用，暂不能导入 ZIP 子文件或重新解析留存原件。</Notice>
+  if (files.data && !files.data.enabled) return <Card title="材料处理">
+    <Notice tone="info">材料处理未启用，暂不能上传原件、导入 ZIP 子文件、重新解析或采用 / 拒绝候选。已提交的作业不会执行，到提交时固定的截止时间后自动结束，可以取消；必需材料清单仍参与导出门禁，可在下方修改。</Notice>
+    <FixedWorkflow taskId={taskId} files={files.data.files ?? []} tick={tick} refresh={refresh} show={show} enabled={false} />
+  </Card>
   const allFiles = [...(files.data?.files ?? []), ...extraFiles].filter((v, i, a) => a.findIndex((x) => x.id === v.id) === i)
   const materials = allFiles.filter((f) => f.kind !== 'script' && f.format !== 'zip')
+  // 上传后的提示让用户“在下方选择导入”，所以还有未处理的原件时不能折叠。
+  const untouched = materials.some((f) => !documents.some((d) => d.original_file_id === f.id) && !allRecords.some((r) => r.file_id === f.id))
   const currentProfile = profiles.find((o) => o.value === profile)
   const profileField = <Field label="解析配置" hint={currentProfile?.hint}>
     <Select aria-label="解析配置" value={profile} onChange={(e) => setProfile(e.target.value as ParserProfile)}>
@@ -147,7 +152,7 @@ export function ProcessingPanel({ documents, selected }: { documents: DocumentWi
       <Button size="sm" loading={busy} disabled={!selected.original_file_id} onClick={reparse}>重新解析并预览</Button>
       {!selected.original_file_id && <span className="pb-2 text-muted">原件未留存，需先上传相同原件</span>}
     </div>}
-    {allFiles.length > 0 && <details open={documents.length === 0}>
+    {allFiles.length > 0 && <details open={documents.length === 0 || untouched}>
       <summary className="cursor-pointer text-sm font-medium">原件与 ZIP 子文件（{materials.length}）</summary>
       <div className="my-3 grid gap-2 md:grid-cols-4">
         <Field label="附件招标编号"><Input value={form.tender_no || selected?.tender_no || ''} onChange={(e) => setForm({ ...form, tender_no: e.target.value })} /></Field>

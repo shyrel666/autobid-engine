@@ -77,7 +77,7 @@ function ExtractSummary({ taskId, resp, onClose }: { taskId: number; resp: Extra
         {resp.synced_assets ? ` · 同步招标静态要素 ${resp.synced_assets} 个` : ''}</div>
       {goals.length > 0 && (
         <div className="mt-1 text-xs">
-          已初始化推演图谱 Goal 根节点：{goals.map((g) => `${g.code}「${g.title}」(#${g.node_id})`).join('、')}
+          已初始化推演图谱 Goal 根节点：{goals.map((g) => `${g.goal_code}(#${g.node_id})`).join('、')}
         </div>
       )}
       {resp.outline_created && resp.outline_version && (

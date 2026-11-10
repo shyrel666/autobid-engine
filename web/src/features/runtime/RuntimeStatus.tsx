@@ -75,10 +75,25 @@ export function RuntimeIndicator() {
           </div>
           {rt.error && <p className="mb-2 text-xs text-danger">读取失败：{rt.error}</p>}
           <ul className="max-h-[60vh] overflow-y-auto">{(rt.data ?? []).map((c) => <CapabilityRow key={c.capability} c={c} />)}</ul>
+          <VersionDetails />
         </div>
       )}
     </div>
   )
+}
+
+function VersionDetails() {
+  const version = useAsync(() => api.runtimeVersion(), [])
+  return <details className="mt-2 border-t border-line pt-2 text-xs text-muted">
+    <summary className="cursor-pointer">诊断详情</summary>
+    {version.error && <p>版本信息读取失败：{version.error}</p>}
+    {version.data && <dl className="mt-2 space-y-1 break-all">
+      <div><dt className="inline">运行版本：</dt><dd className="inline">{version.data.revision}{version.data.modified ? '（含未提交改动）' : ''}</dd></div>
+      <div><dt className="inline">Go 版本：</dt><dd className="inline">{version.data.go_version}</dd></div>
+      <div><dt className="inline">数据库校验和：</dt><dd className="inline">{version.data.schema_checksum}</dd></div>
+      <div><dt className="inline">启动时间：</dt><dd className="inline">{fmtTime(version.data.started_at)}</dd></div>
+    </dl>}
+  </details>
 }
 
 /** 入口处的能力提示：只在相关能力不是 healthy 时显示影响与下一步（检查中、未配置、自检失败、最近失败分别可见）。 */

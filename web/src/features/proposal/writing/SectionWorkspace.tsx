@@ -15,9 +15,12 @@ import type { WritingPanel } from '../../../lib/routes'
 import { ChartsCard } from '../export/ExportParts'
 import { EvidenceDetailDrawer, EvidencePicker, EvidenceStateRow } from '../evidence/Evidence'
 import { sectionTone } from '../outline/OutlinePage'
+import { OperatorField } from '../../task-workspace/OperatorField'
 import { useTaskWorkspace, useTick } from '../../task-workspace/TaskWorkspaceProvider'
 import RevisionCompare from './RevisionCompare'
 import SectionJobs from './SectionJobs'
+import StoryboardCard, { ReferenceBar } from './StoryboardCard'
+import { insertAt } from './storyboard'
 import { draftKey, draftState, isDirty, loadDraft, newDraft, rebase, saveDraft, toggleEvidence } from './drafts'
 import type { Draft } from './drafts'
 
@@ -54,7 +57,7 @@ const panelMeta: Record<WritingPanel, { label: string; icon: ReactNode }> = {
 
 export default function SectionWorkspace({ sectionId, layout, tocButton }: { sectionId: number; layout: 'three' | 'two' | 'one'; tocButton?: ReactNode }) {
   const toast = useToast()
-  const { taskId, invalidate } = useTaskWorkspace()
+  const { taskId, task, invalidate } = useTaskWorkspace()
   const tick = useTick('sections', 'evidence')
   const det = useAsync(() => api.section(taskId, sectionId), [taskId, sectionId, tick])
   const [params, setQuery] = useSearchParams()
@@ -84,6 +87,7 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
   const pendingDispatch = useRef<{ input: string; key: string } | null>(null)
   const [evidenceView, setEvidenceView] = useState<{ run: number; id: number }>()
   const [panelDrawer, setPanelDrawer] = useState(false)
+  const selection = useRef<[number, number] | undefined>(undefined)
 
   const d: SectionDetail | undefined = det.data
   const s = d?.section
@@ -169,7 +173,11 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
     try { await fn(); toast('ok', ok); setConflict(undefined); invalidate(action) } catch (e) { toast('error', errorText(e)); invalidate(['sections']) } finally { setBusy('') }
   }
 
-  const dispatchDisabled = !d.writable ? (d.blocked_reason || '当前不可写作') : s.writing ? 'AI 正在撰写本章节' : !s.dependencies_ready ? `前置章节未就绪：${s.unmet_dependencies.join('、')}` : ''
+  // 写作门禁：新项目默认开启；旧项目只要已有故事板或核验记录也按门禁处理，与后端判定一致。
+  const gated = !!task.data?.grounded_writing_required || !!d.storyboard || !!d.writing_verification
+  const storyboardPending = gated && d.storyboard?.status !== 'pink_approved'
+  const dispatchDisabled = !d.writable ? (d.blocked_reason || '当前不可写作') : s.writing ? 'AI 正在撰写本章节' : !s.dependencies_ready ? `前置章节未就绪：${s.unmet_dependencies.join('、')}`
+    : storyboardPending ? '故事板尚未通过粉队评审' : ''
   const current = d.current_revision
   const canApprove = !!current && current.rev_no === s.current_rev_no && (current.status === 'draft' || current.status === 'reviewing') && s.approved_rev_no !== current.rev_no
   const statusText = saving ? '保存中…' : state === 'behind' ? `有未保存修改 · 当前版本已更新为修订 ${s.current_rev_no}` : dirty ? '有未保存修改'
@@ -193,6 +201,7 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
             写作核验：{d.writing_verification.verdict === 'stale' ? '已失效' : d.writing_verification.verdict === 'passed' ? '通过' : `未通过（无据断言 ${d.writing_verification.metrics.ungrounded_claim_count}）`}
           </Badge>
         )}
+        <OperatorField />
         {layout !== 'three' && <Button size="sm" icon={<PanelRight className="size-3.5" />} onClick={() => setPanelDrawer(true)}>写作依据</Button>}
         <Button size="sm" variant="primary" loading={saving} disabled={!dirty || !d.writable}
           title={!d.writable ? d.blocked_reason : !dirty ? '没有未保存的修改' : ''} onClick={() => void save()}>保存</Button>
@@ -244,7 +253,13 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
         </>
       ) : mode === 'edit' && draft ? (
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
+          <ReferenceBar taskId={taskId} detail={d} onInsert={(token) => {
+            const next = insertAt(draft.content, token, selection.current?.[0], selection.current?.[1])
+            selection.current = [next.cursor, next.cursor]
+            updateDraft({ content: next.text })
+          }} />
           <TextArea aria-label="章节正文（Markdown）" className="min-h-[320px] flex-1 font-mono text-[13px] leading-6" value={draft.content} readOnly={saving}
+            onSelect={(e) => { selection.current = [e.currentTarget.selectionStart, e.currentTarget.selectionEnd] }}
             onChange={(e) => updateDraft({ content: e.target.value })} placeholder="Markdown 正文" />
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="衔接摘要" hint="供依赖本章节的后续章节参考"><TextArea rows={2} value={draft.summary} readOnly={saving} onChange={(e) => updateDraft({ summary: e.target.value })} /></Field>
@@ -294,33 +309,8 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
               </li>))}</ul>
           </section>
         )}
-        {d.storyboard && (
-          <section className="rounded-[10px] border border-line bg-soft p-3 text-xs space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold">D3 章节故事板 v{d.storyboard.version}</span>
-              <Badge tone={d.storyboard.status === 'pink_approved' ? 'green' : d.storyboard.status === 'pending_pink_review' ? 'purple' : d.storyboard.status === 'stale' || d.storyboard.status === 'pink_rejected' ? 'red' : 'amber'}>
-                {d.storyboard.status}
-              </Badge>
-            </div>
-            <p className="font-medium text-fg">核心论点：{d.storyboard.theme_sentence}</p>
-            {d.storyboard.stale_reason && <p className="text-danger">失效原因：{d.storyboard.stale_reason}</p>}
-            {d.storyboard.scoring_points.length > 0 && (
-              <ul className="list-disc pl-4 space-y-1 text-muted">
-                {d.storyboard.scoring_points.map((sp, i) => (
-                  <li key={i}><span className="font-medium text-fg">{sp.requirement_code || `#${sp.requirement_id}`}</span>：{sp.our_approach} → {sp.buyer_benefit}</li>
-                ))}
-              </ul>
-            )}
-            <div className="flex flex-wrap gap-1 pt-1">
-              {(d.storyboard.status === 'draft' || d.storyboard.status === 'pink_rejected' || d.storyboard.status === 'stale') && (
-                <Button size="sm" loading={busy === 'sb_submit'} onClick={() => void act('sb_submit', '提交粉队评审', () => api.submitSectionStoryboard(taskId, sectionId), '已提交粉队评审', ['sections'])}>提交粉队评审</Button>
-              )}
-              {d.storyboard.status === 'pending_pink_review' && (
-                <Button size="sm" variant="primary" loading={busy === 'sb_approve'} onClick={() => void act('sb_approve', '批准故事板', () => api.approveSectionStoryboard(taskId, sectionId, '粉队评审通过'), '故事板已通过粉队评审', ['sections'])}>粉队批准</Button>
-              )}
-            </div>
-          </section>
-        )}
+        <StoryboardCard taskId={taskId} sectionId={sectionId} detail={d} gated={gated} busy={busy} act={act}
+          onSaved={() => { toast('ok', '故事板已保存，请提交粉队评审'); invalidate(['sections']) }} />
         {d.writing_verification && (
           <section className="rounded-[10px] border border-line bg-soft p-3 text-xs space-y-1">
             <div className="flex items-center justify-between gap-2">
@@ -343,6 +333,9 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
               </ul>
             )}
           </section>
+        )}
+        {gated && current && (
+          <Button size="sm" loading={busy === 'wv_eval'} onClick={() => void act('wv_eval', '运行写作核验', () => api.evaluateSectionWritingVerification(taskId, sectionId), '写作核验已完成', ['sections'])}>运行写作核验</Button>
         )}
         <h3 className="text-xs font-medium text-muted">绑定要求（{d.requirements.length}）</h3>
         {d.requirements.length === 0 ? <p className="text-xs text-muted">无（概述 / 衔接章节）</p> : d.requirements.map((r) => (

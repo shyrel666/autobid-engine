@@ -27,6 +27,21 @@ test('处理中、候选待核对、已采用、已拒绝、失败与取消分�
   assert.match(retry.note ?? '', /原截止时间内重试/)
 })
 
+test('材料处理关闭：在途作业标明不会执行、可取消，不给重新处理和核对入口', () => {
+  for (const status of ['queued', 'running']) {
+    const v = parseJobView(job(status), false)
+    assert.equal(v.label, '已停止执行')
+    assert.equal(v.canCancel, true)
+    assert.match(v.note ?? '', /不会执行.*截止时间后自动结束/)
+  }
+  const failed = parseJobView(job('failed', { error_code: 'BUDGET_EXHAUSTED' }), false)
+  assert.match(failed.label, /耗尽/)
+  assert.deepEqual([failed.canRetry, failed.canCancel], [false, false])
+  const ready = parseJobView(job('succeeded', { record_id: 9, record_status: 'ready' }), false)
+  assert.deepEqual([ready.label, ready.canReview], ['候选待核对', false])
+  assert.equal(parseJobView(job('queued')).label, '排队中', '默认仍按启用显示')
+})
+
 test('OCR 识别结果标明未经人工核验；拒绝记录显示拒绝人与原因', () => {
   const ocr = recordStatusView(record('ready', { parser_version: 'fixed-parser-v1+ocr:paddleocr 3.7.0; paddle 3.3.1' }))
   assert.equal(ocr.label, '导入候选待核对')

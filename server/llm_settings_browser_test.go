@@ -104,10 +104,10 @@ func TestModelSettingsBrowser(t *testing.T) {
 	e := NewEngine(m, svc.Resolve, Config{})
 	defer e.StopAll()
 	web, _ := filepath.Abs("../web/dist")
-	api := httptest.NewServer(NewAPI(ctx, m, e, svc, nil, NewHub(), APIConfig{WebDir: web}).Handler())
+	api := httptest.NewServer(testAPI(ctx, m, e, svc, nil, NewHub(), APIConfig{WebDir: web}).Handler())
 	defer api.Close()
 	cmd := exec.CommandContext(ctx, "node", "../web/e2e/model-settings.mjs")
-	cmd.Env = append(os.Environ(), "E2E_OUT="+browserOutDir(t), "E2E_BASE="+api.URL, "E2E_MODEL_BASE="+model.URL+"/v1", "E2E_TOKEN_FILE=")
+	cmd.Env = append(os.Environ(), "E2E_OUT="+browserOutDir(t), "E2E_BASE="+api.URL, "E2E_MODEL_BASE="+model.URL+"/v1")
 	output, err := cmd.CombinedOutput()
 	t.Log(strings.TrimSpace(string(output)))
 	if err != nil {

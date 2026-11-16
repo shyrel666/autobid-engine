@@ -9,6 +9,7 @@ import { linkProps, useLocation } from '../lib/router'
 import { navGroupOf } from '../lib/routes'
 import type { TaskPage } from '../lib/routes'
 import { TaskWorkspaceProvider, useTaskWorkspace, useTick } from '../features/task-workspace/TaskWorkspaceProvider'
+import MembersPage from '../features/task-workspace/MembersPage'
 import TaskHeader from '../features/task-workspace/TaskHeader'
 import OverviewPage from '../features/task-workspace/OverviewPage'
 import DocumentsPage from '../features/proposal/documents/DocumentsPage'
@@ -74,6 +75,7 @@ function Body({ page, sectionId }: { page: TaskPage; sectionId?: number }) {
     case 'elements': content = <div className="mx-auto max-w-6xl"><ElementsTab taskID={taskId} /></div>; break
     case 'approvals': content = <ApprovalsPage />; break
     case 'llm': content = <div className="mx-auto max-w-6xl"><TaskLLMTab taskID={taskId} /></div>; break
+    case 'members': content = <MembersPage />; break
   }
   return (
     <>

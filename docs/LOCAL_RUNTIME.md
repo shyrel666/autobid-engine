@@ -78,7 +78,7 @@
 - `AUTOBID_OFFICE_TIMEOUT_SECONDS`：单次刷新超时，默认 180 秒。
 - `AUTOBID_EXPORT_WORKERS`：导出作业执行者数，默认 2；引擎内仍串行。
 - `AUTOBID_EXPORT_JOB_DEADLINE_SECONDS`：导出作业从首次提交起的截止时长，默认 1800 秒（S4）；回收、暂停恢复与重试都不延长。
-- `AUTOBID_AGENT_EXPORT_ENABLED`：为 `1/true` 时允许 Worker 经 `proposal_export_submit` 提交严格最终稿（S4），默认关闭。这是高影响入口，R2 可信身份完成前保持关闭；关闭时页面导出不受影响。
+- `AUTOBID_AGENT_EXPORT_ENABLED`：为 `1/true` 时允许 Worker 经 `proposal_export_submit` 提交严格最终稿（S4），默认关闭。这是高影响入口；R2（2026-11-16）完成了可信身份，但仍默认关闭、不做按任务授权，是否开启由部署者决定。关闭时页面导出不受影响。
 
 最终稿（严格策略）在提交时固定当时的引擎版本标签（如 `WPS 12.1.0.29161`）。之后升级或切换引擎，按原版本提交的作业会以 `RUNTIME_UNAVAILABLE` 失败，需要用新的请求键重新提交；预览稿不受影响。
 
@@ -226,6 +226,15 @@ tools\local-models\.venv\Scripts\python.exe -X utf8 tools\local-models\fetch_mod
 
 ### 3.6 运维工具与浏览器验收（S7）
 
+R2 起服务没有默认账号：第一次启动后用 `ops.bat user create-admin --login <账号>` 创建管理员（口令交互输入不回显，或 `--password-stdin`），另有 `user reset-password`、`user enable`、`user list`，见 [OPERATIONS.md](OPERATIONS.md) 第 10 节。与登录有关的服务配置：
+
+| 变量 | 说明 |
+| --- | --- |
+| `AUTOBID_TLS_CERT` / `AUTOBID_TLS_KEY` | PEM 证书与私钥路径，须同时设置；设置后以 HTTPS 监听，会话 Cookie 加 Secure。监听非回环地址而未设置时启动告警 |
+| `AUTOBID_SESSION_IDLE_MINUTES` | 会话空闲有效期，默认 480 分钟，使用中自动顺延 |
+| `AUTOBID_SESSION_MAX_HOURS` | 会话绝对上限，默认 72 小时 |
+| `AUTOBID_API_TOKEN` | 已废弃。设置时只在启动日志告警，不起任何作用 |
+
 运维命令都经 `ops.bat` 读取 `.env.local.bat` 后运行 `bin\autobid-ops.exe`（`start.bat` 一并构建），停机、备份、恢复、升级、回退的步骤见 [OPERATIONS.md](OPERATIONS.md)。`pg_dump` 依次从 `AUTOBID_PG_BIN`、PATH、`C:\Program Files\PostgreSQL\16\bin` 查找。
 
 浏览器验收不属于运行依赖，业务人员不需要。维护人员复跑时设置：
@@ -238,6 +247,8 @@ tools\local-models\.venv\Scripts\python.exe -X utf8 tools\local-models\fetch_mod
 | `AUTOBID_MMDC_PATH` / `AUTOBID_MMDC_BROWSER` / `AUTOBID_OCR_URL` | 真实 Mermaid 与 OCR，传给被测服务 |
 | `E2E_REAL_TENDER` | 真实招标验收使用的开发集文件（`ccgp_2026-10-06/` 中的一份，不入库） |
 | `AUTOBID_S7_DRILL=1` | 执行升级恢复演练 `cmd/upgrade-drill` |
+
+浏览器套件不再用共享令牌：`go test ./e2e` 先用 `autobid-ops user create-admin` 建管理员，再由管理员接口建投标经理、撰写人、评审人三个账号（随机口令写进临时目录里的 `E2E_ACCOUNTS_FILE`，不进日志与报告），各套件以这些账号真实登录，切换操作人就是换一个已登录的浏览器上下文。
 
 命令与结果见 [S7_ACCEPTANCE.md](S7_ACCEPTANCE.md)。这些套件会启动真实 WPS，持 `export/officetest` 文件锁串行运行；本机服务运行时不要跑。
 

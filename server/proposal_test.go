@@ -47,7 +47,7 @@ func newProposalAPI(t *testing.T, writer SectionWriter) *apiClient {
 	m := NewManager(pg)
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil },
 		Config{Workers: 1, Debounce: 20 * time.Millisecond, WorkerIdlePoll: 20 * time.Millisecond})
-	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Token: testToken, SectionWriter: writer})
+	api := testAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{SectionWriter: writer})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() {
 		srv.Close()
@@ -66,8 +66,7 @@ func (c *apiClient) raw(method, path string, body any, out any) int {
 		rd = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequest(method, c.url+path, rd)
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	req.Header.Set("X-Autobid-User", "http-reviewer")
+	req.Header.Set("X-Test-Actor", "http-reviewer")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.t.Fatalf("%s %s: %v", method, path, err)

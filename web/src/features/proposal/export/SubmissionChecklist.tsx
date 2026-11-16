@@ -19,7 +19,7 @@ function checkError(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.code === 'not_final') return `这份成稿现在不能确认：${e.message.replace(/^submission:[^:]*:\s*/, '')}。请重新导出最终稿后再核对。`
     if (e.code === 'stale_revision') return '这一项刚被其他人修改过，已刷新为最新状态，请核对后重试。'
-    if (/operator name is required/.test(e.message)) return '请先在页面顶部填写“当前操作人”，确认记录需要写明是谁核对的。'
+    if (/operator name is required/.test(e.message)) return '登录已失效，请重新登录后再确认。'
     if (e.code === 'invalid_check') return `不能这样处理该项：${e.message.replace(/^submission:[^:]*:\s*/, '')}`
   }
   return errorText(e)
@@ -116,7 +116,7 @@ export function SubmissionChecklist({ taskID, requestID, tick }: { taskID: numbe
               </ul>
             ))}
           </div>
-          <p className="text-xs text-slate-400">确认记录绑定这份成稿的文件指纹；“当前操作人”只是审计声明，不是登录身份。</p>
+          <p className="text-xs text-slate-400">确认记录绑定这份成稿的文件指纹，确认人是当前登录账号。</p>
         </div>
       )}
       {editing && <CheckModal taskID={taskID} requestID={requestID} item={editing.item} action={editing.action}
@@ -164,7 +164,7 @@ function CheckModal({ taskID, requestID, item, action, onClose, onDone, onStale 
         <Field label="说明" hint={noteRequired ? (action === 'confirm' ? '必填：写明为什么可以接受' : action === 'fail' ? '必填：写明哪里没有通过' : '必填：写明为什么不适用') : '可选'}>
           <TextArea rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
-        <p className="text-xs text-muted">确认会记录当前操作人与时间，并绑定这份成稿的文件指纹。</p>
+        <p className="text-xs text-muted">确认会记录当前登录账号与时间，并绑定这份成稿的文件指纹。</p>
         <ErrorBanner error={error} />
       </div>
     </Modal>

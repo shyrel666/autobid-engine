@@ -4,11 +4,11 @@
 
 export type TaskPage =
   | 'overview' | 'documents' | 'requirements' | 'research' | 'outline' | 'writing'
-  | 'matrix' | 'consistency' | 'report' | 'export' | 'monitor' | 'elements' | 'approvals' | 'llm' | 'evidence'
+  | 'matrix' | 'consistency' | 'report' | 'export' | 'monitor' | 'elements' | 'approvals' | 'llm' | 'evidence' | 'members'
 
 export const TASK_PAGES: readonly TaskPage[] = [
   'overview', 'documents', 'requirements', 'research', 'outline', 'writing',
-  'matrix', 'consistency', 'report', 'export', 'monitor', 'elements', 'approvals', 'llm', 'evidence',
+  'matrix', 'consistency', 'report', 'export', 'monitor', 'elements', 'approvals', 'llm', 'evidence', 'members',
 ]
 
 export type Route =
@@ -26,6 +26,7 @@ export type Route =
   | { name: 'agents' }
   | { name: 'skills' }
   | { name: 'tools' }
+  | { name: 'admin-users' }
   | { name: 'proposal'; intent: 'outline' | 'export' }
   | { name: 'redirect'; to: string }
   | { name: 'notfound'; reason: string }
@@ -72,6 +73,7 @@ export function parseRoute(pathname: string, search = ''): Route {
     case 'agents': return parts.length === 1 ? { name: 'agents' } : notFound()
     case 'skills': return parts.length === 1 ? { name: 'skills' } : notFound()
     case 'tools': return parts.length === 1 ? { name: 'tools' } : notFound()
+    case 'admin': return parts.length === 2 && parts[1] === 'users' ? { name: 'admin-users' } : notFound()
     case 'function':
       if (parts.length === 2 && parts[1] === 'tasks') return { name: 'redirect', to: '/tasks' }
       if (parts.length === 2 && parts[1] === 'findings') return { name: 'redirect', to: '/findings' }
@@ -130,7 +132,7 @@ export interface NavPage { page: TaskPage; label: string }
 export interface NavGroup { key: string; label: string; pages: NavPage[] }
 
 export const TASK_NAV: readonly NavGroup[] = [
-  { key: 'overview', label: '项目概览', pages: [{ page: 'overview', label: '项目概览' }] },
+  { key: 'overview', label: '项目概览', pages: [{ page: 'overview', label: '项目概览' }, { page: 'members', label: '成员与质量策略' }] },
   { key: 'tender', label: '招标解读', pages: [
     { page: 'documents', label: '招标包文件' }, { page: 'requirements', label: '要求与否决项' }, { page: 'research', label: '证据检索' }, { page: 'evidence', label: '证据与承诺' },
   ] },

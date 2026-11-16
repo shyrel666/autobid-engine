@@ -22,7 +22,7 @@ import (
 	"github.com/autobid/autobid-engine/db"
 )
 
-func (a *API) registerComplianceRoutes(mux *http.ServeMux) {
+func (a *API) registerComplianceRoutes(mux *routeMux) {
 	mux.HandleFunc("POST /api/tasks/{id}/compliance/verify", a.withTask(a.verifyCompliance))
 	mux.HandleFunc("GET /api/tasks/{id}/compliance/matrix", a.withTask(a.complianceMatrix))
 	mux.HandleFunc("GET /api/tasks/{id}/compliance/coverage", a.withTask(a.complianceCoverage))

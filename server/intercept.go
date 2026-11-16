@@ -343,6 +343,9 @@ func (a *API) listInterceptApprovals(w http.ResponseWriter, r *http.Request) {
 			f.Offset = n
 		}
 	}
+	if id := identityFrom(r.Context()); id != nil && !id.Admin {
+		f.MemberUserID = id.UserID
+	}
 	items, total, err := a.pg.ListInterceptApprovals(r.Context(), f)
 	if err != nil {
 		fail(w, err)

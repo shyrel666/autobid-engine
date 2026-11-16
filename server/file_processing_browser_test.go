@@ -38,14 +38,10 @@ func TestFileProcessingBrowser(t *testing.T) {
 	if _, err := c.pg.ExecContext(ctx, `UPDATE document_chunks SET content='旧解析：遗漏设备数量' WHERE doc_id=$1`, up.Result.Document.ID); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	token := filepath.Join(dir, "token")
-	if err := os.WriteFile(token, []byte(testToken), 0600); err != nil {
-		t.Fatal(err)
-	}
+	// 页面与接口走测试替身鉴权（testAPI）；真实登录的浏览器流程由 e2e 覆盖。
 	fixturePath, _ := filepath.Abs("../eval/file-processing/fixtures/safe.zip")
 	cmd := exec.CommandContext(ctx, "node", "../web/e2e/file-processing.mjs")
-	cmd.Env = append(os.Environ(), "E2E_OUT="+browserOutDir(t), "E2E_BASE="+c.url, "E2E_TOKEN_FILE="+token, fmt.Sprintf("E2E_REV_TASK=%d", task), fmt.Sprintf("E2E_REV_DOC=%d", up.Result.Document.ID), "E2E_ZIP="+fixturePath)
+	cmd.Env = append(os.Environ(), "E2E_OUT="+browserOutDir(t), "E2E_BASE="+c.url, fmt.Sprintf("E2E_REV_TASK=%d", task), fmt.Sprintf("E2E_REV_DOC=%d", up.Result.Document.ID), "E2E_ZIP="+fixturePath)
 	output, err := cmd.CombinedOutput()
 	t.Log(string(output))
 	if err != nil {

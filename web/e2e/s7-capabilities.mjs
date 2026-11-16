@@ -1,7 +1,7 @@
 // S7 关闭能力与权限：每种配置真实重启服务，在页面上确认用户看到原因与下一步，没有假成功。
 // 服务由 e2e 测试启动；E2E_CONTROL 提供真实杀进程与按配置重启。
 import { readFile } from 'node:fs/promises'
-import { BASE, TOKEN, launch, newPage, seedProject } from './lib.mjs'
+import { BASE, authHeaders, launch, newPage, seedProject } from './lib.mjs'
 import { api, assert, session, shot, stepper, waitFor } from './s7-lib.mjs'
 
 const control = async (path) => {
@@ -34,17 +34,22 @@ await step('准备：带图表的可导出项目、另一项目，用真实文�
   assert(finalJob.business_state === 'final_ready', '准备阶段应得到真实最终稿')
 })
 
-await step('令牌：缺失或错误时不显示业务数据，接口和活动流都 401', async () => {
-  for (const [label, token] of [['缺失', ''], ['错误', 'wrong-token']]) {
-    const s = await newPage(browser, { token })
-    await s.page.goto(`${BASE}/tasks`)
-    await s.page.getByRole('dialog', { name: 'API 访问令牌' }).waitFor()
-    assert(!(await s.page.locator('body').innerText()).includes('S7 关闭能力'), `令牌${label}时不应显示项目`)
-    await s.context.close()
-  }
+await step('登录：未登录时只显示登录页，接口和活动流都 401；身份请求头不起作用', async () => {
+  const s = await newPage(browser, { as: null })
+  await s.page.goto(`${BASE}/tasks`)
+  await s.page.getByRole('heading', { name: '登录 AutoBid' }).waitFor()
+  assert(!(await s.page.locator('body').innerText()).includes('S7 关闭能力'), '未登录时不应显示项目')
+  // 错误口令：提示账号或口令错误，仍停在登录页。
+  await s.page.getByLabel('账号', { exact: true }).fill('e2e-lead')
+  await s.page.getByLabel('口令', { exact: true }).fill('wrong-password-for-e2e')
+  await s.page.getByRole('button', { name: '登录', exact: true }).click()
+  await s.page.getByText('账号或口令错误', { exact: true }).waitFor()
+  await s.context.close()
   for (const path of ['/api/tasks', `/api/tasks/${ready.id}/events`, `/api/tasks/${ready.id}/exports/${finalJob.id}/download`]) {
-    const r = await fetch(`${BASE}${path}`)
-    assert(r.status === 401, `${path} 无令牌应为 401，实际 ${r.status}`)
+    for (const headers of [{}, { 'X-Autobid-User': 'e2e-admin' }, { Authorization: 'Bearer anything' }]) {
+      const r = await fetch(`${BASE}${path}`, { headers })
+      assert(r.status === 401, `${path} 未登录（${JSON.stringify(headers)}）应为 401，实际 ${r.status}`)
+    }
   }
 })
 
@@ -58,7 +63,7 @@ await step('跨项目改编号：读取、下载、取消别的项目的对象�
     ['POST', `/api/tasks/${a}/sections/${ready.sections[0].id}/storyboard/approve`],
   ]
   for (const [method, path] of cases) {
-    const r = await fetch(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Autobid-User': 'probe' }, body: method === 'POST' ? '{}' : undefined })
+    const r = await fetch(`${BASE}${path}`, { method, headers: { ...(await authHeaders()), 'Content-Type': 'application/json' }, body: method === 'POST' ? '{}' : undefined })
     assert(r.status === 404, `${method} ${path} 应为 404，实际 ${r.status}`)
   }
   return `${cases.length} 个越界请求`
@@ -70,7 +75,7 @@ await step('文档引擎关闭：最终稿被拒绝不降级，DOCX 只能是预
   await page.getByText(/文档引擎不可用/).first().waitFor()
   await page.getByRole('radio', { name: /最终稿/ }).check()
   assert(await page.getByRole('button', { name: /锁定版本并导出最终稿/ }).isDisabled(), '引擎关闭时最终稿入口应禁用')
-  const r = await fetch(`${BASE}/api/tasks/${ready.id}/exports`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ request_key: 's7-cap-off', formats: ['docx'], mode: 'final', bidder: '合成档案服务公司' }) })
+  const r = await fetch(`${BASE}/api/tasks/${ready.id}/exports`, { method: 'POST', headers: { ...(await authHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify({ request_key: 's7-cap-off', formats: ['docx'], mode: 'final', bidder: '合成档案服务公司' }) })
   const body = await r.json()
   assert(!r.ok && /runtime_unavailable|export_blocked/.test(body.code ?? ''), `接口应拒绝最终稿：${r.status} ${JSON.stringify(body).slice(0, 200)}`)
   await page.getByRole('radio', { name: /预览稿/ }).check()
@@ -83,7 +88,7 @@ await step('文档引擎关闭：最终稿被拒绝不降级，DOCX 只能是预
   assert(preview.format === 'docx', '引擎关闭时只能生成 DOCX 预览稿')
   await page.reload()
   await page.getByText('仅预览稿', { exact: false }).first().waitFor()
-  const old = await fetch(`${BASE}/api/tasks/${ready.id}/exports/${finalJob.id}/download`, { headers: { Authorization: `Bearer ${TOKEN}` } })
+  const old = await fetch(`${BASE}/api/tasks/${ready.id}/exports/${finalJob.id}/download`, { headers: { ...(await authHeaders()) } })
   assert(old.ok && old.headers.get('X-Export-Business-State') === 'final_ready', `已有最终稿应仍可下载：${old.status}`)
   await shot(page, 'office-off')
 })
@@ -109,12 +114,12 @@ await step('OCR 未配置：扫描件不被静默当空白导入，文本文件�
   const task = await api('POST', '/api/tasks', { name: 'S7 关闭能力·OCR', goal: '核对扫描件处理', start: false })
   const up = async (name, type) => {
     const body = await readFile(name)
-    const r = await fetch(`${BASE}/api/tasks/${task.id}/files?filename=${encodeURIComponent(name.split('/').pop())}`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': type }, body })
+    const r = await fetch(`${BASE}/api/tasks/${task.id}/files?filename=${encodeURIComponent(name.split('/').pop())}`, { method: 'POST', headers: { ...(await authHeaders()), 'Content-Type': type }, body })
     assert(r.ok, `上传失败 ${r.status}`)
     return r.json()
   }
   const scan = await up('ingest/testdata/scan_tender_page.jpg', 'image/jpeg')
-  const r = await fetch(`${BASE}/api/tasks/${task.id}/file-jobs`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: scan.id, request_key: 's7-cap-ocr', tender_no: 'S7', parser_profile: 'auto', candidate_only: true }) })
+  const r = await fetch(`${BASE}/api/tasks/${task.id}/file-jobs`, { method: 'POST', headers: { ...(await authHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: scan.id, request_key: 's7-cap-ocr', tender_no: 'S7', parser_profile: 'auto', candidate_only: true }) })
   const body = await r.json()
   assert(r.status === 503 && body.code === 'runtime_unavailable', `扫描件应被拒绝：${r.status} ${JSON.stringify(body).slice(0, 200)}`)
   await page.goto(`${BASE}/tasks/${task.id}/documents`)
@@ -129,7 +134,7 @@ await step('OCR 未配置：扫描件不被静默当空白导入，文本文件�
 await step('材料处理关闭：新作业被拒绝；关闭前的作业与必需材料仍可查看，材料可修改；粘贴导入仍可用', async () => {
   // 关闭前：留存原件并完成一次解析，再登记一项必需材料（必需材料未齐会阻断导出，关闭后也要能处理）。
   const task = await api('POST', '/api/tasks', { name: 'S7 关闭能力·材料处理', goal: '核对关闭状态', start: false })
-  const up = await fetch(`${BASE}/api/tasks/${task.id}/files?filename=s7-tender.md`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'text/markdown' }, body: await readFile('web/e2e/fixtures/s7-tender.md') })
+  const up = await fetch(`${BASE}/api/tasks/${task.id}/files?filename=s7-tender.md`, { method: 'POST', headers: { ...(await authHeaders()), 'Content-Type': 'text/markdown' }, body: await readFile('web/e2e/fixtures/s7-tender.md') })
   assert(up.ok, `留存原件失败 ${up.status}`)
   const file = await up.json()
   const job = await api('POST', `/api/tasks/${task.id}/file-jobs`, { file_id: file.id, request_key: 's7-cap-before-off', tender_no: 'S7', parser_profile: 'auto', candidate_only: true })
@@ -147,7 +152,7 @@ await step('材料处理关闭：新作业被拒绝；关闭前的作业与必�
   await page.getByRole('button', { name: '保存材料', exact: true }).click()
   await waitFor('材料改为非必需', async () => (await api('GET', `/api/tasks/${task.id}/materials`)).some((m) => m.name === 'S7 必需附件' && !m.required))
   await shot(page, 'file-processing-off')
-  const r = await fetch(`${BASE}/api/tasks/${task.id}/file-jobs`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: file.id, request_key: 's7-cap-off2' }) })
+  const r = await fetch(`${BASE}/api/tasks/${task.id}/file-jobs`, { method: 'POST', headers: { ...(await authHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: file.id, request_key: 's7-cap-off2' }) })
   assert(r.status === 503, `材料处理关闭时不得接受固定作业：${r.status}`)
   await api('POST', `/api/tasks/${task.id}/documents`, { tender_no: 'S7-TEXT', title: '粘贴文本', text: '第一章 投标须知\n1.1 投标截止时间：2026年12月20日9时30分。\n', wake_planner: false })
   assert((await api('GET', `/api/tasks/${task.id}/documents`)).length === 1, '旧上传路径应继续可用')

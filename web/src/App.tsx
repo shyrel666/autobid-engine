@@ -18,6 +18,8 @@ import AgentsPage from './pages/AgentsPage'
 import SkillsPage from './pages/SkillsPage'
 import ToolsPage from './pages/ToolsPage'
 import ProposalEntryPage from './pages/ProposalEntryPage'
+import AdminUsersPage from './pages/AdminUsersPage'
+import { SessionGate } from './features/auth/session'
 
 function NotFound({ reason }: { reason: string }) {
   return (
@@ -54,9 +56,10 @@ export default function App() {
     case 'agents': active = 'agents'; page = <AgentsPage />; break
     case 'skills': active = 'skills'; page = <SkillsPage />; break
     case 'tools': active = 'tools'; page = <ToolsPage />; break
+    case 'admin-users': active = 'admin-users'; page = <AdminUsersPage />; break
     case 'proposal': active = 'tasks'; page = <ProposalEntryPage intent={route.intent} />; break
     case 'redirect': page = null; break
     case 'notfound': page = <NotFound reason={route.reason} />; break
   }
-  return <AppShell active={active} taskId={taskId}>{page}</AppShell>
+  return <SessionGate><AppShell active={active} taskId={taskId}>{page}</AppShell></SessionGate>
 }

@@ -5,7 +5,7 @@ package server
 //   PUT    /api/tasks/{id}/export-requests/{requestID}/submission/{key}      {status: confirmed|failed|not_applicable, note?, reference?, expected_version?}
 //   DELETE /api/tasks/{id}/export-requests/{requestID}/submission/{key}      撤回一项确认（?expected_version=N 可选）
 // 人工确认只接受当前最终稿：预览稿、未全部成功或导出后正文又变了的请求组返回 409 not_final。系统判定为通过 / 不通过的条目不能
-// 手工改写（400）。确认人取自 X-Autobid-User，必填；Phase 7 之前它只是审计声明，不是可信身份。
+// 手工改写（400）。确认人是当前登录账号（R2，服务端会话核验）；只有投标经理能确认（见 permissions.go）。
 // 清单只判定与留痕：ready 表示该成稿的系统项与人工项都已处理，不代表已在交易平台提交。
 
 import (
@@ -19,7 +19,7 @@ import (
 	"github.com/autobid/autobid-engine/db"
 )
 
-func (a *API) registerSubmissionRoutes(mux *http.ServeMux) {
+func (a *API) registerSubmissionRoutes(mux *routeMux) {
 	mux.HandleFunc("GET /api/tasks/{id}/export-requests/{requestID}/submission", a.withTask(a.getSubmission))
 	mux.HandleFunc("PUT /api/tasks/{id}/export-requests/{requestID}/submission/{key}", a.withTask(a.setSubmissionCheck))
 	mux.HandleFunc("DELETE /api/tasks/{id}/export-requests/{requestID}/submission/{key}", a.withTask(a.withdrawSubmissionCheck))

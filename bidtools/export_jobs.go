@@ -6,7 +6,7 @@ package bidtools
 //                           request_key 同键同参重放返回原请求组（终态同样返回），同键异参拒绝；expected_outline_version 不符拒绝；
 //   proposal_export_status  按 job_ref 或 export_request_id 查询快照、目录刷新、产物哈希与受鉴权下载路由；
 //   proposal_export_cancel  取消作业或整组（逐项返回取消 / 已终态结果）。
-// 提交是高影响入口：须由服务器配置授予任务导出能力（AUTOBID_AGENT_EXPORT_ENABLED，默认关闭；R2 可信身份完成前保持关闭），
+// 提交是高影响入口：须由服务器配置授予任务导出能力（AUTOBID_AGENT_EXPORT_ENABLED，默认关闭；R2 可信身份已完成，仍默认关闭、不做按任务授权），
 // 未授予时返回 FEATURE_DISABLED。Skill 解锁不是授权；Planner 的 mandate 只能收窄（allowed_job_kinds / allowed_template_ids）。
 
 import (

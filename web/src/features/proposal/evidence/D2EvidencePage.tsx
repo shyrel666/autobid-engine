@@ -7,7 +7,7 @@ import type {
 import { Button, ErrorBanner, Spinner } from '../../../components/ui'
 import { linkProps } from '../../../lib/router'
 import { taskUrl } from '../../../lib/routes'
-import { OperatorField } from '../../task-workspace/OperatorField'
+import { CurrentAccount } from '../../task-workspace/CurrentAccount'
 import { EvidenceInputs } from './EvidenceInputs'
 
 // D2 最小 UI：企业证据普查、要求级可采性、承诺台账、报价勾稽与导出阻断链接。
@@ -65,7 +65,7 @@ export default function D2EvidencePage({ taskId }: { taskId: number }) {
           <h1 className="text-xl font-semibold">D2 证据、可采性与承诺台账</h1>
           <p className="text-sm text-muted">证据必须可采；manual 不是通过；承诺台账未确认或被修改都会阻断导出。</p>
         </div>
-        <OperatorField />
+        <CurrentAccount />
       </div>
       {error && <ErrorBanner error={error} />}
       {message && <div className="rounded-xl border border-line bg-panel px-3 py-2 text-sm">{message}</div>}

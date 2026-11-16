@@ -2,7 +2,7 @@
 // 判据：Agent 提交的作业在页面上可见；候选只能由人工采用；Agent 不能提交最终稿。
 import { readFile } from 'node:fs/promises'
 import { BASE, STUB, api, assert, ensureStubProfile, session, shot, stepper, waitFor } from './s7-lib.mjs'
-import { TOKEN, seedProject } from './lib.mjs'
+import { authHeaders, seedProject } from './lib.mjs'
 
 const { page, finish } = await session()
 const step = stepper(page)
@@ -15,7 +15,7 @@ await step('环境：配置替身模型（非真实模型），准备项目与�
   task = await seedProject('writing', 'S7 Agent 路径（替身模型，非真实模型）', { goals: ['解析招标原件', '生成总体架构图'], timeout_seconds: 900 })
   section = task.sections[0]
   const body = await readFile('web/e2e/fixtures/s7-tender.md')
-  const res = await fetch(`${BASE}/api/tasks/${task.id}/files?filename=agent-tender.md`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'text/markdown' }, body })
+  const res = await fetch(`${BASE}/api/tasks/${task.id}/files?filename=agent-tender.md`, { method: 'POST', headers: { ...(await authHeaders()), 'Content-Type': 'text/markdown' }, body })
   assert(res.ok, `上传原件失败：${res.status}`)
   file = await res.json()
   await api('POST', `/api/tasks/${task.id}/sections/${section.id}/revisions`, { base_rev_no: 0, based_on_outline_version: task.outlineVersion, content_md: `## ${section.title}\n\n本章说明总体架构。`, summary_note: '环境准备' })
@@ -26,8 +26,12 @@ const script = () => [
   { name: 'document_parse_submit', args: { source_kind: 'tender_file', operation: 'import', file_id: file.id, request_key: 's7-agent-parse', tender_no: 'SPJK-2026-018', title: 'Agent 导入的招标文件' } },
   { name: 'document_parse_submit', args: { source_kind: 'knowledge_file', operation: 'import', file_id: file.id, request_key: 's7-agent-knowledge' } },
   { name: 'Skill', args: { name: 'diagram-generation' } },
+  // 脚本是固定序列：先提交的解析作业若在这之前结束，宿主会先投递作业事件、拦下这一次工具调用（设计如此）。
+  // 所以下面两个提交各重发一次：同一请求键，第一次已执行时第二次只是重放，不会产生第二个作业。
+  { name: 'chart_render_submit', args: { section_id: section.id, expected_rev_no: 1, chart_type: 'architecture', title: 'Agent 生成的总体架构图', request_key: 's7-agent-chart', spec: { layers: [{ name: '管理层', nodes: ['运维工作台', '状态展示'] }] } } },
   { name: 'chart_render_submit', args: { section_id: section.id, expected_rev_no: 1, chart_type: 'architecture', title: 'Agent 生成的总体架构图', request_key: 's7-agent-chart', spec: { layers: [{ name: '管理层', nodes: ['运维工作台', '状态展示'] }] } } },
   { name: 'Skill', args: { name: 'proposal-export' } },
+  { name: 'proposal_export_submit', args: { formats: ['docx'], expected_outline_version: task.outlineVersion, request_key: 's7-agent-export' } },
   { name: 'proposal_export_submit', args: { formats: ['docx'], expected_outline_version: task.outlineVersion, request_key: 's7-agent-export' } },
 ]
 
@@ -41,6 +45,7 @@ await step('启动项目：替身 Worker 经 Skill 提交解析和图表作业�
   const text = results.join('\n')
   assert(/FEATURE_DISABLED/.test(text), `Agent 导出应被服务器配置拒绝：${text.slice(-600)}`)
   assert(results[2].includes('error') || /false/.test(results[2]), `S5b 来源不应被接受：${results[2]}`)
+  assert(results.some((r) => /"job_ref":\{"kind":"chart_render"/.test(r)), `图表作业应被受理：${text.slice(-800)}`)
   return '导出 FEATURE_DISABLED；knowledge_file 来源被拒绝'
 })
 
@@ -68,10 +73,17 @@ await step('页面拒绝候选：Agent 没有采用工具，决定权在人', as
 })
 
 await step('Agent 提交的图表由真实 Mermaid 渲染，页面可见', async () => {
-  await waitFor('图表渲染完成', async () => {
-    const charts = await api('GET', `/api/tasks/${task.id}/charts?section_id=${section.id}`)
-    return (charts.charts ?? charts).some((c) => c.render_status === 'rendered')
-  }, { timeout: 120000 })
+  try {
+    await waitFor('图表渲染完成', async () => {
+      const charts = await api('GET', `/api/tasks/${task.id}/charts?section_id=${section.id}`)
+      return (charts.charts ?? charts).some((c) => c.render_status === 'rendered')
+    }, { timeout: 120000 })
+  } catch (e) {
+    // 留下现场：图表、渲染作业与 Agent 作业的实际状态。
+    const dump = { charts: await api('GET', `/api/tasks/${task.id}/charts?section_id=${section.id}`), chartJobs: await api('GET', `/api/tasks/${task.id}/chart-jobs`), agentJobs: await api('GET', `/api/tasks/${task.id}/agent-jobs`) }
+    console.log(JSON.stringify(dump).slice(0, 4000))
+    throw e
+  }
   await page.goto(`${BASE}/tasks/${task.id}/writing/${section.id}?panel=charts`)
   await page.getByRole('img', { name: /Agent 生成的总体架构图/ }).first().waitFor()
 })

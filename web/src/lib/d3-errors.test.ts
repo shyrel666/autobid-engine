@@ -2,9 +2,15 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { d3ErrorMessage } from './d3-errors.ts'
 
-test('reviewer separation tells the user to switch the operator', () => {
-  assert.match(d3ErrorMessage('pink_self_approval', 'd3: x') ?? '', /当前操作人/)
-  assert.match(d3ErrorMessage('red_self_approval', 'd3: x') ?? '', /定稿人不能是/)
+test('reviewer separation asks for another signed-in reviewer', () => {
+  assert.match(d3ErrorMessage('pink_self_approval', 'd3: x') ?? '', /另一位审核专家登录/)
+  assert.doesNotMatch(d3ErrorMessage('pink_self_approval', 'd3: x') ?? '', /当前操作人/)
+  assert.match(d3ErrorMessage('red_self_approval', 'd3: x') ?? '', /AI 代写的稿件算派发人/)
+})
+
+test('pre-upgrade declared names and the legacy policy explain the way out', () => {
+  assert.match(d3ErrorMessage('legacy_actor', 'identity: x') ?? '', /映射到账号/)
+  assert.match(d3ErrorMessage('quality_policy_legacy', 'identity: x') ?? '', /grounded\/v1/)
 })
 
 test('storyboard_invalid names what to fix, not the field', () => {

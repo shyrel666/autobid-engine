@@ -85,7 +85,9 @@ type SectionStoryboard struct {
 	CreatedBy            string                   `json:"created_by"`
 	UpdatedBy            string                   `json:"updated_by"`
 	ApprovedBy           string                   `json:"approved_by,omitempty"`
-	CreatedAt            time.Time                `json:"created_at"`
+	// ActorLegacy 为 true 表示创建人 / 提交人是升级前的声明式姓名（R2），不能参与粉队职责分离判定，需由作者重新保存或管理员映射。
+	ActorLegacy bool      `json:"actor_legacy,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt            time.Time                `json:"updated_at"`
 }
 
@@ -105,7 +107,7 @@ const storyboardCols = `sb.id, sb.tenant_id, sb.task_id, sb.section_id, COALESCE
 	sb.outline_version, sb.version, sb.theme_sentence, sb.scoring_points,
 	to_jsonb(sb.admissibility_item_ids), to_jsonb(sb.evidence_ids), to_jsonb(sb.commitment_ids),
 	sb.chart_plans, sb.status, sb.stale_reason, sb.review_note, sb.submitted_by, sb.submitted_at,
-	sb.reviewed_by, sb.reviewed_at, sb.created_by, sb.updated_by, sb.approved_by, sb.created_at, sb.updated_at`
+	sb.reviewed_by, sb.reviewed_at, sb.created_by, sb.updated_by, sb.approved_by, sb.created_at, sb.updated_at, sb.actor_legacy`
 
 const storyboardJoin = ` FROM section_storyboards sb
 	LEFT JOIN proposal_sections s ON s.tenant_id = sb.tenant_id AND s.id = sb.section_id `
@@ -122,7 +124,7 @@ func scanStoryboard(r rowScanner) (*SectionStoryboard, error) {
 		&sb.OutlineVersion, &sb.Version, &sb.ThemeSentence, &spRaw,
 		&admRaw, &evRaw, &cRaw,
 		&chartRaw, &sb.Status, &sb.StaleReason, &sb.ReviewNote, &sb.SubmittedBy, &subAt,
-		&sb.ReviewedBy, &revAt, &sb.CreatedBy, &sb.UpdatedBy, &sb.ApprovedBy, &sb.CreatedAt, &sb.UpdatedAt,
+		&sb.ReviewedBy, &revAt, &sb.CreatedBy, &sb.UpdatedBy, &sb.ApprovedBy, &sb.CreatedAt, &sb.UpdatedAt, &sb.ActorLegacy,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -256,6 +258,9 @@ func (d *DB) UpsertStoryboard(ctx context.Context, tenant, actor string, in Upse
 
 	var out *SectionStoryboard
 	err := d.InTx(ctx, func(tx *sql.Tx) error {
+		if err := requireGroundedPolicyQ(ctx, tx, in.TaskID); err != nil {
+			return err
+		}
 		s, outlineStatus, approved, err := sectionGateTx(ctx, tx, tenant, in.TaskID, in.SectionID)
 		if err != nil {
 			return err
@@ -280,7 +285,7 @@ func (d *DB) UpsertStoryboard(ctx context.Context, tenant, actor string, in Upse
 				    admissibility_item_ids = $5::bigint[], evidence_ids = $6::bigint[], commitment_ids = $7::bigint[],
 				    chart_plans = $8::jsonb, status = 'draft', stale_reason = '', review_note = '',
 				    submitted_by = '', submitted_at = NULL, reviewed_by = '', reviewed_at = NULL,
-				    created_by = $9, updated_by = $9, approved_by = '', updated_at = NOW()
+				    created_by = $9, updated_by = $9, approved_by = '', actor_legacy = false, updated_at = NOW()
 				WHERE id = $1`,
 				cur.ID, approved.Version, strings.TrimSpace(in.ThemeSentence), string(spJSON),
 				pgInt64Array(in.AdmissibilityItemIDs), pgInt64Array(in.EvidenceIDs), pgInt64Array(in.CommitmentIDs),
@@ -381,7 +386,15 @@ func (d *DB) ApproveStoryboard(ctx context.Context, tenant string, taskID, secti
 		if sb.Status != StoryboardPendingPink {
 			return fmt.Errorf("%w: storyboard v%d is %s, expected pending_pink_review", ErrStoryboardState, sb.Version, sb.Status)
 		}
-		if actor == sb.CreatedBy || (sb.SubmittedBy != "" && actor == sb.SubmittedBy) {
+		author, err := separationPrincipalQ(ctx, tx, tenant, sb.CreatedBy, sb.ActorLegacy)
+		if err != nil {
+			return err
+		}
+		submitter, err := separationPrincipalQ(ctx, tx, tenant, sb.SubmittedBy, sb.ActorLegacy)
+		if err != nil {
+			return err
+		}
+		if actor == author || (submitter != "" && actor == submitter) {
 			return fmt.Errorf("%w: reviewer %q cannot approve own storyboard (created_by=%q, submitted_by=%q)",
 				ErrPinkSelfApproval, actor, sb.CreatedBy, sb.SubmittedBy)
 		}

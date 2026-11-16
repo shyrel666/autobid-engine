@@ -9,7 +9,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/api': { target: backend, changeOrigin: true },
+      // 不改写 Host：R2 的跨站校验要求浏览器 Origin 与 Host 一致（会话 Cookie 也落在开发服务器的源上）。
+      '/api': { target: backend, changeOrigin: false },
       '/healthz': { target: backend, changeOrigin: true },
     },
   },

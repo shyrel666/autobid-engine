@@ -1,7 +1,7 @@
 // 关键数据安全与状态场景（FRONTEND_REFACTOR_PLAN.md 第 10.2 节）：对真实服务与隔离测试库执行。
 // 用法：node web/e2e/scenarios.mjs [场景名 ...]；不带参数时执行除 export-runtime-failure 以外的全部场景。
 // export-runtime-failure 需要服务端以 AUTOBID_OFFICE_TIMEOUT_SECONDS=1 启动（让文档引擎刷新必然超时；启动自检不受此值影响）。
-import { BASE, TOKEN, api, assert, launch, newPage, recorder, saveSection, seedProject, shot } from './lib.mjs'
+import { BASE, account, api, assert, launch, newPage, recorder, saveSection, seedProject, shot } from './lib.mjs'
 
 const rec = recorder('scenarios')
 const browser = await launch()
@@ -114,28 +114,31 @@ if (want('history-guard')) await rec.check('浏览器后退被草稿保护拦截
   return `history.length 始终为 ${len}；前进可回到写作页，再后退两次回到概览`
 })
 
-if (want('token-expiry')) await rec.check('令牌失效：保存返回 401 时弹出令牌设置，草稿保留，更新令牌后保存成功', async () => {
+if (want('token-expiry')) await rec.check('会话失效：保存返回 401 时弹出重新登录，草稿保留，登录后保存成功', async () => {
   const { page, context } = await newPage(browser)
   const sec = writing.sections[0]
   await openWriting(page, writing.id, sec.id)
-  const text = `## ${sec.title}\n\n令牌失效期间编辑的正文（${stamp}）。`
+  const text = `## ${sec.title}\n\n会话失效期间编辑的正文（${stamp}）。`
   await startEdit(page, text)
-  await page.evaluate(() => localStorage.setItem('autobid.token', 'expired-e2e-token')) // 模拟服务端令牌已轮换
+  // 模拟会话在别处被吊销（例如本人在另一台电脑上改了口令）：用同一会话调用登出。
+  const csrf = (await (await context.request.get(`${BASE}/api/auth/session`)).json()).csrf_token
+  const out = await context.request.post(`${BASE}/api/auth/logout`, { headers: { 'X-Autobid-CSRF': csrf } })
+  assert(out.status() === 204, `登出应成功：${out.status()}`)
   await page.getByRole('region', { name: '章节正文' }).getByRole('button', { name: '保存', exact: true }).click()
-  const dlg = page.getByRole('dialog', { name: 'API 访问令牌' })
+  const dlg = page.getByRole('dialog', { name: '登录已失效' })
   await dlg.waitFor()
-  assert((await dlg.innerText()).includes('401'), '令牌对话框应说明 401')
-  await shot(page, 'S3-token-401')
+  await shot(page, 'S3-session-401')
   assert(await textarea(page).inputValue() === text, '401 后草稿应保留')
-  await dlg.locator('input[type=password]').fill(TOKEN)
-  await dlg.getByRole('button', { name: '保存' }).click()
+  await dlg.getByLabel('口令', { exact: true }).fill(account('lead').password)
+  await dlg.getByRole('button', { name: '重新登录', exact: true }).click()
   await dlg.waitFor({ state: 'hidden' })
-  await page.waitForTimeout(800) // 令牌变更后各页面重读
-  assert(await textarea(page).inputValue() === text, '更新令牌、页面重读后草稿应保留')
+  await page.waitForTimeout(800) // 重新登录后各页面重读
+  assert(await textarea(page).inputValue() === text, '重新登录、页面重读后草稿应保留')
   await page.getByRole('region', { name: '章节正文' }).getByRole('button', { name: '保存', exact: true }).click()
   await toast(page, /已保存为修订/).waitFor()
   const d = await api('GET', `/api/tasks/${writing.id}/sections/${sec.id}`)
-  assert(d.current_revision?.content_md === text, '服务端当前修订应为令牌失效期间的草稿')
+  assert(d.current_revision?.content_md === text, '服务端当前修订应为会话失效期间的草稿')
+  assert(d.current_revision?.created_by === account('lead').login, `修订作者应是登录账号：${d.current_revision?.created_by}`)
   await context.close()
   return `修订 ${d.section.current_rev_no} 内容与草稿一致`
 })

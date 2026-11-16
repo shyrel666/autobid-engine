@@ -4,7 +4,10 @@
 //
 //	AUTOBID_DATABASE_URL   PostgreSQL 连接串（必填）
 //	AUTOBID_HTTP_ADDR      监听地址，默认 127.0.0.1:8080
-//	AUTOBID_API_TOKEN      非空时 /api 需要 Bearer 鉴权（监听非回环地址时强烈建议设置）
+//	AUTOBID_TLS_CERT / AUTOBID_TLS_KEY  同时设置时以 HTTPS 监听（会话 Cookie 加 Secure）；监听非回环地址而未配置时启动告警
+//	AUTOBID_SESSION_IDLE_MINUTES  会话空闲有效期（分钟，默认 480），使用中自动顺延
+//	AUTOBID_SESSION_MAX_HOURS     会话绝对上限（小时，默认 72），到期必须重新登录
+//	（R2 起 /api 一律要求账号登录；AUTOBID_API_TOKEN 已废弃，设置时只告警、不起任何作用。第一个管理员用 ops.bat user create-admin 创建。）
 //	AUTOBID_WORKERS        每任务 Worker 槽数，默认 3
 //	AUTOBID_RECORD_BODIES  为 1/true 时录制 LLM 原始请求/响应正文（不含请求头）
 //	AUTOBID_WEB_DIR        前端工作台构建产物目录，默认 web/dist；目录内无 index.html 时不托管
@@ -14,7 +17,7 @@
 //	AUTOBID_OFFICE_ENGINE  导出文档引擎：auto（默认，WPS 优先、Word 备选）/ wps / word；启动时用小样本实际刷新自检
 //	AUTOBID_OFFICE_TIMEOUT_SECONDS  文档引擎单次刷新超时（默认 180）；同一引擎同一时间只处理一个文档
 //	AUTOBID_EXPORT_JOB_DEADLINE_SECONDS  导出作业从首次提交起的截止时长（默认 1800），重试与暂停恢复不延长
-//	AUTOBID_AGENT_EXPORT_ENABLED  为 1/true 时允许 Worker 提交严格最终稿导出（proposal_export_submit）；默认关闭，R2 可信身份完成前保持关闭
+//	AUTOBID_AGENT_EXPORT_ENABLED  为 1/true 时允许 Worker 提交严格最终稿导出（proposal_export_submit）；默认关闭（R2 可信身份已完成，是否开启由部署者决定，不做按任务授权）
 //	AUTOBID_MMDC_PATH      mermaid-cli（mmdc 或其 cli.js）路径；未设置时查 PATH，均不可用或自检失败时图表为 unrendered
 //	AUTOBID_MMDC_BROWSER   mmdc 使用的本机 Chrome / Chromium 可执行文件（puppeteer executablePath）
 //	AUTOBID_MMDC_TIMEOUT_SECONDS / AUTOBID_MMDC_CONCURRENCY  单次渲染超时（默认 90）与并发上限（默认 2）
@@ -87,12 +90,20 @@ func run(logger *slog.Logger) error {
 	if addr == "" {
 		addr = "127.0.0.1:8080"
 	}
-	token := os.Getenv("AUTOBID_API_TOKEN")
-	if host, _, err := net.SplitHostPort(addr); err == nil && token == "" {
+	if os.Getenv("AUTOBID_API_TOKEN") != "" {
+		// R2：共享令牌不再有任何鉴权或身份含义，全部 /api 改为账号登录后的服务端会话。
+		logger.Warn("AUTOBID_API_TOKEN is no longer used and is ignored; sign in with an account (create the first administrator with ops.bat user create-admin)")
+	}
+	tlsCert, tlsKey := os.Getenv("AUTOBID_TLS_CERT"), os.Getenv("AUTOBID_TLS_KEY")
+	if (tlsCert == "") != (tlsKey == "") {
+		return errors.New("AUTOBID_TLS_CERT and AUTOBID_TLS_KEY must be set together")
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil && tlsCert == "" {
 		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-			logger.Warn("listening on a non-loopback address without AUTOBID_API_TOKEN; the control API is unauthenticated", "addr", addr)
+			logger.Warn("listening on a non-loopback address without TLS: passwords and session cookies cross the network in clear text; set AUTOBID_TLS_CERT / AUTOBID_TLS_KEY", "addr", addr)
 		}
 	}
+	sessionTTL := db.SessionTTL{Idle: envMinutes("AUTOBID_SESSION_IDLE_MINUTES", 8*60), Absolute: envMinutes("AUTOBID_SESSION_MAX_HOURS", 72) * 60}
 	workers, _ := strconv.Atoi(os.Getenv("AUTOBID_WORKERS"))
 	webDir := os.Getenv("AUTOBID_WEB_DIR")
 	if webDir == "" {
@@ -298,9 +309,28 @@ func run(logger *slog.Logger) error {
 		sweeper := &filework.Sweeper{DB: pg, Owner: fmt.Sprintf("%s/%d/files-off", hostname, os.Getpid()), OnChange: fileJobChanged}
 		go func() { defer close(fileRunnerDone); sweeper.Run(engineCtx) }()
 	}
-	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{Token: token, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
+	api := server.NewAPI(engineCtx, m, e, svc, ic, hub, server.APIConfig{SessionTTL: sessionTTL, WebDir: webDir, OCR: ocr, Embedder: db.DefaultEmbedder(),
 		Retrieval: retriever, IndexRunner: indexRunner, Export: exporter, ExportRunner: runner, FileStore: fileStore, FileRunner: fileRunner, Runtime: runtimeHealth})
 	go api.RunSectionJobs(engineCtx)
+	if n, err := pg.CountActiveAdmins(ctx, db.DefaultTenant); err == nil && n == 0 {
+		// 没有默认账号：第一个管理员只能由有本机访问权的人用运维工具创建。
+		logger.Warn("no administrator account exists; create one with: ops.bat user create-admin --login <name>")
+	}
+	go func() {
+		// 清理早已过期或吊销的会话行；会话是否有效每次请求都按 expires_at / revoked_at 判定，与清理无关。
+		tick := time.NewTicker(time.Hour)
+		defer tick.Stop()
+		for {
+			if _, err := pg.PurgeExpiredSessions(engineCtx, 7*24*time.Hour); err != nil && engineCtx.Err() == nil {
+				logger.Warn("purge expired sessions", "err", err)
+			}
+			select {
+			case <-engineCtx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),
@@ -311,7 +341,11 @@ func run(logger *slog.Logger) error {
 	errc := make(chan error, 1)
 	go func() {
 		logger.Info("http listening", "addr", addr, "web_dir", webDir, "ocr", ocr.Name())
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		serve := srv.ListenAndServe
+		if tlsCert != "" {
+			serve = func() error { return srv.ListenAndServeTLS(tlsCert, tlsKey) }
+		}
+		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}
 		close(errc)
@@ -343,4 +377,12 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("stopped")
 	return nil
+}
+
+// envMinutes 读取正整数环境变量（单位由调用方决定，返回值按分钟计）；未设置或无效时取默认值。
+func envMinutes(name string, def int) time.Duration {
+	if n, err := strconv.Atoi(os.Getenv(name)); err == nil && n > 0 {
+		return time.Duration(n) * time.Minute
+	}
+	return time.Duration(def) * time.Minute
 }

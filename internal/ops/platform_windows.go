@@ -4,10 +4,29 @@ package ops
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"syscall"
 	"unsafe"
 )
+
+// ReadSecret 在控制台读取一行且不回显（关闭 ENABLE_ECHO_INPUT）；标准输入不是控制台时按普通行读取。
+func ReadSecret(prompt string) (string, error) {
+	os.Stderr.WriteString(prompt)
+	h := syscall.Handle(os.Stdin.Fd())
+	k32 := syscall.NewLazyDLL("kernel32.dll")
+	get, set := k32.NewProc("GetConsoleMode"), k32.NewProc("SetConsoleMode")
+	var mode uint32
+	if r, _, _ := get.Call(uintptr(h), uintptr(unsafe.Pointer(&mode))); r != 0 {
+		const enableEcho = 0x0004
+		set.Call(uintptr(h), uintptr(mode&^enableEcho))
+		defer func() {
+			set.Call(uintptr(h), uintptr(mode))
+			os.Stderr.WriteString("\n")
+		}()
+	}
+	return readLine(os.Stdin)
+}
 
 func diskFree(path string) (uint64, error) {
 	p, e := syscall.UTF16PtrFromString(path)

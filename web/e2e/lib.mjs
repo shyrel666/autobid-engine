@@ -3,8 +3,11 @@
 //   PLAYWRIGHT_MODULE   playwright 或 playwright-core 模块路径（缺省 require('playwright')）
 //   BROWSER_EXECUTABLE  Chrome / Chromium 可执行文件（缺省用 Playwright 自带浏览器）
 //   E2E_BASE            被测服务地址，缺省 http://127.0.0.1:18080（服务须连接隔离的测试库）
-//   E2E_TOKEN_FILE      服务端 AUTOBID_API_TOKEN 所在文件（令牌不写入仓库与日志）
+//   E2E_ACCOUNTS_FILE   验收账号与口令（JSON：admin / lead / author / reviewer），由 e2e 测试用运维工具与管理员接口创建；
+//                       口令不写入仓库、日志与报告
 //   E2E_OUT             截图与结果输出目录
+// R2：没有共享令牌。接口调用与浏览器页面都以某个账号真实登录（服务端会话 Cookie + 防跨站令牌），
+// 切换"谁在操作"只能换一个已登录的浏览器上下文，不能改名字。
 import { createRequire } from 'node:module'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -13,17 +16,60 @@ const require = createRequire(import.meta.url)
 export const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright')
 export const BASE = process.env.E2E_BASE || 'http://127.0.0.1:18080'
 export const OUT = process.env.E2E_OUT || join(process.cwd(), 'e2e-out')
-export const TOKEN = process.env.E2E_TOKEN_FILE ? (await readFile(process.env.E2E_TOKEN_FILE, 'utf8')).trim() : ''
+export const ACCOUNTS = process.env.E2E_ACCOUNTS_FILE ? JSON.parse(await readFile(process.env.E2E_ACCOUNTS_FILE, 'utf8')) : {}
 
-export async function api(method, path, body, { token = TOKEN, ok = [] } = {}) {
-  const headers = {}
-  if (token) headers.Authorization = `Bearer ${token}`
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
-  const r = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
-  const text = await r.text()
-  const data = text ? JSON.parse(text) : null
-  if (!r.ok && !ok.includes(r.status)) throw new Error(`${method} ${path} -> ${r.status}: ${text.slice(0, 300)}`)
-  return data
+/** account 返回某个验收账号（admin / lead / author / reviewer）。 */
+export function account(as) {
+  const a = ACCOUNTS[as]
+  if (!a) throw new Error(`没有验收账号 ${as}：请通过 go test ./e2e 运行（E2E_ACCOUNTS_FILE）`)
+  return a
+}
+
+const sessions = new Map()
+
+// 没有账号文件时，被测服务是 server 包浏览器用例里的测试替身鉴权（只存在于 Go 测试代码）：不登录、不带会话。
+const DOUBLE = !process.env.E2E_ACCOUNTS_FILE
+
+/** signIn 以账号登录并缓存会话（Cookie 与防跨站令牌）。 */
+export async function signIn(as) {
+  if (DOUBLE) return { cookie: '', csrf: '' }
+  const a = account(as)
+  const r = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: a.login, password: a.password }) })
+  if (!r.ok) throw new Error(`登录 ${a.login} 失败：${r.status}`)
+  const cookie = r.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ')
+  const s = { cookie, csrf: (await r.json()).csrf_token }
+  sessions.set(as, s)
+  return s
+}
+
+const ALL_ROLES = ['bid_manager', 'tech_writer', 'commercial', 'reviewer']
+
+/**
+ * grantTeam 由投标经理（项目创建人 lead）把团队加进项目：lead 兼任四个角色，撰写人甲是技术撰写人 / 商务专员 / 审核专家，
+ * 评审人乙是审核专家。只用于接口构造的联调项目；s7-flow 在页面上添加成员。
+ */
+export async function grantTeam(id) {
+  if (DOUBLE) return
+  await api('PUT', `/api/tasks/${id}/members/${account('lead').login}`, { roles: ALL_ROLES })
+  await api('PUT', `/api/tasks/${id}/members/${account('author').login}`, { roles: ['tech_writer', 'commercial', 'reviewer'] })
+  await api('PUT', `/api/tasks/${id}/members/${account('reviewer').login}`, { roles: ['reviewer'] })
+}
+
+export async function api(method, path, body, { as = 'lead', ok = [], team = true } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const s = sessions.get(as) ?? await signIn(as)
+    const headers = s.cookie ? { Cookie: s.cookie } : {}
+    if (method !== 'GET') headers['X-Autobid-CSRF'] = s.csrf
+    if (body !== undefined) headers['Content-Type'] = 'application/json'
+    const r = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
+    const text = await r.text()
+    // 服务重启不影响会话（存在数据库里）；会话被吊销时重新登录一次。
+    if (r.status === 401 && attempt === 0 && !ok.includes(401)) { sessions.delete(as); continue }
+    const data = text ? JSON.parse(text) : null
+    if (!r.ok && !ok.includes(r.status)) throw new Error(`${method} ${path} as ${as} -> ${r.status}: ${text.slice(0, 300)}`)
+    if (r.ok && team && method === 'POST' && path === '/api/tasks' && as === 'lead') await grantTeam(data.task?.id ?? data.id)
+    return data
+  }
 }
 
 const TENDER = `市公共安全视频监控扩容工程招标文件
@@ -97,12 +143,17 @@ export async function launch() {
   return chromium.launch({ headless: true, ...(process.env.BROWSER_EXECUTABLE ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) })
 }
 
-/** newPage 打开带令牌的上下文；viewport / DPR / 时区与视觉验收一致。 */
-export async function newPage(browser, { token = TOKEN, width = 1440, height = 900, dpr = 1 } = {}) {
+/**
+ * newPage 打开一个以账号登录的浏览器上下文（as=null 时不登录）；viewport / DPR / 时区与视觉验收一致。
+ * 登录走真实的 /api/auth/login，会话 Cookie 落在该上下文里，与页面共享。
+ */
+export async function newPage(browser, { as = 'lead', width = 1440, height = 900, dpr = 1 } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: dpr, colorScheme: 'light', locale: 'zh-CN', timezoneId: 'Asia/Shanghai', reducedMotion: 'reduce' })
-  await context.addInitScript((t) => {
-    try { if (!sessionStorage.getItem('e2e.init')) { sessionStorage.setItem('e2e.init', '1'); if (t) localStorage.setItem('autobid.token', t); else localStorage.removeItem('autobid.token') } } catch { /* ignore */ }
-  }, token)
+  if (as && !DOUBLE) {
+    const a = account(as)
+    const r = await context.request.post(BASE + '/api/auth/login', { data: { login: a.login, password: a.password } })
+    if (!r.ok()) throw new Error(`浏览器登录 ${a.login} 失败：${r.status()}`)
+  }
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -137,3 +188,9 @@ export function recorder(suite) {
 
 export function assert(cond, msg) { if (!cond) throw new Error(msg) }
 export const shot = async (page, name) => { await mkdir(OUT, { recursive: true }); await page.screenshot({ path: join(OUT, `${name}.png`) }) }
+
+/** authHeaders 返回某账号已登录会话的请求头（Cookie 与防跨站令牌），供直接 fetch 上传原始文件等场景使用。 */
+export async function authHeaders(as = 'lead') {
+  const s = sessions.get(as) ?? await signIn(as)
+  return { Cookie: s.cookie, 'X-Autobid-CSRF': s.csrf }
+}

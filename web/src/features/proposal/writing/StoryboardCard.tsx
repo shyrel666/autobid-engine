@@ -8,6 +8,7 @@ import { linkProps } from '../../../lib/router'
 import { taskUrl } from '../../../lib/routes'
 import { admissibleOptions, commitmentOptions, editableStatuses, storyboardForm, storyboardRequest, storyboardStatusLabel, toggleId } from './storyboard'
 import type { ReferenceOption, StoryboardForm } from './storyboard'
+import { useMyRoles } from '../../task-workspace/TaskWorkspaceProvider'
 
 // 故事板：写作前先定核心论点、逐条要求的做法与收益，以及本章可以引用的证据和承诺。
 // 流程是作者保存并提交，另一位评审人批准或退回；没有这一步，D3 门禁下的章节既不能写也不能派发 AI。
@@ -36,6 +37,8 @@ export default function StoryboardCard({ taskId, sectionId, detail, gated, busy,
   onSaved: () => void
 }) {
   const sb = detail.storyboard
+  const myRoles = useMyRoles()
+  const canReview = !myRoles || myRoles.includes('reviewer')
   const [form, setForm] = useState<StoryboardForm>()
   const [reject, setReject] = useState<string>()
   const [saving, setSaving] = useState(false)
@@ -59,6 +62,7 @@ export default function StoryboardCard({ taskId, sectionId, detail, gated, busy,
 
   return (
     <section className="space-y-1.5 rounded-[10px] border border-line bg-soft p-3 text-xs" aria-label="章节故事板">
+      {/* 粉队评审按钮只给审核专家显示（服务端同样按角色与"批准人不是作者"逐条判定）。 */}
       <div className="flex items-center justify-between gap-2">
         <span className="font-semibold">章节故事板{sb ? ` v${sb.version}` : ''}</span>
         {sb ? <Badge tone={storyboardTone(sb.status)}>{storyboardStatusLabel[sb.status] ?? sb.status}</Badge> : <Badge tone="amber">未编写</Badge>}
@@ -78,7 +82,7 @@ export default function StoryboardCard({ taskId, sectionId, detail, gated, busy,
         {sb && (sb.status === 'draft' || sb.status === 'pink_rejected' || sb.status === 'stale') && (
           <Button size="sm" loading={busy === 'sb_submit'} onClick={() => void act('sb_submit', '提交粉队评审', () => api.submitSectionStoryboard(taskId, sectionId), '已提交粉队评审', ['sections'])}>提交粉队评审</Button>
         )}
-        {sb?.status === 'pending_pink_review' && <>
+        {sb?.status === 'pending_pink_review' && canReview && <>
           <Button size="sm" variant="primary" loading={busy === 'sb_approve'} onClick={() => void act('sb_approve', '批准故事板', () => api.approveSectionStoryboard(taskId, sectionId, '粉队评审通过'), '故事板已通过粉队评审', ['sections'])}>粉队批准</Button>
           <Button size="sm" onClick={() => setReject('')}>退回修改</Button>
         </>}

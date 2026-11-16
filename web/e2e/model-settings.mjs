@@ -1,8 +1,10 @@
 // Run via TestModelSettingsBrowser; the Go harness owns an isolated DB schema.
-import { chromium, api, BASE, OUT, assert, recorder, shot, newPage } from './lib.mjs'
+import { chromium, api as call, BASE, OUT, assert, recorder, shot, newPage } from './lib.mjs'
+// 模型设置只给管理员（R2）；在 server 包浏览器用例的测试替身下不登录。
+const api = (method, path, body) => call(method, path, body, { as: 'admin' })
 const suite = recorder('model-settings')
 const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE })
-const { context, page, errors } = await newPage(browser)
+const { context, page, errors } = await newPage(browser, { as: 'admin' })
 page.setDefaultTimeout(8000)
 const modelBase = process.env.E2E_MODEL_BASE
 if (!modelBase) throw new Error('E2E_MODEL_BASE must come from the isolated Go harness')

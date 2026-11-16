@@ -30,6 +30,27 @@ func (d *DB) ListTasks(ctx context.Context, status string, limit int) ([]*Task, 
 	return out, rows.Err()
 }
 
+// ListMemberTasks 只列出账号所属的项目（R2 项目列表）。
+func (d *DB) ListMemberTasks(ctx context.Context, tenant string, userID int64, status string, limit int) ([]*Task, error) {
+	rows, err := d.QueryContext(ctx, `SELECT `+taskCols+` FROM tasks
+		WHERE ($1 = '' OR status = $1)
+		  AND id IN (SELECT task_id FROM project_members WHERE tenant_id = $3 AND user_id = $4)
+		ORDER BY id DESC LIMIT $2`, status, limit, tenantOr(tenant), userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // DeleteTask 单事务删除任务及其推演空间（节点、边、锚点、产出物随外键级联；账本与审计保留，task_id 置空）。
 // 全局实体（assets）不删除，只移除其 task_ids 中的该任务。调用方须先停止任务运行时。
 func (d *DB) DeleteTask(ctx context.Context, id int64) error {

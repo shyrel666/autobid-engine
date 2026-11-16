@@ -3,6 +3,11 @@
 // Nothing here replaces the database, Office, Mermaid or OCR. Only the language model is a
 // scripted substitute (web/e2e/stub_llm.py), and every report says so. Each test holds
 // officetest.Hold for its whole duration, because cmd/server does not take that lock itself.
+//
+// R2: there is no shared token. The first administrator is created the way an operator does it,
+// with `autobid-ops user create-admin`; the administrator then creates the personas the browser
+// suites sign in as (bid manager, writer, reviewer). Their random passwords go to a file that
+// only the suites read (E2E_ACCOUNTS_FILE), never to logs or reports.
 package e2e
 
 import (
@@ -16,6 +21,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"os/exec"
@@ -39,11 +45,29 @@ type harness struct {
 	dir       string
 	out       string
 	dsn       string
-	token     string
-	tokenFile string
 	bin       string
+	opsBin    string
 	stubURL   string
 	stubPort  int
+	// accounts are provisioned once, after the first server start has migrated the database.
+	accounts     map[string]*account
+	accountsFile string
+	adminHTTP    *http.Client
+	adminCSRF    string
+}
+
+// account is one persona the browser suites sign in as.
+type account struct {
+	Login       string `json:"login"`
+	Password    string `json:"password"`
+	DisplayName string `json:"display_name"`
+}
+
+// personas: key → display name. The lead creates projects (and so becomes their bid manager).
+var personas = []struct{ key, login, display string }{
+	{"lead", "e2e-lead", "投标经理丙"},
+	{"author", "e2e-author", "撰写人甲"},
+	{"reviewer", "e2e-reviewer", "评审人乙"},
 }
 
 func randomID() string {
@@ -116,15 +140,14 @@ func newHarness(t *testing.T, suite string, timeout time.Duration) *harness {
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{t: t, ctx: ctx, root: root, dir: dir, out: out, dsn: u.String(), token: randomID(), bin: filepath.Join(dir, "server.exe")}
-	h.tokenFile = filepath.Join(dir, "token")
-	if err := os.WriteFile(h.tokenFile, []byte(h.token), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	build := exec.CommandContext(ctx, "go", "build", "-o", h.bin, "./cmd/server")
-	build.Dir = root
-	if b, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build server: %v\n%s", err, b)
+	h := &harness{t: t, ctx: ctx, root: root, dir: dir, out: out, dsn: u.String(), bin: filepath.Join(dir, "server.exe"),
+		opsBin: filepath.Join(dir, "autobid-ops.exe"), accountsFile: filepath.Join(dir, "accounts.json")}
+	for _, b := range [][2]string{{h.bin, "./cmd/server"}, {h.opsBin, "./cmd/autobid-ops"}} {
+		build := exec.CommandContext(ctx, "go", "build", "-o", b[0], b[1])
+		build.Dir = root
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build %s: %v\n%s", b[1], err, out)
+		}
 	}
 	return h
 }
@@ -180,7 +203,6 @@ func (h *harness) baseEnv() []string {
 	}
 	return append(env,
 		"AUTOBID_DATABASE_URL="+h.dsn,
-		"AUTOBID_API_TOKEN="+h.token,
 		"AUTOBID_WEB_DIR="+filepath.Join(h.root, "web", "dist"),
 		"AUTOBID_FILE_PROCESSING_ENABLED=1",
 		"AUTOBID_FILEWORK_DIR="+filepath.Join(h.dir, "files"),
@@ -239,9 +261,19 @@ func (s *server) waitReady() error {
 			return fmt.Errorf("server exited during startup; see %s", filepath.Join(h.out, "server.log"))
 		default:
 		}
+		res, err := client.Get(s.base + "/healthz")
+		if err != nil {
+			continue
+		}
+		res.Body.Close()
+		if res.StatusCode != 200 {
+			continue
+		}
+		if err := h.provision(s.base); err != nil {
+			return err
+		}
 		req, _ := http.NewRequestWithContext(h.ctx, "GET", s.base+"/api/runtime/tools", nil)
-		req.Header.Set("Authorization", "Bearer "+h.token)
-		res, err := client.Do(req)
+		res, err = h.adminHTTP.Do(req)
 		if err != nil {
 			continue
 		}
@@ -311,7 +343,7 @@ func (h *harness) node(s *server, script string, extra ...string) error {
 	h.t.Helper()
 	cmd := exec.CommandContext(h.ctx, "node", filepath.Join(h.root, "web", "e2e", script+".mjs"))
 	cmd.Dir = h.root
-	cmd.Env = append(append(os.Environ(), "E2E_BASE="+s.base, "E2E_TOKEN_FILE="+h.tokenFile, "E2E_OUT="+h.out, "E2E_STUB="+h.stubURL, "E2E_STUB_KEY="+stubKey), extra...)
+	cmd.Env = append(append(os.Environ(), "E2E_BASE="+s.base, "E2E_ACCOUNTS_FILE="+h.accountsFile, "E2E_OUT="+h.out, "E2E_STUB="+h.stubURL, "E2E_STUB_KEY="+stubKey), extra...)
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	logFile, err := os.Create(filepath.Join(h.out, script+".log"))
@@ -344,4 +376,63 @@ func (h *harness) mustNode(s *server, script string, extra ...string) {
 	if err := h.node(s, script, extra...); err != nil {
 		h.t.Fatal(err)
 	}
+}
+
+// provision creates the first administrator with the operations tool (local database access, as
+// docs/OPERATIONS.md describes), signs in over HTTP and creates the personas. It runs once; later
+// server restarts reuse the accounts and simply sign the administrator in again.
+func (h *harness) provision(base string) error {
+	if h.accounts == nil {
+		admin := &account{Login: "e2e-admin", Password: randomID(), DisplayName: "e2e-admin"}
+		cmd := exec.CommandContext(h.ctx, h.opsBin, "user", "create-admin", "--login", admin.Login, "--display-name", "验收管理员", "--password-stdin")
+		cmd.Env = append(h.baseEnv(), "AUTOBID_DATABASE_URL="+h.dsn)
+		cmd.Stdin = strings.NewReader(admin.Password + "\n")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("ops user create-admin: %v: %s", err, out)
+		}
+		h.accounts = map[string]*account{"admin": admin}
+	}
+	jar, _ := cookiejar.New(nil)
+	h.adminHTTP = &http.Client{Jar: jar, Timeout: 30 * time.Second}
+	var sess struct {
+		CSRF string `json:"csrf_token"`
+	}
+	if err := h.call(base, "POST", "/api/auth/login", map[string]string{"login": h.accounts["admin"].Login, "password": h.accounts["admin"].Password}, &sess); err != nil {
+		return err
+	}
+	h.adminCSRF = sess.CSRF
+	if len(h.accounts) > 1 {
+		return nil
+	}
+	for _, p := range personas {
+		a := &account{Login: p.login, Password: randomID(), DisplayName: p.display}
+		if err := h.call(base, "POST", "/api/users", map[string]any{"login": a.Login, "display_name": a.DisplayName, "password": a.Password}, nil); err != nil {
+			return err
+		}
+		h.accounts[p.key] = a
+	}
+	b, _ := json.Marshal(h.accounts)
+	return os.WriteFile(h.accountsFile, b, 0o600)
+}
+
+func (h *harness) call(base, method, path string, body, out any) error {
+	raw, _ := json.Marshal(body)
+	req, _ := http.NewRequestWithContext(h.ctx, method, base+path, strings.NewReader(string(raw)))
+	req.Header.Set("Content-Type", "application/json")
+	if h.adminCSRF != "" {
+		req.Header.Set("X-Autobid-CSRF", h.adminCSRF)
+	}
+	res, err := h.adminHTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		b, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("%s %s: %d %s", method, path, res.StatusCode, b)
+	}
+	if out != nil {
+		return json.NewDecoder(res.Body).Decode(out)
+	}
+	return nil
 }

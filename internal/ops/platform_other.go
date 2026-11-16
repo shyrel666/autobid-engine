@@ -5,7 +5,14 @@ package ops
 import (
 	"context"
 	"errors"
+	"os"
 )
+
+// ReadSecret 读取一行口令（非 Windows 平台不做回显控制，仅供开发）。
+func ReadSecret(prompt string) (string, error) {
+	os.Stderr.WriteString(prompt)
+	return readLine(os.Stdin)
+}
 
 func diskFree(string) (uint64, error) { return 0, errors.New("磁盘检查目前仅支持 Windows") }
 func officeInstalled(context.Context) CheckItem {

@@ -100,15 +100,26 @@ func scanWritingVerification(r rowScanner) (*SectionWritingVerification, error) 
 	return &wv, nil
 }
 
-// taskHasD3ActivityQ 判断任务是否启用 D3 门禁：任务强制启用（新任务默认），或已有故事板 / 写作核验记录。
-func taskHasD3ActivityQ(ctx context.Context, q queryer, tenant string, taskID int64) (bool, error) {
-	var active bool
-	err := q.QueryRowContext(ctx, `SELECT
-		COALESCE((SELECT grounded_writing_required FROM tasks WHERE id = $2), false)
-		OR EXISTS (SELECT 1 FROM section_storyboards WHERE tenant_id = $1 AND task_id = $2)
-		OR EXISTS (SELECT 1 FROM section_writing_verifications WHERE tenant_id = $1 AND task_id = $2)`,
-		tenant, taskID).Scan(&active)
-	return active, err
+// taskHasD3ActivityQ 判断任务是否启用 D3 门禁：只读显式质量策略 tasks.quality_policy（R2）。
+// legacy/v1 下不允许新建故事板或写作核验记录，因此不再需要从"有没有记录"推断。
+func taskHasD3ActivityQ(ctx context.Context, q queryer, _ string, taskID int64) (bool, error) {
+	p, err := taskQualityPolicyQ(ctx, q, taskID)
+	if err != nil {
+		return false, err
+	}
+	return p == QualityPolicyGrounded, nil
+}
+
+// requireGroundedPolicyQ 在 legacy/v1 任务上拒绝创建 D3 记录（故事板、写作核验）。
+func requireGroundedPolicyQ(ctx context.Context, q queryer, taskID int64) error {
+	p, err := taskQualityPolicyQ(ctx, q, taskID)
+	if err != nil {
+		return err
+	}
+	if p != QualityPolicyGrounded {
+		return ErrLegacyPolicyActive
+	}
+	return nil
 }
 
 func contentHasD3Tokens(md string) bool {
@@ -625,6 +636,10 @@ func d3PrepareAndVerifySaveRevisionTx(ctx context.Context, tx *sql.Tx, tenant st
 		}
 		return nil, nil, fmt.Errorf("%w: %s", ErrWritingVerificationFailed, strings.Join(msgs, "; "))
 	}
+	if !active {
+		// legacy/v1：受控引用照常展开并核验，但不持久化写作核验记录（该策略下不存在 D3 记录）。
+		return sb, nil, nil
+	}
 	return sb, &res, nil
 }
 
@@ -676,7 +691,12 @@ func d3CheckApproveSectionRevisionTx(ctx context.Context, tx *sql.Tx, tenant str
 		return err
 	}
 	actor = strings.TrimSpace(actor)
-	if actor == "" || actor == rev.CreatedBy {
+	// AI 代写的修订（作者 "ai:<派发人>"）算派发人的稿：派发人不能做红队批准，否则没有第二个人看过这段正文。
+	author, err := separationPrincipalQ(ctx, tx, tenant, rev.CreatedBy, rev.ActorLegacy)
+	if err != nil {
+		return err
+	}
+	if actor == "" || actor == author || actor == rev.CreatedBy {
 		return fmt.Errorf("%w: red team reviewer %q cannot approve own section revision (created_by=%q)",
 			ErrRedSelfApproval, actor, rev.CreatedBy)
 	}
@@ -720,6 +740,9 @@ func (d *DB) EvaluateSectionWritingVerification(ctx context.Context, tenant stri
 		rev, err := scanRevision(tx.QueryRowContext(ctx, `SELECT `+revisionCols+` FROM section_revisions WHERE tenant_id = $1 AND section_id = $2 AND rev_no = $3`,
 			tenant, s.ID, s.CurrentRevNo))
 		if err != nil {
+			return err
+		}
+		if err := requireGroundedPolicyQ(ctx, tx, taskID); err != nil {
 			return err
 		}
 		sb, err := currentStoryboardTx(ctx, tx, tenant, taskID, s.ID, false)

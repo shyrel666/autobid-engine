@@ -29,7 +29,7 @@ func newExportAPI(t *testing.T, taskID int64) (*apiClient, *export.Service, *exp
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil }, Config{Workers: 1})
 	svc := &export.Service{DB: pg, Store: &export.Store{Root: t.TempDir()}, Renderer: pngRenderer{}, OfficeReason: "测试：不启用文档引擎"}
 	runner := &export.Runner{Service: svc, Owner: "http-test", Lease: time.Minute, TaskID: taskID}
-	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Token: testToken, Export: svc, ExportRunner: runner})
+	api := testAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Export: svc, ExportRunner: runner})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() {
 		srv.Close()

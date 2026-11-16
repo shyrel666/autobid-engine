@@ -82,7 +82,7 @@
 
 - [ROADMAP.md](ROADMAP.md)：继续采用 E（工程实现）、V（外部验证）、P（生产启用）分级。
 - [CLAUDE.md](CLAUDE.md)：遵守数据域、迁移、审批、检索与验证约束。
-- [可靠性计划](docs/RELIABILITY_PLAN.md)：复用 R1 作业机制；R2 可信身份和显式质量策略是开放高影响工具的前置条件。本文不是对 R2/R3/R4 的完成声明。
+- [可靠性计划](docs/RELIABILITY_PLAN.md)：复用 R1 作业机制；R2 可信身份和显式质量策略是开放高影响工具的前置条件。本文不是对 R2/R3/R4 的完成声明。（2026-11-16 注：R2 已完成，操作人改为服务端核验的登录账号、按项目角色放行，见 [R2_ACCEPTANCE.md](docs/R2_ACCEPTANCE.md)；`AUTOBID_AGENT_EXPORT_ENABLED` 仍默认关闭。）
 - [文件处理计划](docs/file-processing/PLAN.md)：复用 F1/F3a/F3a+ 固定文件处理，固定 OCR/解析服务不等同于开放 F2。
 - [检索工程边界](eval/retrieval/README.md)：索引版本、证据核验与模型评测要求保持有效。
 - ROADMAP 原先延后的 mmdc 适配，在本计划 S3 中列为拟实施项；通过验收后再同步其状态。
@@ -392,7 +392,7 @@ S1 在本机验收：本机 WPS（及可选的 Word）与本机运行组件实�
 
 现有 CheckSectionScope/CheckRequirementScope 不覆盖文件、模板或全项目导出。S2/S4/S5a 扩展**宿主授予**的对象/动作能力：allowed_file_ids、allowed_template_ids、允许作业类型、can_export_task；受限空集合表示无权限。Planner/模型给出的 Mandate 只能收窄宿主能力，不能自授全任务导出。查询、取消、分页及下载均复验权限，不能只保护提交。
 
-X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环境验证受限工具；开放高影响自动化入口前完成相关可信身份/策略，跨企业生产仍要求 Phase 7 RBAC。Skill 解锁不是授权。
+X-Autobid-User 当前只是审计声明。R2 未完成时只在隔离开发环境验证受限工具；开放高影响自动化入口前完成相关可信身份/策略，跨企业生产仍要求 Phase 7 RBAC。Skill 解锁不是授权。（2026-11-16 注：R2 已完成，操作人改为服务端核验的登录账号、按项目角色放行，见 [R2_ACCEPTANCE.md](docs/R2_ACCEPTANCE.md)；`AUTOBID_AGENT_EXPORT_ENABLED` 仍默认关闭。）
 
 ## 8. HTTP 与前端衔接
 
@@ -721,7 +721,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 - 浏览器验收中的写作路径由测试进程直接调用存储层写回（本机没有可用于演示的生成模型配置）；两条写作路径的真实执行（HTTP 章节 Writer 与 Worker 工具调用）由 `server/chart_jobs_test.go` 的替身模型用例覆盖。图表内容是否正确、是否符合评审要求未经外部评审（V/P 待验证）。
 - 引擎内 mmdc 并发仍由 `AUTOBID_MMDC_CONCURRENCY` 限制；未做数小时级运行与大批量图表的排队测量。
 - 页面上的作业列表只在章节图表卡片与执行页呈现，没有单独的任务级图表作业页；Planner 仍不能直接提交图表（经 `add_intent` 派发 Worker）。
-- 身份仍为宿主注入的执行身份与 `X-Autobid-User` 审计声明，不是 R2 可信身份；导出（S4）、解析（S5a）的提交类工具尚未实施，导出结果仍为 preview_only。
+- 身份仍为宿主注入的执行身份与 `X-Autobid-User` 审计声明，不是 R2 可信身份；导出（S4）、解析（S5a）的提交类工具尚未实施，导出结果仍为 preview_only。（2026-11-16 注：R2 已完成，操作人改为服务端核验的登录账号、按项目角色放行，见 [R2_ACCEPTANCE.md](docs/R2_ACCEPTANCE.md)；`AUTOBID_AGENT_EXPORT_ENABLED` 仍默认关闭。）
 
 ### 12.8 S4 收口记录（2026-11-04，E 级，本机）
 
@@ -744,7 +744,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 - **图表**：严格策略只认已登记哈希的 PNG 或原生设备选型表；已有合格 PNG 时即使重新渲染作业仍在进行或 mmdc 临时离线也不阻断。
 - **暂停**：暂停拒绝新的导出请求，已提交的作业可以查看与取消；暂停撤销在途执行（令牌推进、文档引擎进程随 Context 结束），恢复后不延长原截止时间，被撤销的那次执行计入尝试次数。
 - **作业错误信息**：严格最终稿的 PNG 问题只写原因分类（文件缺失 / 内容哈希与登记不符），不把受管目录或宿主路径写进作业错误（浏览器验收中发现后修正，见下）。
-- **高影响入口与 R2**：导出策略已显式版本化（`export-final/v1` / `export-preview/v1`），但 R2 的可信身份尚未实施，因此 Agent 提交由服务器配置授予且默认关闭；Planner mandate 只能收窄（`allowed_job_kinds`、`allowed_template_ids`），不能自授。页面导出仍以 `X-Autobid-User` 作审计声明。
+- **高影响入口与 R2**：导出策略已显式版本化（`export-final/v1` / `export-preview/v1`），但 R2 的可信身份尚未实施，因此 Agent 提交由服务器配置授予且默认关闭；Planner mandate 只能收窄（`allowed_job_kinds`、`allowed_template_ids`），不能自授。页面导出仍以 `X-Autobid-User` 作审计声明。（2026-11-16 注：R2 已完成，操作人改为服务端核验的登录账号、按项目角色放行，见 [R2_ACCEPTANCE.md](docs/R2_ACCEPTANCE.md)；`AUTOBID_AGENT_EXPORT_ENABLED` 仍默认关闭。）
 
 **验证结果**：
 
@@ -769,7 +769,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 
 **边界（未包含在 S4）**：
 
-- R2 可信身份未实施：Agent 导出入口默认关闭，开放前须完成 R2；页面导出的操作人仍是 `X-Autobid-User` 审计声明。浏览器验收未开启 Agent 导出，Worker 路径由 `server/export_requests_test.go` 的替身模型用例覆盖。
+- R2 可信身份未实施：Agent 导出入口默认关闭，开放前须完成 R2；页面导出的操作人仍是 `X-Autobid-User` 审计声明。浏览器验收未开启 Agent 导出，Worker 路径由 `server/export_requests_test.go` 的替身模型用例覆盖。（2026-11-16 注：R2 已完成，操作人改为服务端核验的登录账号、按项目角色放行，见 [R2_ACCEPTANCE.md](docs/R2_ACCEPTANCE.md)；`AUTOBID_AGENT_EXPORT_ENABLED` 仍默认关闭。）
 - 真实企业投标模板、交易平台投标文件制作工具的导入、签章与评分索引表（页码定位得分点）未验证；导出成功只表示产物已生成并通过本机回读，不代表外部评审通过（V/P 待验证）。
 - 引擎内并发仍为 1，未做数小时级运行与大批量导出排队测量；部分失败的浏览器演示用的是取消（一个格式成功、一个取消）和 PNG 改动（两个格式都失败），没有构造“同一请求组内一个格式成功、另一个格式真实执行失败”的样本。
 - 页面上请求组列表最多读取最近 30 组；更早的请求组需要分页读取，页面尚未提供翻页。
@@ -831,7 +831,7 @@ S0 是本次文档核对完成项，不标记为工程 E。下列工程阶段除
 - 只配置了 CPU，没有安装 GPU 版 PaddlePaddle。MinerU 增强解析（enhanced_pdf）、知识库来源（S5b）与企业证明材料来源（S5c）均未实施，提交时返回 FEATURE_DISABLED。
 - 执行页后台作业卡片显示的是作业终态时冻结的事件（如“候选待人工采用”）；之后的人工采用 / 拒绝以材料处理页与 `document_parse_status` 为准。
 - PDF 扫描页只识别页面中面积最大的一张图像；不渲染整页矢量内容，CCITT / JBIG2 等编码的扫描图仍记为缺口。
-- 人工采用 / 拒绝仍以 `X-Autobid-User` 作审计声明，不是 R2 可信身份；Agent 不能采用候选（首版不注册采用工具）。
+- 人工采用 / 拒绝仍以 `X-Autobid-User` 作审计声明，不是 R2 可信身份；Agent 不能采用候选（首版不注册采用工具）。（2026-11-16 注：R2 已完成，操作人改为服务端核验的登录账号、按项目角色放行，见 [R2_ACCEPTANCE.md](docs/R2_ACCEPTANCE.md)；`AUTOBID_AGENT_EXPORT_ENABLED` 仍默认关闭。）
 - 单页 OCR 有 2 分钟超时，固定解析作业默认截止 15 分钟；大批量扫描件的排队与资源占用未测量。
 
 ### 12.10 S6 收口记录（2026-11-06，E 级，本机）
@@ -931,7 +931,7 @@ Recall@20 均为 1（集合太小，必然饱和）。本地模型在该集上�
 - 暂时故障的尝试预算（3 次）不随进度重置；构建失败后重建能复用已写向量，不会重复付费。
 - 一个进程只有一个构建执行者；单实例部署前提不变。
 - 多 Agent 仍默认关闭，没有 E/D 对比实验。
-- 启用 / 回滚的操作人仍是 `X-Autobid-User` 审计声明，不是 R2 可信身份；Agent 没有这些操作的工具。
+- 启用 / 回滚的操作人仍是 `X-Autobid-User` 审计声明，不是 R2 可信身份；Agent 没有这些操作的工具。（2026-11-16 注：R2 已完成，操作人改为服务端核验的登录账号、按项目角色放行，见 [R2_ACCEPTANCE.md](docs/R2_ACCEPTANCE.md)；`AUTOBID_AGENT_EXPORT_ENABLED` 仍默认关闭。）
 - 这组检索用例没有配 LLM Profile，研究页的补查只验证到“能走到模型调用这一步”，没有真实模型补查的效果数据。
 
 ### 12.11 S7 收口记录（2026-11-10，E 级，本机）
@@ -973,7 +973,7 @@ Recall@20 均为 1（集合太小，必然饱和）。本地模型在该集上�
 
 - 首版只含招标解析，S5b / S5c 未实施。
 - 模型为脚本替身，业务质量没有结论；V / P 继续待验证。
-- 没有可信身份与角色权限（R2 / Phase 7），“当前操作人”可伪造；Agent 导出入口保持关闭。
+- 没有可信身份与角色权限（R2 / Phase 7），“当前操作人”可伪造；Agent 导出入口保持关闭。（2026-11-16 注：R2 已完成，操作人改为服务端核验的登录账号、按项目角色放行，见 [R2_ACCEPTANCE.md](docs/R2_ACCEPTANCE.md)；`AUTOBID_AGENT_EXPORT_ENABLED` 仍默认关闭。）
 - 没有真实断网演练、长时间运行与负载测试；历史数据是合成的，不是生产备份。
 - 本版本之前的程序没有代际检查，回退只能恢复升级前的备份。
 

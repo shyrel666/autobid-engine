@@ -81,6 +81,8 @@ type Commitment struct {
 	ApprovedBy                 string     `json:"approved_by,omitempty"`
 	CreatedAt                  time.Time  `json:"created_at"`
 	UpdatedAt                  time.Time  `json:"updated_at"`
+	// ActorLegacy 为 true 表示创建人是升级前的声明式姓名（R2），会签时不能据此判定"另一个人"。
+	ActorLegacy bool `json:"actor_legacy,omitempty"`
 }
 
 // CommitmentInput 是写入 / 修订台账的字段；Code 必填。
@@ -106,7 +108,7 @@ const commitmentCols = `c.id, c.tenant_id, c.task_id, c.code, c.requirement_id, 
 	c.threshold_cmp, c.tender_threshold_raw, c.tender_threshold_value::float8, c.committed_raw, c.committed_value::float8,
 	c.capability_limit::float8, c.capability_basis, c.owner, c.rationale, to_jsonb(c.source_admissibility_item_ids),
 	c.status, c.requires_delivery_signoff, c.signed_off_by, c.signed_off_at, c.version, c.created_by, c.updated_by, c.approved_by,
-	c.created_at, c.updated_at`
+	c.created_at, c.updated_at, c.actor_legacy`
 
 func scanCommitment(r rowScanner) (*Commitment, error) {
 	var (
@@ -121,7 +123,7 @@ func scanCommitment(r rowScanner) (*Commitment, error) {
 	err := r.Scan(&c.ID, &c.TenantID, &c.TaskID, &c.Code, &reqID, &c.RequirementCode, &c.Metric, &c.MetricLabel, &c.Unit,
 		&c.ThresholdCmp, &c.TenderThresholdRaw, &threshold, &c.CommittedRaw, &committed, &capability, &c.CapabilityBasis,
 		&c.Owner, &c.Rationale, &source, &c.Status, &c.RequiresDeliverySignoff, &c.SignedOffBy, &signedAt, &c.Version,
-		&c.CreatedBy, &c.UpdatedBy, &c.ApprovedBy, &c.CreatedAt, &c.UpdatedAt)
+		&c.CreatedBy, &c.UpdatedBy, &c.ApprovedBy, &c.CreatedAt, &c.UpdatedAt, &c.ActorLegacy)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +426,11 @@ func (d *DB) SignOffCommitment(ctx context.Context, tenant string, taskID int64,
 	if c.Status == CommitmentRejected {
 		return nil, fmt.Errorf("%w: commitment %s is rejected", ErrCommitmentUnconfirmed, code)
 	}
-	if actor == c.CreatedBy {
+	creator, err := separationPrincipalQ(ctx, d, tenant, c.CreatedBy, c.ActorLegacy)
+	if err != nil {
+		return nil, err
+	}
+	if actor == creator || actor == c.CreatedBy {
 		return nil, fmt.Errorf("%w: sign-off must be by a different operator than the creator", ErrCommitmentSignoffRequired)
 	}
 	if !thresholdSatisfied(c) {

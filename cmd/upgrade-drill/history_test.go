@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -25,6 +26,8 @@ type history struct {
 	Task, Section, File, Parse, Chart int64
 	Exports                           []int64
 	ExportHashes                      map[int64]string
+	// LegacyTask / LegacySection hold a storyboard the old program recorded under the declared name 张三 (R2).
+	LegacyTask, LegacySection int64
 }
 
 func taskPath(id int64) string { return fmt.Sprintf("/api/tasks/%d", id) }
@@ -55,9 +58,8 @@ func (r *rehearsal) waitJob(p *process, path string, wrapped bool) map[string]an
 func (r *rehearsal) upload(p *process, task int64, name, body string) int64 {
 	q, e := http.NewRequestWithContext(r.ctx, "POST", p.base+taskPath(task)+"/files?filename="+name, strings.NewReader(body))
 	r.must(e)
-	q.Header.Set("Authorization", "Bearer "+r.token)
 	q.Header.Set("Content-Type", "text/plain")
-	resp, e := http.DefaultClient.Do(q)
+	resp, e := r.do(p, q)
 	r.must(e)
 	defer resp.Body.Close()
 	b, e := io.ReadAll(resp.Body)
@@ -71,8 +73,7 @@ func (r *rehearsal) upload(p *process, task int64, name, body string) int64 {
 func (r *rehearsal) download(p *process, task, job int64, current bool) string {
 	q, e := http.NewRequestWithContext(r.ctx, "GET", p.base+fmt.Sprintf("%s/exports/%d/download", taskPath(task), job), nil)
 	r.must(e)
-	q.Header.Set("Authorization", "Bearer "+r.token)
-	resp, e := http.DefaultClient.Do(q)
+	resp, e := r.do(p, q)
 	r.must(e)
 	defer resp.Body.Close()
 	b, e := io.ReadAll(resp.Body)
@@ -200,8 +201,95 @@ func (r *rehearsal) seed(p *process) history {
 	}](r, r.api(p, "POST", "/api/knowledge/indexes", map[string]any{"dimension": 3}))
 	r.assert(index.Status == "ready", "旧知识索引未建成")
 	r.api(p, "POST", fmt.Sprintf("/api/knowledge/indexes/%d/activate", index.ID), nil)
+	r.seedLegacyActor(p, &h)
 	r.pass("旧程序通过公开 API 创建历史数据与真实 DOCX/PDF、Mermaid 产物", h)
 	return h
+}
+
+// seedLegacyActor: in a second project the old program records a storyboard written and submitted
+// under the declared name 张三 (any string the page sent). After the upgrade nobody may treat that
+// name as "another person" until an administrator maps it to an account.
+func (r *rehearsal) seedLegacyActor(p *process, h *history) {
+	created := decode[struct {
+		Task struct {
+			ID int64 `json:"id"`
+		} `json:"task"`
+		ID int64 `json:"id"`
+	}](r, r.api(p, "POST", "/api/tasks", map[string]any{"name": "S7 升级遗留姓名项目", "goal": "验证升级前声明式姓名", "start": false}))
+	h.LegacyTask = created.Task.ID
+	if h.LegacyTask == 0 {
+		h.LegacyTask = created.ID
+	}
+	base := taskPath(h.LegacyTask)
+	r.api(p, "POST", base+"/documents", map[string]any{"tender_no": "S7-LEGACY-ACTOR", "title": "遗留姓名招标文件",
+		"text": "遗留姓名招标文件\n第一章 技术要求\n1.1 系统应支持统一运维管理。\n1.2 系统应提供运行状态展示。\n"})
+	r.api(p, "POST", base+"/requirements/extract", nil)
+	view := decode[struct {
+		Manifest struct {
+			Epoch int64 `json:"epoch"`
+		} `json:"manifest"`
+		Items []struct {
+			ID       int64  `json:"id"`
+			Category string `json:"category"`
+		} `json:"items"`
+	}](r, r.api(p, "GET", base+"/requirements", nil))
+	for _, q := range view.Items {
+		if q.Category == "veto_item" {
+			r.api(p, "PUT", fmt.Sprintf("%s/requirements/%d/veto", base, q.ID), map[string]any{"status": "passed", "note": "合成历史夹具"})
+		}
+	}
+	view.Manifest.Epoch = decode[struct {
+		Manifest struct {
+			Epoch int64 `json:"epoch"`
+		} `json:"manifest"`
+	}](r, r.api(p, "GET", base+"/requirements", nil)).Manifest.Epoch
+	r.api(p, "POST", base+"/requirements/confirm", map[string]any{"epoch": view.Manifest.Epoch})
+	outline := decode[struct {
+		Outline struct {
+			Version int `json:"version"`
+		} `json:"outline"`
+	}](r, r.api(p, "POST", base+"/outlines", map[string]any{}))
+	op := fmt.Sprintf("%s/outlines/%d", base, outline.Outline.Version)
+	r.api(p, "POST", op+"/submit", nil)
+	approved := decode[struct {
+		Sections []struct {
+			ID int64 `json:"id"`
+		} `json:"sections"`
+	}](r, r.api(p, "POST", op+"/approve", nil))
+	r.assert(len(approved.Sections) > 0, "遗留姓名项目没有章节")
+	h.LegacySection = approved.Sections[0].ID
+	sec := decode[struct {
+		Requirements []struct {
+			Code string `json:"code"`
+		} `json:"requirements"`
+	}](r, r.api(p, "GET", fmt.Sprintf("%s/sections/%d", base, h.LegacySection), nil))
+	points := []map[string]string{}
+	for _, q := range sec.Requirements {
+		points = append(points, map[string]string{"requirement_code": q.Code, "scoring_point": q.Code, "our_approach": "按统一运维平台集中管理", "buyer_benefit": "采购人可集中查看运行状态"})
+	}
+	if len(points) == 0 {
+		points = append(points, map[string]string{"scoring_point": "总体", "our_approach": "按统一运维平台集中管理", "buyer_benefit": "采购人可集中查看运行状态"})
+	}
+	storyboard := fmt.Sprintf("%s/sections/%d/storyboard", base, h.LegacySection)
+	for _, step := range []struct {
+		method, path string
+		body         any
+	}{
+		{"PUT", storyboard, map[string]any{"theme_sentence": "统一运维平台集中管理全部设备并展示运行状态，便于采购人逐项核对", "scoring_points": points}},
+		{"POST", storyboard + "/submit", nil},
+	} {
+		b, e := json.Marshal(step.body)
+		r.must(e)
+		req, e := http.NewRequestWithContext(r.ctx, step.method, p.base+step.path, bytes.NewReader(b))
+		r.must(e)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Autobid-User", "张三") // 旧页面上随手填写的"当前操作人"
+		resp, e := r.do(p, req)
+		r.must(e)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		r.assert(resp.StatusCode < 300, fmt.Sprintf("旧程序记录故事板失败 %s %s：%d %s", step.method, step.path, resp.StatusCode, raw))
+	}
 }
 
 type snapshot struct {
@@ -321,13 +409,22 @@ func (r *rehearsal) upgrade() {
 	var status, code string
 	r.must(d.QueryRowContext(r.ctx, `SELECT status,error_code FROM knowledge_indexes WHERE status='failed'`).Scan(&status, &code))
 	r.assert(status == "failed" && code == "INTERRUPTED", "孤立索引没有按 S6 中断规则恢复")
-	var grounded bool
-	r.must(d.QueryRowContext(r.ctx, `SELECT grounded_writing_required FROM tasks WHERE id=$1`, h.Task).Scan(&grounded))
-	r.assert(!grounded, "历史任务被误开启 D3")
-	r.pass("自动迁移保留历史行，仅新增默认列；孤立索引 failed/INTERRUPTED", sum)
+	var policy, legacyPolicy string
+	r.must(d.QueryRowContext(r.ctx, `SELECT quality_policy FROM tasks WHERE id=$1`, h.Task).Scan(&policy))
+	r.must(d.QueryRowContext(r.ctx, `SELECT quality_policy FROM tasks WHERE id=$1`, h.LegacyTask).Scan(&legacyPolicy))
+	r.assert(policy == db.QualityPolicyLegacy, "没有故事板的历史任务应映射为 legacy/v1，实际 "+policy)
+	r.assert(legacyPolicy == db.QualityPolicyGrounded, "已有故事板的历史任务应映射为 grounded/v1（与旧的隐含规则一致），实际 "+legacyPolicy)
+	var legacyRows, users int
+	r.must(d.QueryRowContext(r.ctx, `SELECT count(*) FROM section_storyboards WHERE actor_legacy`).Scan(&legacyRows))
+	r.must(d.QueryRowContext(r.ctx, `SELECT count(*) FROM users`).Scan(&users))
+	r.assert(legacyRows == 1 && users == 0, fmt.Sprintf("升级前的故事板应标为声明式姓名、且没有任何预置账号：%d %d", legacyRows, users))
+	r.pass("自动迁移保留历史行，仅新增默认列；孤立索引 failed/INTERRUPTED；质量策略按旧隐含规则映射；无预置账号", map[string]any{"checksum": sum, "policies": []string{policy, legacyPolicy}})
 	current, e = r.start(r.newBin, dsn, data, "upgrade-second")
 	r.must(e)
 	defer current.stop()
+	lead := r.firstAdminAndTeam(current, dsn, data, h)
+	server := current
+	current = lead
 	r.compare(after, r.snapshot(d, before.Columns), false)
 	for _, f := range manifest.Files {
 		got, e := ops.HashFile(data, f.Path)
@@ -346,7 +443,7 @@ func (r *rehearsal) upgrade() {
 	r.pass("重复启动幂等、历史作业列表详情与预览下载、全部产物哈希不变", nil)
 	r.newJobs(current, h)
 	r.browser(current, h)
-	current.stop()
+	server.stop()
 	r.checkCLI(dsn, data)
 	// Restore the pre-upgrade backup into a fresh database and fresh file root.
 	rollback := r.create("restore")
@@ -428,7 +525,7 @@ func (r *rehearsal) browser(p *process, h history) {
 	}
 	c := exec.CommandContext(r.ctx, "node", filepath.Join(r.root, "web", "e2e", "s7-history.mjs"))
 	c.Dir = r.root
-	c.Env = append(os.Environ(), "E2E_BASE="+p.base, "E2E_TOKEN_FILE="+r.tokenFile, "E2E_OUT="+r.out, "S7_HISTORY_TASK="+fmt.Sprint(h.Task), "S7_HISTORY_SECTION="+fmt.Sprint(h.Section))
+	c.Env = append(os.Environ(), "E2E_BASE="+p.base, "E2E_ACCOUNTS_FILE="+r.accountsFile, "E2E_OUT="+r.out, "S7_HISTORY_TASK="+fmt.Sprint(h.Task), "S7_HISTORY_SECTION="+fmt.Sprint(h.Section))
 	b, e := c.CombinedOutput()
 	r.must(os.WriteFile(filepath.Join(r.out, "browser.log"), b, 0600))
 	if e != nil {
@@ -449,3 +546,70 @@ func (r *rehearsal) checkCLI(dsn, data string) {
 // Keep explicit imports honest when the drill grows; every process and DB above
 // belongs to this invocation, and only those resources are stopped/dropped.
 var _ context.Context
+
+// firstAdminAndTeam covers the upgrade steps docs/OPERATIONS.md asks for: create the first
+// administrator with the operations tool, sign in, create accounts, add members to the old projects,
+// and resolve a pre-upgrade declared name. It returns the bid manager's session for the later steps.
+func (r *rehearsal) firstAdminAndTeam(p *process, dsn, data string, h history) *process {
+	r.t.Helper()
+	pw := map[string]string{}
+	for _, l := range []string{"s7-admin", "s7-lead", "zhangsan", "lisi"} {
+		b := make([]byte, 12)
+		_, e := rand.Read(b)
+		r.must(e)
+		pw[l] = hex.EncodeToString(b)
+	}
+	c := exec.CommandContext(r.ctx, r.opsBin, "user", "create-admin", "--login", "s7-admin", "--display-name", "演练管理员", "--password-stdin")
+	c.Dir = r.root
+	c.Env = r.env(dsn, data)
+	c.Stdin = strings.NewReader(pw["s7-admin"] + "\n")
+	if out, e := c.CombinedOutput(); e != nil {
+		r.must(fmt.Errorf("ops user create-admin 失败：%s", out))
+	}
+	admin := r.as(p, "s7-admin", pw["s7-admin"])
+	// Old projects have no members after the upgrade: even the administrator cannot read them.
+	code, _ := r.status(admin, "GET", taskPath(h.Task), nil, nil)
+	r.assert(code == 404, fmt.Sprintf("升级后的旧项目在添加成员前应对管理员返回 404，实际 %d", code))
+	for _, u := range []struct{ login, name string }{{"s7-lead", "投标经理"}, {"zhangsan", "张三"}, {"lisi", "李四"}} {
+		r.api(admin, "POST", "/api/users", map[string]any{"login": u.login, "display_name": u.name, "password": pw[u.login]})
+	}
+	all := []string{db.RoleBidManager, db.RoleTechWriter, db.RoleCommercial, db.RoleReviewer}
+	r.api(admin, "PUT", taskPath(h.Task)+"/members/s7-lead", map[string]any{"roles": all})
+	r.api(admin, "PUT", taskPath(h.LegacyTask)+"/members/s7-lead", map[string]any{"roles": []string{db.RoleBidManager}})
+	r.api(admin, "PUT", taskPath(h.LegacyTask)+"/members/zhangsan", map[string]any{"roles": []string{db.RoleTechWriter, db.RoleReviewer}})
+	r.api(admin, "PUT", taskPath(h.LegacyTask)+"/members/lisi", map[string]any{"roles": []string{db.RoleReviewer}})
+	r.pass("升级后用运维工具创建第一个管理员并登录，建账号、给旧项目添加成员", []string{"s7-admin", "s7-lead", "zhangsan", "lisi"})
+
+	zs, ls := r.as(p, "zhangsan", pw["zhangsan"]), r.as(p, "lisi", pw["lisi"])
+	approve := fmt.Sprintf("%s/sections/%d/storyboard/approve", taskPath(h.LegacyTask), h.LegacySection)
+	note := map[string]string{"review_note": "升级演练"}
+	steps := map[string]any{}
+	for _, who := range []struct {
+		name string
+		p    *process
+	}{{"zhangsan", zs}, {"lisi", ls}} {
+		code, errCode := r.status(who.p, "POST", approve, note, nil)
+		steps["unmapped_"+who.name] = []any{code, errCode}
+		r.assert(code == 409 && errCode == "legacy_actor", fmt.Sprintf("未映射的旧姓名不能参与判定（%s）：%d %s", who.name, code, errCode))
+	}
+	r.api(admin, "POST", "/api/legacy-actors", map[string]any{"legacy_name": "张三", "login": "zhangsan"})
+	code, errCode := r.status(zs, "POST", approve, note, map[string]string{"X-Autobid-User": "lisi"})
+	steps["mapped_self"] = []any{code, errCode}
+	r.assert(code == 422 && errCode == "pink_self_approval", fmt.Sprintf("映射后本人（即使请求头冒充他人）也不能批准自己的故事板：%d %s", code, errCode))
+	r.api(ls, "POST", approve, note)
+	d, e := ops.Open(r.ctx, dsn)
+	r.must(e)
+	defer d.Close()
+	var by string
+	r.must(d.QueryRowContext(r.ctx, `SELECT approved_by FROM section_storyboards WHERE section_id=$1 AND status='pink_approved'`, h.LegacySection).Scan(&by))
+	r.assert(by == "lisi", "批准人应记为登录账号 lisi，实际 "+by)
+	r.pass("遗留姓名：未映射时任何人都不能据此批准；管理员映射后本人不能批准、另一账号可以", steps)
+
+	lead := r.as(p, "s7-lead", pw["s7-lead"])
+	b, e := json.Marshal(map[string]any{"lead": map[string]string{"login": "s7-lead", "password": pw["s7-lead"], "display_name": "投标经理"}})
+	r.must(e)
+	r.accountsFile = filepath.Join(r.tmp, "accounts.json")
+	r.must(os.WriteFile(r.accountsFile, b, 0600))
+	r.t.Cleanup(func() { _ = os.Remove(r.accountsFile) })
+	return lead
+}

@@ -46,8 +46,8 @@ const (
 	BlockQuoteInconsistent         = "quote_inconsistent"
 	BlockQuoteOverCeiling          = "quote_over_ceiling"
 
-	// D3 持久化阻断：任务强制启用 D3（新任务默认，见 tasks.grounded_writing_required）或已有故事板 / 写作核验记录时生效；
-	// 以 LegacyWriting 创建的旧基线任务保持 M1/D2 行为。
+	// D3 持久化阻断：任务质量策略为 grounded/v1（新任务默认，见 tasks.quality_policy）时生效；
+	// legacy/v1（以 LegacyWriting 创建的旧基线任务）保持 M1/D2 行为。
 	BlockStoryboardMissing         = "storyboard_missing"
 	BlockStoryboardUnapproved      = "storyboard_unapproved"
 	BlockStoryboardStale           = "storyboard_stale"
@@ -629,7 +629,7 @@ func d3ReadinessTx(ctx context.Context, q queryer, tenant string, taskID, outlin
 				Message: fmt.Sprintf("章节 %s %s 的故事板状态为 %s，尚未通过粉队评审", secCode, title, sbStatus.String)})
 		}
 		if curRevNo > 0 && revID.Valid {
-			if revApprovedBy != "" && revApprovedBy == revCreatedBy {
+			if revApprovedBy != "" && (revApprovedBy == revCreatedBy || revApprovedBy == stripAIPrefix(revCreatedBy)) {
 				r.block(ExportBlocker{Kind: BlockSectionSelfApproved, SectionID: secID, SectionCode: secCode,
 					Message: fmt.Sprintf("章节 %s %s 的红队审批人与作者相同（%s），违反职责分离", secCode, title, revApprovedBy)})
 			}

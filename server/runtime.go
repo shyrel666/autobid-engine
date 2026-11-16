@@ -18,7 +18,7 @@ import (
 	"github.com/autobid/autobid-engine/toolhealth"
 )
 
-func (a *API) registerRuntimeRoutes(mux *http.ServeMux) {
+func (a *API) registerRuntimeRoutes(mux *routeMux) {
 	mux.HandleFunc("GET /api/runtime/version", a.runtimeVersion)
 	mux.HandleFunc("GET /api/runtime/tools", a.runtimeTools)
 }

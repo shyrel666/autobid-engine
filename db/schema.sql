@@ -47,9 +47,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- Planner 心跳间隔（秒）；执行层下限/默认 600（§2.3）。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_heartbeat_seconds INT NOT NULL DEFAULT 600
     CHECK (plan_heartbeat_seconds >= 0);
--- D3 句子级落证门禁是否强制启用：新任务默认 true；加列时已有任务填 false，保持原有"有故事板或核验记录才启用"的行为。
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS grounded_writing_required BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE tasks ALTER COLUMN grounded_writing_required SET DEFAULT true;
+-- D3 落证门禁的布尔开关 grounded_writing_required 已由 R2 的显式质量策略 tasks.quality_policy 取代（见文件末尾 R2 段）。
 DROP TRIGGER IF EXISTS trg_tasks_upd ON tasks;
 CREATE TRIGGER trg_tasks_upd BEFORE UPDATE ON tasks
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -3382,3 +3380,218 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_submission_check_events_append_only ON submission_check_events;
 CREATE TRIGGER trg_submission_check_events_append_only BEFORE UPDATE ON submission_check_events
     FOR EACH ROW EXECUTE FUNCTION submission_check_events_append_only();
+
+-- ---------------------------------------------------------------------------
+-- R2 可信身份与项目角色（单租户；跨租户隔离属 Phase 7，未实施）。
+--   users                   账号：login 创建后不可修改、租户内唯一，是写入各 *_by 列的稳定标识；display_name 可改。
+--   user_events             账号、管理员标记、口令、停用与遗留姓名映射的只追加审计。
+--   auth_sessions           服务端会话：只存令牌的 SHA-256，过期 / 吊销后立即失效。
+--   project_members         项目成员与项目角色（一个人可兼多个角色）。
+--   project_member_events   成员与角色变更的只追加审计。
+--   legacy_actor_mappings   管理员把升级前的声明式姓名显式映射到账号；未映射的旧姓名不参与职责分离判定。
+--   quality_policy_events   任务质量策略变更的只追加审计。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+    id                  BIGSERIAL PRIMARY KEY,
+    tenant_id           TEXT NOT NULL DEFAULT 'default',
+    login               TEXT NOT NULL CHECK (login ~ '^[a-z0-9][a-z0-9._-]{1,31}$'),
+    display_name        TEXT NOT NULL DEFAULT '',
+    password_hash       TEXT NOT NULL CHECK (password_hash <> ''),
+    is_admin            BOOLEAN NOT NULL DEFAULT false,
+    status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+    failed_logins       INT NOT NULL DEFAULT 0 CHECK (failed_logins >= 0),
+    locked_until        TIMESTAMPTZ,
+    password_changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by          TEXT NOT NULL DEFAULT '',
+    updated_by          TEXT NOT NULL DEFAULT '',
+    approved_by         TEXT NOT NULL DEFAULT '',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_users_login UNIQUE (tenant_id, login)
+);
+DROP TRIGGER IF EXISTS trg_users_upd ON users;
+CREATE TRIGGER trg_users_upd BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE FUNCTION users_identity_immutable() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.tenant_id, NEW.login, NEW.created_at, NEW.created_by) IS DISTINCT FROM (OLD.tenant_id, OLD.login, OLD.created_at, OLD.created_by) THEN
+        RAISE EXCEPTION 'user % login and tenant are immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_users_identity_immutable ON users;
+CREATE TRIGGER trg_users_identity_immutable BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION users_identity_immutable();
+
+CREATE OR REPLACE FUNCTION r2_append_only() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = 'check_violation';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TABLE IF NOT EXISTS user_events (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   TEXT NOT NULL DEFAULT 'default',
+    user_id     BIGINT,
+    login       TEXT NOT NULL DEFAULT '',
+    action      TEXT NOT NULL CHECK (action IN ('created','display_name_changed','admin_granted','admin_revoked',
+                    'disabled','enabled','password_reset','password_changed','legacy_name_mapped','legacy_name_unmapped')),
+    detail      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by  TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events(tenant_id, user_id, id);
+DROP TRIGGER IF EXISTS trg_user_events_append_only ON user_events;
+CREATE TRIGGER trg_user_events_append_only BEFORE UPDATE OR DELETE ON user_events
+    FOR EACH ROW EXECUTE FUNCTION r2_append_only();
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id            BIGSERIAL PRIMARY KEY,
+    tenant_id     TEXT NOT NULL DEFAULT 'default',
+    user_id       BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash    BYTEA NOT NULL CHECK (octet_length(token_hash) = 32),
+    client_addr   TEXT NOT NULL DEFAULT '',
+    user_agent    TEXT NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at    TIMESTAMPTZ NOT NULL,
+    absolute_expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at    TIMESTAMPTZ,
+    revoke_reason TEXT NOT NULL DEFAULT '',
+    CONSTRAINT uq_auth_sessions_token UNIQUE (token_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(tenant_id, user_id) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS project_members (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   TEXT NOT NULL DEFAULT 'default',
+    task_id     BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    roles       TEXT[] NOT NULL CHECK (cardinality(roles) > 0
+                    AND roles <@ ARRAY['bid_manager','tech_writer','commercial','reviewer']::text[]),
+    created_by  TEXT NOT NULL DEFAULT '',
+    updated_by  TEXT NOT NULL DEFAULT '',
+    approved_by TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_project_members UNIQUE (tenant_id, task_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(tenant_id, user_id);
+DROP TRIGGER IF EXISTS trg_project_members_upd ON project_members;
+CREATE TRIGGER trg_project_members_upd BEFORE UPDATE ON project_members
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- task_id 不设外键：删除项目后成员变更历史仍保留。
+CREATE TABLE IF NOT EXISTS project_member_events (
+    id           BIGSERIAL PRIMARY KEY,
+    tenant_id    TEXT NOT NULL DEFAULT 'default',
+    task_id      BIGINT NOT NULL,
+    user_id      BIGINT NOT NULL,
+    login        TEXT NOT NULL,
+    action       TEXT NOT NULL CHECK (action IN ('added','roles_changed','removed')),
+    roles_before TEXT[] NOT NULL DEFAULT '{}',
+    roles_after  TEXT[] NOT NULL DEFAULT '{}',
+    created_by   TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_project_member_events_task ON project_member_events(tenant_id, task_id, id);
+DROP TRIGGER IF EXISTS trg_project_member_events_append_only ON project_member_events;
+CREATE TRIGGER trg_project_member_events_append_only BEFORE UPDATE OR DELETE ON project_member_events
+    FOR EACH ROW EXECUTE FUNCTION r2_append_only();
+
+CREATE TABLE IF NOT EXISTS legacy_actor_mappings (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   TEXT NOT NULL DEFAULT 'default',
+    legacy_name TEXT NOT NULL CHECK (legacy_name <> ''),
+    user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    created_by  TEXT NOT NULL DEFAULT '',
+    updated_by  TEXT NOT NULL DEFAULT '',
+    approved_by TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_legacy_actor_mappings UNIQUE (tenant_id, legacy_name)
+);
+
+-- 职责分离判定涉及的列：升级前写入的记录标记为"声明式姓名"（actor_legacy = true），新记录为 false。
+-- ADD COLUMN ... DEFAULT true 把已有行填为 true，随后把默认值改为 false，重放幂等。
+ALTER TABLE section_storyboards ADD COLUMN IF NOT EXISTS actor_legacy BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE section_storyboards ALTER COLUMN actor_legacy SET DEFAULT false;
+ALTER TABLE section_revisions ADD COLUMN IF NOT EXISTS actor_legacy BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE section_revisions ALTER COLUMN actor_legacy SET DEFAULT false;
+ALTER TABLE commitment_ledger ADD COLUMN IF NOT EXISTS actor_legacy BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE commitment_ledger ALTER COLUMN actor_legacy SET DEFAULT false;
+
+-- 修订不可篡改：actor_legacy 与作者一起冻结。
+CREATE OR REPLACE FUNCTION section_revisions_immutable() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.tenant_id, NEW.task_id, NEW.section_id, NEW.rev_no, NEW.base_rev_no, NEW.based_on_outline_version, NEW.source,
+        NEW.rollback_of_rev_no, NEW.content_md, NEW.summary_note, NEW.diff_summary, NEW.evidence_ids, NEW.commitment_ids, NEW.gaps,
+        NEW.created_by, NEW.created_at, NEW.actor_legacy)
+       IS DISTINCT FROM
+       (OLD.tenant_id, OLD.task_id, OLD.section_id, OLD.rev_no, OLD.base_rev_no, OLD.based_on_outline_version, OLD.source,
+        OLD.rollback_of_rev_no, OLD.content_md, OLD.summary_note, OLD.diff_summary, OLD.evidence_ids, OLD.commitment_ids, OLD.gaps,
+        OLD.created_by, OLD.created_at, OLD.actor_legacy) THEN
+        RAISE EXCEPTION 'section revision % is immutable', OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- 声明式姓名标记只能被清除（由已登录账号重新保存），不能被重新标记。
+CREATE OR REPLACE FUNCTION r2_actor_legacy_guard() RETURNS trigger AS $$
+BEGIN
+    IF NEW.actor_legacy AND NOT OLD.actor_legacy THEN
+        RAISE EXCEPTION '% %: actor_legacy cannot be set again', TG_TABLE_NAME, OLD.id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_section_storyboards_actor_legacy ON section_storyboards;
+CREATE TRIGGER trg_section_storyboards_actor_legacy BEFORE UPDATE OF actor_legacy ON section_storyboards
+    FOR EACH ROW EXECUTE FUNCTION r2_actor_legacy_guard();
+DROP TRIGGER IF EXISTS trg_commitment_ledger_actor_legacy ON commitment_ledger;
+CREATE TRIGGER trg_commitment_ledger_actor_legacy BEFORE UPDATE OF actor_legacy ON commitment_ledger
+    FOR EACH ROW EXECUTE FUNCTION r2_actor_legacy_guard();
+
+-- 显式、带版本号的质量策略：grounded/v1 强制 D3 故事板与句子级落证门禁；legacy/v1 不启用，且不允许新建故事板。
+-- 迁移：原 grounded_writing_required = true，或已有故事板 / 写作核验记录的任务映射为 grounded/v1（与旧的隐含规则一致），其余为 legacy/v1。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS quality_policy TEXT;
+-- 回填不是业务修改：暂停 updated_at 触发器，保持历史行的 updated_at 不变。
+ALTER TABLE tasks DISABLE TRIGGER trg_tasks_upd;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = 'tasks' AND column_name = 'grounded_writing_required') THEN
+        EXECUTE $q$UPDATE tasks t SET quality_policy = CASE
+                WHEN t.grounded_writing_required
+                  OR EXISTS (SELECT 1 FROM section_storyboards s WHERE s.task_id = t.id)
+                  OR EXISTS (SELECT 1 FROM section_writing_verifications v WHERE v.task_id = t.id)
+                THEN 'grounded/v1' ELSE 'legacy/v1' END
+            WHERE t.quality_policy IS NULL$q$;
+    END IF;
+END $$;
+UPDATE tasks t SET quality_policy = CASE
+        WHEN EXISTS (SELECT 1 FROM section_storyboards s WHERE s.task_id = t.id)
+          OR EXISTS (SELECT 1 FROM section_writing_verifications v WHERE v.task_id = t.id)
+        THEN 'grounded/v1' ELSE 'legacy/v1' END
+    WHERE t.quality_policy IS NULL;
+ALTER TABLE tasks ENABLE TRIGGER trg_tasks_upd;
+ALTER TABLE tasks ALTER COLUMN quality_policy SET DEFAULT 'grounded/v1';
+ALTER TABLE tasks ALTER COLUMN quality_policy SET NOT NULL;
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS ck_tasks_quality_policy;
+ALTER TABLE tasks ADD CONSTRAINT ck_tasks_quality_policy CHECK (quality_policy IN ('grounded/v1','legacy/v1'));
+ALTER TABLE tasks DROP COLUMN IF EXISTS grounded_writing_required;
+
+CREATE TABLE IF NOT EXISTS quality_policy_events (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   TEXT NOT NULL DEFAULT 'default',
+    task_id     BIGINT NOT NULL,
+    from_policy TEXT NOT NULL DEFAULT '',
+    to_policy   TEXT NOT NULL,
+    reason      TEXT NOT NULL DEFAULT '',
+    created_by  TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_quality_policy_events_task ON quality_policy_events(tenant_id, task_id, id);
+DROP TRIGGER IF EXISTS trg_quality_policy_events_append_only ON quality_policy_events;
+CREATE TRIGGER trg_quality_policy_events_append_only BEFORE UPDATE OR DELETE ON quality_policy_events
+    FOR EACH ROW EXECUTE FUNCTION r2_append_only();

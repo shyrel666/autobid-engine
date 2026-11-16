@@ -173,6 +173,7 @@ func Check(ctx context.Context, c Config) (CheckReport, error) {
 		}
 		r.Items = append(r.Items, CheckItem{Name: labels[k], OK: n == 0, Required: true, Count: &n, Message: msg})
 	}
+	r.Items = append(r.Items, adminCheck(ctx, d))
 	paused := counts["paused_tasks"]
 	r.Items = append(r.Items, CheckItem{Name: "暂停的任务", OK: true, Count: &paused, Message: fmt.Sprintf("暂停 %d 个；暂停时没有在途工作，重启后仍为暂停", paused)})
 	dirLabels := map[string]string{"filework": "招标原件目录", "exports": "导出产物目录", "evidence": "证明材料目录"}

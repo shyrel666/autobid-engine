@@ -22,7 +22,7 @@ import (
 	"github.com/autobid/autobid-engine/export"
 )
 
-func (a *API) registerChartRoutes(mux *http.ServeMux) {
+func (a *API) registerChartRoutes(mux *routeMux) {
 	mux.HandleFunc("GET /api/tasks/{id}/charts", a.withTask(a.listCharts))
 	mux.HandleFunc("POST /api/tasks/{id}/charts", a.withTask(a.generateChart))
 	mux.HandleFunc("GET /api/tasks/{id}/charts/{chartID}", a.withTask(a.getChart))

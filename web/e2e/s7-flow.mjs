@@ -1,14 +1,20 @@
-// S7 全流程：一个业务用户只用浏览器，从新建项目走到严格最终稿。
+// S7 全流程：业务用户只用浏览器，从新建项目走到严格最终稿。
 // 判据：除断言读取和替身模型配置外，所有写操作都通过页面完成；需要接口才能完成的步骤就是产品缺口。
 // 模型是脚本化替身，不是真实模型；OCR、Mermaid、WPS 是真实程序。
-import { AUTHOR, BASE, OUT, REVIEWER, api, assert, ensureStubProfile, session, setOperator, shot, stepper, waitFor } from './s7-lib.mjs'
+// R2：三个账号各自登录各自的浏览器上下文——投标经理丙（lead）、撰写人甲（author）、评审人乙（reviewer）；
+// 切换"谁在操作"就是换一个已登录的页面，不能再改名字。
+import { AUTHOR, BASE, LEAD, OUT, REVIEWER, account, api, assert, ensureStubProfile, personas, session, shot, stepper, waitFor } from './s7-lib.mjs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-const { page, finish } = await session()
-const step = stepper(page)
-const modal = page.getByRole('dialog')
-page.on('dialog', (d) => d.accept(process.env.E2E_PROMPT_TEXT || '已对照原件逐项复核（工程样本）'))
+const { page: leadPage, finish, browser } = await session()
+const team = await personas(browser, leadPage)
+let page = leadPage
+let modal = page.getByRole('dialog')
+/** use 切换到某个账号已登录的页面；随后的步骤先导航再操作。 */
+const use = (who) => { page = team.pages[who]; modal = page.getByRole('dialog') }
+const step = stepper(() => page)
+for (const p of Object.values(team.pages)) p.on('dialog', (d) => d.accept(process.env.E2E_PROMPT_TEXT || '已对照原件逐项复核（工程样本）'))
 let taskID, cert
 const BIDDER = '合成档案服务公司'
 
@@ -24,7 +30,35 @@ try {
     await page.waitForURL(/\/tasks\/\d+\/documents/)
     taskID = Number(new URL(page.url()).pathname.split('/')[2])
     const task = await api('GET', `/api/tasks/${taskID}`)
-    assert(task.grounded_writing_required === true, '新项目应默认开启写作门禁')
+    assert(task.grounded_writing_required === true && task.quality_policy === 'grounded/v1', '新项目应默认使用落证写作质量策略')
+    assert(JSON.stringify(task.my_roles) === '["bid_manager"]', `创建人应是投标经理：${JSON.stringify(task.my_roles)}`)
+  })
+
+  await step('项目成员：投标经理在页面上添加撰写人甲与评审人乙；加入前他们看不到项目', async () => {
+    const outsider = await api('GET', `/api/tasks/${taskID}`, undefined, { as: REVIEWER, ok: [404] })
+    assert(outsider?.code === 'not_found', `非成员应得到 404：${JSON.stringify(outsider)}`)
+    await page.goto(`${BASE}/tasks/${taskID}/members`)
+    const add = async (who, roles) => {
+      await page.getByRole('button', { name: '添加成员', exact: true }).click()
+      const a = account(who)
+      await modal.getByLabel('账号', { exact: true }).selectOption({ label: `${a.display_name}（${a.login}）` })
+      for (const r of roles) await modal.getByRole('checkbox', { name: r, exact: true }).check()
+      await modal.getByRole('button', { name: '保存', exact: true }).click()
+      await modal.waitFor({ state: 'hidden' })
+      await page.locator(`[data-testid="member-${a.login}"]`).waitFor()
+    }
+    // 撰写人甲兼任审核专家：用来验证"角色不能替代作者与批准人分离"。
+    await add(AUTHOR, ['技术撰写人', '商务专员', '审核专家'])
+    await add(REVIEWER, ['审核专家'])
+    await page.getByText(/添加 e2e-author/).first().waitFor()
+    await shot(page, 'members')
+    use(REVIEWER)
+    await page.goto(`${BASE}/tasks/${taskID}/overview`)
+    await page.getByTestId('current-account').waitFor()
+    assert((await page.getByTestId('current-account').innerText()).includes('评审人乙'), '评审人乙的页面应显示其账号')
+    use(LEAD)
+    await page.goto(`${BASE}/tasks/${taskID}/documents`)
+    return '撰写人甲：技术撰写人、商务专员、审核专家；评审人乙：审核专家'
   })
 
   await step('上传招标原件，解析为候选，人工采用，刷新后保留', async () => {
@@ -93,8 +127,8 @@ try {
   })
 
   await step('录入资信、业绩、证明原件，绑定要求并评估可采性', async () => {
+    use(AUTHOR)
     await page.goto(`${BASE}/tasks/${taskID}/evidence`)
-    await setOperator(page, AUTHOR)
     await page.getByRole('heading', { name: /证据、可采性与承诺台账/ }).waitFor()
     const entry = async (button, values, extra) => {
       await page.getByRole('button', { name: button, exact: true }).click()
@@ -176,7 +210,8 @@ try {
     await shot(page, 'evidence-complete')
   })
 
-  await step('生成大纲、提交审批、批准', async () => {
+  await step('生成大纲、提交审批、批准（投标经理）', async () => {
+    use(LEAD)
     await page.goto(`${BASE}/tasks/${taskID}/outline`)
     await page.getByRole('button', { name: /生成.*(大纲|目录)/ }).first().click()
     await page.getByRole('button', { name: '提交审批', exact: true }).click()
@@ -195,8 +230,8 @@ try {
 
   for (const s of sections) {
     await step(`故事板：${s.section_code} ${s.title}，作者提交，评审人批准`, async () => {
+      use(AUTHOR)
       await page.goto(`${BASE}/tasks/${taskID}/writing/${s.id}`)
-      await setOperator(page, AUTHOR)
       await page.getByRole('button', { name: '编写故事板', exact: true }).click()
       await modal.getByLabel('核心论点', { exact: false }).fill(`${s.title}按档案扫描与目录索引的交付节奏组织，让采购人逐批验收`)
       for (const area of await modal.getByLabel(/^我方做法/).all()) await area.fill('按目录逐项登记并在扫描后复核图像清晰度')
@@ -207,8 +242,10 @@ try {
       await page.getByRole('button', { name: '提交粉队评审', exact: true }).click()
       await page.getByRole('button', { name: '粉队批准', exact: true }).waitFor()
       await page.getByRole('button', { name: '粉队批准', exact: true }).click()
+      // 撰写人甲兼任审核专家也不能批准自己的故事板：服务端按登录账号逐条判定。
       await page.getByText('粉队批准人不能是故事板的作者或提交人', { exact: false }).first().waitFor()
-      await setOperator(page, REVIEWER)
+      use(REVIEWER)
+      await page.goto(`${BASE}/tasks/${taskID}/writing/${s.id}`)
       await page.getByRole('button', { name: '粉队批准', exact: true }).click()
       await page.getByText('已通过粉队评审', { exact: true }).first().waitFor()
     })
@@ -216,21 +253,23 @@ try {
 
   const [first, ...rest] = sections
   await step(`AI 派发：${first.section_code}（替身模型，真实作业链路）`, async () => {
+    use(AUTHOR)
     await page.goto(`${BASE}/tasks/${taskID}/writing/${first.id}`)
-    await setOperator(page, AUTHOR)
     await page.getByRole('button', { name: 'AI 撰写初稿', exact: true }).click()
     await modal.getByRole('button', { name: '派发', exact: true }).click()
     await waitFor('AI 写回修订', async () => {
       const d = await api('GET', `/api/tasks/${taskID}/sections/${first.id}`)
       return d.section.current_rev_no > 0
     })
+    const d = await api('GET', `/api/tasks/${taskID}/sections/${first.id}`)
+    assert(d.current_revision.created_by === `ai:${account(AUTHOR).login}`, `AI 稿作者应记为派发人：${d.current_revision.created_by}`)
     await page.reload()
   })
 
   for (const s of rest) {
     await step(`人工撰写：${s.section_code} ${s.title}，含受控引用`, async () => {
+      use(AUTHOR)
       await page.goto(`${BASE}/tasks/${taskID}/writing/${s.id}`)
-      await setOperator(page, AUTHOR)
       await page.getByRole('button', { name: '编辑正文', exact: true }).click()
       const area = page.getByLabel('章节正文（Markdown）', { exact: true })
       const before = await api('GET', `/api/tasks/${taskID}/sections/${s.id}`)
@@ -252,16 +291,19 @@ try {
 
   for (const s of sections) {
     await step(`写作核验与定稿：${s.section_code}，定稿人不能是作者`, async () => {
+      use(REVIEWER)
       await page.goto(`${BASE}/tasks/${taskID}/writing/${s.id}`)
-      await setOperator(page, REVIEWER)
       await page.getByRole('button', { name: '运行写作核验', exact: true }).click()
       await page.getByText(/写作核验：通过/).first().waitFor()
       await page.getByRole('button', { name: '批准定稿', exact: true }).click()
       await page.getByText(/已批准定稿/).first().waitFor()
+      const d = await api('GET', `/api/tasks/${taskID}/sections/${s.id}`)
+      assert(d.current_revision.approved_by === account(REVIEWER).login, `定稿人应是评审人乙的账号：${d.current_revision.approved_by}`)
     })
   }
 
   await step(`图表：${first.section_code} 提交，真实 Mermaid 渲染，刷新后保留`, async () => {
+    use(AUTHOR)
     await page.goto(`${BASE}/tasks/${taskID}/writing/${first.id}?panel=charts`)
     await page.getByRole('button', { name: '生成图表', exact: true }).click()
     await modal.getByLabel('题注', { exact: true }).fill('档案数字化服务总体架构')
@@ -297,7 +339,8 @@ try {
   })
 
   let jobs
-  await step('导出门禁全部通过后，提交严格最终稿 DOCX + PDF（真实文档引擎）', async () => {
+  await step('导出门禁全部通过后，投标经理提交严格最终稿 DOCX + PDF（真实文档引擎）', async () => {
+    use(LEAD)
     await page.goto(`${BASE}/tasks/${taskID}/export`)
     const ready = await api('GET', `/api/tasks/${taskID}/export-readiness`)
     assert(ready.ready, `导出门禁未通过：${JSON.stringify(ready.blockers).slice(0, 800)}`)
@@ -361,7 +404,7 @@ try {
     return `页码引用 ${refs} 处，评分索引 ${pkg.score_index?.length ?? 0} 项，承诺 ${pkg.commitments?.length ?? 0} 条，证明材料 ${pkg.evidence?.length ?? 0} 件`
   })
 
-  await step('D4 提交检查清单：系统项按回读判定，必须写明操作人，逐项处理后就绪，刷新后保留', async () => {
+  await step('D4 提交检查清单：系统项按回读判定，只有投标经理能确认，逐项处理后就绪，刷新后保留', async () => {
     const list = page.getByRole('region', { name: `提交检查清单（请求组 #${rid}）` })
     await list.getByRole('button', { name: '提交检查清单', exact: true }).click()
     const cl = (await api('GET', `/api/tasks/${taskID}/export-requests/${rid}/submission`)).checklist
@@ -374,15 +417,18 @@ try {
     }
     const todo = cl.items.filter((it) => it.confirmable)
     assert(todo.some((it) => it.key === 'own_template' && it.status === 'attention'), '使用内置模板应要求确认知悉')
-    // 没有操作人不能确认。
-    await setOperator(page, '')
+    // 评审人乙不是投标经理：在自己的页面上确认会被服务端拒绝，并说明需要的角色。
     const cover = todo.find((it) => it.key === 'cover_check')
-    await list.getByRole('button', { name: `确认：${cover.label}`, exact: true }).click()
+    use(REVIEWER)
+    await page.goto(`${BASE}/tasks/${taskID}/export`)
+    const rlist = page.getByRole('region', { name: `提交检查清单（请求组 #${rid}）` })
+    await rlist.getByRole('button', { name: '提交检查清单', exact: true }).click()
+    await rlist.getByRole('button', { name: `确认：${cover.label}`, exact: true }).click()
     await modal.getByRole('button', { name: '确认', exact: true }).click()
-    await modal.getByText('请先在页面顶部填写“当前操作人”', { exact: false }).waitFor()
+    await modal.getByText('需要：投标经理', { exact: false }).waitFor()
     await modal.getByRole('button', { name: '取消', exact: true }).click()
     await modal.waitFor({ state: 'hidden' })
-    await setOperator(page, REVIEWER)
+    use(LEAD)
     for (const it of todo) {
       const row = list.locator(`[data-check="${it.key}"]`)
       if (it.kind === 'auto') {
@@ -409,15 +455,15 @@ try {
     await again.getByText('清单已全部处理', { exact: true }).waitFor()
     const after = await api('GET', `/api/tasks/${taskID}/export-requests/${rid}/submission`)
     assert(after.checklist.ready && after.events.length === todo.length, `刷新后清单应保持就绪并留有 ${todo.length} 条记录：${after.events.length}`)
-    assert(after.events.every((e) => e.actor === REVIEWER), '确认记录应写明操作人')
+    assert(after.events.every((e) => e.actor === account(LEAD).login), `确认人应是投标经理的登录账号：${JSON.stringify(after.events.map((e) => e.actor))}`)
     assert(!/已提交|提交成功/.test(await again.innerText()), '清单就绪不能说成已提交')
     return `${todo.length} 项人工处理（其中平台导入 / 上传标为不适用）`
   })
 
   await step('D4 导出后再改正文：这份成稿显示已过期，不能再确认', async () => {
     const s = rest[0] ?? first
+    use(AUTHOR)
     await page.goto(`${BASE}/tasks/${taskID}/writing/${s.id}`)
-    await setOperator(page, AUTHOR)
     await page.getByRole('button', { name: '编辑正文', exact: true }).click()
     const area = page.getByLabel('章节正文（Markdown）', { exact: true })
     await area.fill(`${await area.inputValue()}\n\n各批次交付物以目录索引为准逐项清点。`)
@@ -435,6 +481,7 @@ try {
     return cl.stale_reason
   })
 
+  assert(team.errors().length === 0, `其他账号页面有未捕获错误：${team.errors().join(' | ')}`)
   await finish()
   console.log('S7 FLOW COMPLETE（模型为替身，OCR / Mermaid / 文档引擎为真实程序）')
 } catch (e) {

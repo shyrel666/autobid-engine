@@ -184,6 +184,8 @@ type SectionRevision struct {
 	ApprovedBy            string        `json:"approved_by"`
 	ApprovedAt            *time.Time    `json:"approved_at,omitempty"`
 	CreatedAt             time.Time     `json:"created_at"`
+	// ActorLegacy 为 true 表示作者是升级前的声明式姓名（R2），不能参与红队职责分离判定。
+	ActorLegacy bool `json:"actor_legacy,omitempty"`
 }
 
 // EvidenceState 是证据的实时有效性；Usable 仅当 status=verified 且 relation=supports。
@@ -257,7 +259,7 @@ func scanSection(r rowScanner) (*ProposalSection, error) {
 }
 
 const revisionCols = `id, section_id, rev_no, base_rev_no, based_on_outline_version, source, rollback_of_rev_no, content_md, summary_note,
-	diff_summary, to_jsonb(evidence_ids), to_jsonb(commitment_ids), gaps, status, created_by, approved_by, approved_at, created_at`
+	diff_summary, to_jsonb(evidence_ids), to_jsonb(commitment_ids), gaps, status, created_by, approved_by, approved_at, created_at, actor_legacy`
 
 func scanRevision(r rowScanner) (*SectionRevision, error) {
 	var x SectionRevision
@@ -265,7 +267,7 @@ func scanRevision(r rowScanner) (*SectionRevision, error) {
 	var ev, commits, gaps []byte
 	var at sql.NullTime
 	err := r.Scan(&x.ID, &x.SectionID, &x.RevNo, &x.BaseRevNo, &x.BasedOnOutlineVersion, &x.Source, &rb, &x.ContentMD, &x.SummaryNote,
-		&x.DiffSummary, &ev, &commits, &gaps, &x.Status, &x.CreatedBy, &x.ApprovedBy, &at, &x.CreatedAt)
+		&x.DiffSummary, &ev, &commits, &gaps, &x.Status, &x.CreatedBy, &x.ApprovedBy, &at, &x.CreatedAt, &x.ActorLegacy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

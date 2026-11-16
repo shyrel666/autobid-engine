@@ -27,8 +27,7 @@ func newRuntimeAPI(t *testing.T, cfg APIConfig) *apiClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := NewManager(pg)
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil }, Config{Workers: 1})
-	cfg.Token = testToken
-	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), cfg)
+	api := testAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), cfg)
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() {
 		srv.Close()

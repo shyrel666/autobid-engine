@@ -21,7 +21,6 @@ import (
 	"github.com/autobid/autobid-engine/intercept"
 )
 
-const testToken = "test-token"
 
 type apiClient struct {
 	t   *testing.T
@@ -36,7 +35,6 @@ func (c *apiClient) do(method, path string, body any, out any) int {
 		rd = bytes.NewReader(raw)
 	}
 	req, _ := http.NewRequest(method, c.url+path, rd)
-	req.Header.Set("Authorization", "Bearer "+testToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.t.Fatalf("%s %s: %v", method, path, err)
@@ -60,7 +58,7 @@ func newIdleAPI(t *testing.T) (*apiClient, *Engine) {
 	m := NewManager(pg)
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil },
 		Config{Workers: 1, Debounce: 20 * time.Millisecond, WorkerIdlePoll: 20 * time.Millisecond})
-	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Token: testToken})
+	api := testAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() {
 		srv.Close()
@@ -71,15 +69,8 @@ func newIdleAPI(t *testing.T) (*apiClient, *Engine) {
 }
 
 func TestHTTPAuthAndValidation(t *testing.T) {
+	// 未登录访问 /api 的 401 由 auth_test.go 用生产会话鉴权覆盖；这里只测参数校验。
 	c, _ := newIdleAPI(t)
-	resp, err := http.Get(c.url + "/api/tasks")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated request: %d", resp.StatusCode)
-	}
 	if resp, err := http.Get(c.url + "/healthz"); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("healthz must not require auth: %v %v", err, resp)
 	}
@@ -252,13 +243,13 @@ func TestHTTPApprovalFlowAndSSE(t *testing.T) {
 		func(o *envOpts) { o.onActivity = hub.Publish })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	api := NewAPI(ctx, env.e.m, env.e, NewLLMService(testDB(t), LLMServiceConfig{}), env.ic, hub, APIConfig{Token: testToken})
+	api := testAPI(ctx, env.e.m, env.e, NewLLMService(testDB(t), LLMServiceConfig{}), env.ic, hub, APIConfig{})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
 	c := &apiClient{t: t, url: srv.URL}
 	base := fmt.Sprintf("/api/tasks/%d", env.task.ID)
 
-	sse := openSSE(t, srv.URL+base+"/events?token="+testToken)
+	sse := openSSE(t, srv.URL+base+"/events")
 
 	var pending []db.InterceptPendingRow
 	waitFor(t, 15*time.Second, "pending approval listed", func() bool {

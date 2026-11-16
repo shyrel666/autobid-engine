@@ -25,7 +25,7 @@ await step('大纲与写作页：历史章节可读，旧项目不被要求补�
   await page.goto(`${BASE}/tasks/${task}/writing/${section}`)
   await page.getByRole('region', { name: '章节正文' }).waitFor()
   const t = await api('GET', `/api/tasks/${task}`)
-  assert(t.grounded_writing_required === false, '升级不得给旧项目开启写作门禁')
+  assert(t.grounded_writing_required === false && t.quality_policy === 'legacy/v1', '升级应把没有故事板的旧项目映射为 legacy/v1，不开启写作门禁')
   assert(await page.getByRole('button', { name: '编写故事板', exact: true }).count() === 0, '旧项目不应出现故事板入口')
   await shot(page, 'history-writing')
 })

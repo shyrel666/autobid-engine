@@ -19,7 +19,7 @@ func TestSPAHandler(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>spa</html>"), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, "assets", "app.js"), []byte("console.log(1)"), 0o644)
-	api := &API{cfg: APIConfig{Token: "tok", WebDir: dir}}
+	api := &API{cfg: APIConfig{WebDir: dir}, authn: stubAuth{}}
 	h := api.Handler()
 
 	get := func(method, path string) *httptest.ResponseRecorder {
@@ -49,7 +49,7 @@ func TestSPAHandler(t *testing.T) {
 		t.Fatalf("unauthenticated api: %d", rec.Code)
 	}
 	req := httptest.NewRequest("GET", "/api/nope", nil)
-	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set(testActorHeader, "tester")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "spa") {
@@ -58,4 +58,14 @@ func TestSPAHandler(t *testing.T) {
 	if rec := get("POST", "/somewhere"); rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("non-GET static: %d", rec.Code)
 	}
+}
+
+// stubAuth 只在带测试请求头时给出身份，不访问数据库。
+type stubAuth struct{}
+
+func (stubAuth) authenticate(_ http.ResponseWriter, r *http.Request) (*Identity, error) {
+	if r.Header.Get(testActorHeader) == "" {
+		return nil, nil
+	}
+	return &Identity{Login: r.Header.Get(testActorHeader), Tenant: "default"}, nil
 }

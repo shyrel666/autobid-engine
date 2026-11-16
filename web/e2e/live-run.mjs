@@ -14,8 +14,9 @@ const WORK_B = '核对评分表技术部分的响应要点'
 
 await fetch(`${STUB}/reset`, { method: 'POST' })
 const PROFILE = '界面联调·脚本替身模型（非真实模型）'
-let profile = (await api('GET', '/api/llm/profiles') ?? []).find((p) => p.name === PROFILE)
-if (!profile) profile = await api('POST', '/api/llm/profiles', { name: PROFILE, format: 'openai', base_url: `${STUB}/v1`, api_key_env: 'STUB_LLM_KEY', model: 'stub-scripted', max_tokens: 1024, enabled: true, in_global_pool: false })
+// 模型配置只给管理员（R2）。
+let profile = (await api('GET', '/api/llm/profiles', undefined, { as: 'admin' }) ?? []).find((p) => p.name === PROFILE)
+if (!profile) profile = await api('POST', '/api/llm/profiles', { name: PROFILE, format: 'openai', base_url: `${STUB}/v1`, api_key_env: 'STUB_LLM_KEY', model: 'stub-scripted', max_tokens: 1024, enabled: true, in_global_pool: false }, { as: 'admin' })
 const created = await api('POST', '/api/tasks', { name: `界面联调·实时运行 ${stamp}`, description: '脚本替身模型驱动的实时运行检查（隔离测试库）',
   goal: '核对视频监控扩容工程招标文件的资格条款与评分要点', goals: ['资格条款逐条有资信证明', '评分表技术部分有响应要点'], timeout_seconds: 1800, llm_profile_ids: [profile.id], start: true })
 const taskId = created.task?.id ?? created.id

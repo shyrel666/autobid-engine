@@ -13,7 +13,7 @@ import (
 	"github.com/autobid/autobid-engine/db"
 )
 
-func (a *API) registerD2Routes(mux *http.ServeMux) {
+func (a *API) registerD2Routes(mux *routeMux) {
 	mux.HandleFunc("GET /api/company/performance", a.listPerformance)
 	mux.HandleFunc("POST /api/company/performance", a.upsertPerformance)
 	mux.HandleFunc("DELETE /api/company/performance/{perfID}", a.deletePerformance)

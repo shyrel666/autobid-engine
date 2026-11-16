@@ -103,7 +103,7 @@ func (a *API) sectionWriter() SectionWriter {
 	return nil
 }
 
-func (a *API) registerProposalRoutes(mux *http.ServeMux) {
+func (a *API) registerProposalRoutes(mux *routeMux) {
 	mux.HandleFunc("GET /api/tasks/{id}/requirements", a.withTask(a.listRequirements))
 	mux.HandleFunc("POST /api/tasks/{id}/requirements/extract", a.withTask(a.extractRequirements))
 	mux.HandleFunc("POST /api/tasks/{id}/goals/bootstrap", a.withTask(a.bootstrapRFPGoals))
@@ -167,6 +167,8 @@ func proposalFail(w http.ResponseWriter, err error) {
 		{db.ErrStoryboardInvalid, http.StatusBadRequest, "storyboard_invalid"},
 		{db.ErrPinkSelfApproval, http.StatusUnprocessableEntity, "pink_self_approval"},
 		{db.ErrRedSelfApproval, http.StatusUnprocessableEntity, "red_self_approval"},
+		{db.ErrLegacyActor, http.StatusConflict, "legacy_actor"},
+		{db.ErrLegacyPolicyActive, http.StatusConflict, "quality_policy_legacy"},
 		{db.ErrUngroundedClaim, http.StatusUnprocessableEntity, "ungrounded_claim"},
 		{db.ErrWritingVerificationFailed, http.StatusUnprocessableEntity, "writing_verification_failed"},
 	}

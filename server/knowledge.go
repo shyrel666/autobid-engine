@@ -7,7 +7,7 @@ package server
 //   GET    /api/knowledge/documents/{kid}    ?content=1 附带分块正文与表格
 //   DELETE /api/knowledge/documents/{kid}
 //   GET    /api/knowledge/search             ?q=&product=&category=a,b&tags=a,b&limit=&prefer_tables=1
-// 知识库在 Phase 7 前固定使用默认租户；X-Autobid-User 请求头（可选）记录为 created_by。
+// 知识库在 Phase 7 前固定使用默认租户；created_by 记录当前登录账号（R2）。
 
 import (
 	"encoding/json"
@@ -16,7 +16,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -28,16 +27,6 @@ import (
 
 // maxUploadBytes 是 multipart 文件上传的请求体上限（64 MiB）。
 const maxUploadBytes = 64 << 20
-
-// operator 返回请求声明的操作人（Phase 7 前仅作审计记录，不做鉴权）。
-// 请求头只能传 ASCII，页面把姓名百分号编码后发送；无法解码时按原文保留，兼容直接调用接口的客户端。
-func operator(r *http.Request) string {
-	name := r.Header.Get("X-Autobid-User")
-	if decoded, err := url.PathUnescape(name); err == nil {
-		name = decoded
-	}
-	return strings.TrimSpace(name)
-}
 
 func isMultipart(r *http.Request) bool {
 	mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))

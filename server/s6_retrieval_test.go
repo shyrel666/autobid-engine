@@ -74,7 +74,7 @@ func s6HTTPFixture(t *testing.T) (*apiClient, *API, *db.DB, *retrieval.HTTPModel
 	svc.Health = reg
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	api := NewAPI(ctx, NewManager(pg), nil, NewLLMService(pg, LLMServiceConfig{MultiRetrieval: true}), nil, NewHub(), APIConfig{Token: testToken, Retrieval: svc, Runtime: reg})
+	api := testAPI(ctx, NewManager(pg), nil, NewLLMService(pg, LLMServiceConfig{MultiRetrieval: true}), nil, NewHub(), APIConfig{Retrieval: svc, Runtime: reg})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
 	return &apiClient{t: t, url: srv.URL}, api, pg, m

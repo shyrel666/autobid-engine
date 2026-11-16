@@ -34,7 +34,7 @@ import (
 	"github.com/autobid/autobid-engine/toolhealth"
 )
 
-func (a *API) registerExportRoutes(mux *http.ServeMux) {
+func (a *API) registerExportRoutes(mux *routeMux) {
 	mux.HandleFunc("GET /api/tasks/{id}/exports/preflight", a.withTask(a.exportPreflight))
 	mux.HandleFunc("POST /api/tasks/{id}/exports", a.withTask(a.createExport))
 	mux.HandleFunc("GET /api/tasks/{id}/exports", a.withTask(a.listExports))
@@ -167,6 +167,9 @@ func (a *API) createExport(w http.ResponseWriter, r *http.Request, t *Task) {
 	if req.TemplateID < 0 || len([]rune(req.Bidder)) > 200 {
 		exportFail(w, badRequest("invalid template_id or bidder"))
 		return
+	}
+	if strings.EqualFold(strings.TrimSpace(req.Mode), export.ExportModeFinal) && !requireProjectRole(w, r, db.RoleBidManager) {
+		return // 最终稿只能由投标经理提交；预览稿技术撰写人也可以生成
 	}
 	if req.RequestKey == "" {
 		if strings.EqualFold(strings.TrimSpace(req.Mode), export.ExportModeFinal) {

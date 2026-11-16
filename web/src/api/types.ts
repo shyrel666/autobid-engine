@@ -9,6 +9,9 @@ export interface Task {
   paused: boolean
   queued: boolean
   grounded_writing_required?: boolean
+  quality_policy?: string
+  /** 当前账号在本项目中的角色（列表与详情都返回；判定以服务端为准）。 */
+  my_roles?: string[]
   timeout_seconds: number
   plan_heartbeat_seconds: number
   first_run_at?: string
@@ -1522,3 +1525,38 @@ export interface SectionWritingVerification {
   claims: SentenceClaim[]; metrics: WritingVerificationMetrics; reasons: WritingVerificationReason[]
   created_by: string; updated_by: string; approved_by?: string; created_at: string; updated_at: string
 }
+
+// ---------------------------------------------------------------------------
+// R2 可信身份与项目角色（server/auth.go、server/accounts.go）
+// ---------------------------------------------------------------------------
+
+export interface SessionInfo {
+  user: { id: number; login: string; display_name: string; is_admin: boolean }
+  csrf_token: string
+  expires_at: string
+}
+
+export interface DirectoryEntry { login: string; display_name: string; status: string }
+
+export interface UserAccount {
+  id: number; tenant_id: string; login: string; display_name: string; is_admin: boolean; status: 'active' | 'disabled'
+  locked_until?: string; password_changed_at: string; created_by: string; created_at: string; updated_at: string
+}
+
+export interface UserEvent { id: number; user_id?: number; login: string; action: string; detail: Record<string, unknown>; created_by: string; created_at: string }
+
+export interface LegacyActor { name: string; storyboards: number; revisions: number; commitments: number; mapped_to?: string; mapped_by?: string }
+
+export interface ProjectMember {
+  task_id: number; user_id: number; login: string; display_name: string; status: string; roles: string[]
+  created_by: string; updated_by: string; created_at: string; updated_at: string
+}
+
+export interface MemberEvent {
+  id: number; task_id: number; user_id: number; login: string; action: 'added' | 'roles_changed' | 'removed'
+  roles_before: string[]; roles_after: string[]; created_by: string; created_at: string
+}
+
+export interface QualityPolicyEvent { id: number; task_id: number; from_policy: string; to_policy: string; reason: string; created_by: string; created_at: string }
+
+export interface QualityPolicyView { policy: string; policies: string[]; events: QualityPolicyEvent[] }

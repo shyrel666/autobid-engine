@@ -51,7 +51,7 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 // SchemaGeneration 是 schema.sql 的单调代际号，每次修改 schema.sql 都要加一（TestSchemaGenerationBumped 校验）。
 // 校验和只能判断“不同”，判断不了“更新”：旧程序连上升级过的库时，迁移器会重放旧 DDL 并改写约束和触发器。
 // 代际号让本版本之后的程序拒绝这种连接。更早的程序没有这段检查，它们的回退只能走恢复备份，见 docs/OPERATIONS.md。
-const SchemaGeneration = 2
+const SchemaGeneration = 3
 
 // ErrSchemaNewer 表示数据库已被更新版本的程序升级过，当前程序不能继续迁移或运行。
 var ErrSchemaNewer = errors.New("数据库已被更新版本的程序升级，当前程序不能连接；请换回新版程序，或按 docs/OPERATIONS.md 恢复升级前的备份")

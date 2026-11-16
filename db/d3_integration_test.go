@@ -18,6 +18,14 @@ import (
 func TestD3StoryboardPinkReviewAndWritingVerification(t *testing.T) {
 	f, tenant, store, _ := d2Setup(t)
 	ctx := context.Background()
+	// 通用夹具是 legacy/v1；R2 起 D3 只按显式质量策略启用，legacy/v1 下不能新建故事板，先由投标经理切换策略。
+	if _, err := f.d.UpsertStoryboard(ctx, tenant, "writer-alice", UpsertStoryboardInput{TaskID: f.task.ID, SectionID: 1,
+		ThemeSentence: "采用云边协同的零信任微隔离与安全态势感知架构保障接入"}); !errors.Is(err, ErrLegacyPolicyActive) {
+		t.Fatalf("storyboard under legacy/v1 must be refused, got %v", err)
+	}
+	if _, err := f.d.SetQualityPolicy(ctx, tenant, f.task.ID, QualityPolicyGrounded, "启用 D3 落证写作", "manager"); err != nil {
+		t.Fatal(err)
+	}
 
 	valid := "2027-12-31"
 	cred, _, err := f.d.UpsertCompanyCredential(ctx, &CompanyCredential{
@@ -154,6 +162,37 @@ func TestD3StoryboardPinkReviewAndWritingVerification(t *testing.T) {
 	}
 	if _, err := f.d.ApproveStoryboard(ctx, tenant, f.task.ID, secID, "self approve attempt", "writer-alice"); !errors.Is(err, ErrPinkSelfApproval) {
 		t.Fatalf("expected ErrPinkSelfApproval, got %v", err)
+	}
+	// R2：模拟升级前留下的待评审故事板（作者 / 提交人是声明式姓名）。未映射时任何人都不能批准，映射到账号后按账号判定。
+	if _, err := f.d.ExecContext(ctx, `WITH old AS (
+			UPDATE section_storyboards SET status = 'superseded' WHERE tenant_id = $1 AND section_id = $2 AND status = 'pending_pink_review' RETURNING *)
+		INSERT INTO section_storyboards(tenant_id, task_id, section_id, outline_version, version, theme_sentence, scoring_points,
+			admissibility_item_ids, evidence_ids, commitment_ids, chart_plans, status, submitted_by, submitted_at, created_by, updated_by, actor_legacy)
+		SELECT tenant_id, task_id, section_id, outline_version, version + 1, theme_sentence, scoring_points,
+			admissibility_item_ids, evidence_ids, commitment_ids, chart_plans, 'pending_pink_review', '张三', now(), '张三', '张三', true FROM old`,
+		tenant, secID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.ApproveStoryboard(ctx, tenant, f.task.ID, secID, "旧声明", "pink-reviewer-bob"); !errors.Is(err, ErrLegacyActor) {
+		t.Fatalf("legacy storyboard must not be approvable before mapping, got %v", err)
+	}
+	if _, err := f.d.CreateUser(ctx, tenant, NewUser{Login: "pink-reviewer-bob", PasswordHash: "x"}, "ops"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.MapLegacyActor(ctx, tenant, "张三", "pink-reviewer-bob", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.ApproveStoryboard(ctx, tenant, f.task.ID, secID, "映射后本人", "pink-reviewer-bob"); !errors.Is(err, ErrPinkSelfApproval) {
+		t.Fatalf("mapped legacy author approving own storyboard must fail, got %v", err)
+	}
+	if err := f.d.UnmapLegacyActor(ctx, tenant, "张三", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.CreateUser(ctx, tenant, NewUser{Login: "writer-alice", PasswordHash: "x"}, "ops"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.MapLegacyActor(ctx, tenant, "张三", "writer-alice", "admin"); err != nil {
+		t.Fatal(err)
 	}
 	sb, err = f.d.ApproveStoryboard(ctx, tenant, f.task.ID, secID, "论点清晰、证据与台账齐备", "pink-reviewer-bob")
 	if err != nil || sb.Status != StoryboardPinkApproved {

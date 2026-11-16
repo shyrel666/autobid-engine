@@ -3,7 +3,7 @@ import { AlertCircle, ArrowLeft, Brain, ChevronDown, PanelLeft } from 'lucide-re
 import { api, errorText } from '../../api/client'
 import type { LLMChain, LLMProfile, Task, TaskView } from '../../api/types'
 import { Badge, Button, Field, IconButton, Input, Menu, Modal, cx, statusTone, useToast } from '../../components/ui'
-import { useShell } from '../../components/layout/AppShell'
+import { AccountMenu, useShell } from '../../components/layout/AppShell'
 import { TaskLLMProfileChain } from '../models/TaskLLMProfileChain'
 import { fmtBeijing, manifestStatusLabel, taskStatusLabel } from '../../lib/format'
 import { linkProps } from '../../lib/router'
@@ -277,6 +277,7 @@ export default function TaskHeader({ page }: { page: TaskPage }) {
         <RuntimeIndicator />
         {t && <TaskLLMControl task={t} />}
         {t && <ExecutionMenu task={t} />}
+        <AccountMenu />
       </div>
       <p className="text-xs leading-4 text-muted">
         投标截止：{deadline || <span className="text-warn">尚未确认</span>}

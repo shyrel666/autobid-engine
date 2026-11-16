@@ -1,7 +1,7 @@
 // S7 刷新与重启恢复：在作业运行中真实结束服务进程，重启后页面恢复到一致状态。
 // 判据：不重复产物（条数断言）、原截止时间不被延长、页面刷新后显示真实终态。模型是脚本化替身。
 import { readFile } from 'node:fs/promises'
-import { BASE, TOKEN, seedProject } from './lib.mjs'
+import { BASE, authHeaders, seedProject } from './lib.mjs'
 import { STUB, api, assert, ensureStubProfile, session, shot, stepper, waitFor } from './s7-lib.mjs'
 
 const control = async (path) => {
@@ -52,7 +52,7 @@ await step('章节写作作业运行中杀进程：重启后只写回一个修�
 await step('解析作业运行中杀进程：重启后只产生一条候选，期限不延长', async () => {
   const task = await api('POST', '/api/tasks', { name: 'S7 恢复·解析', goal: '核对解析恢复', start: false })
   const body = await readFile('ingest/testdata/scan_tender_page.jpg')
-  const up = await fetch(`${BASE}/api/tasks/${task.id}/files?filename=scan.jpg`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'image/jpeg' }, body })
+  const up = await fetch(`${BASE}/api/tasks/${task.id}/files?filename=scan.jpg`, { method: 'POST', headers: { ...(await authHeaders()), 'Content-Type': 'image/jpeg' }, body })
   const file = await up.json()
   const job = await api('POST', `/api/tasks/${task.id}/file-jobs`, { file_id: file.id, request_key: 's7-recover-parse', tender_no: 'S7', parser_profile: 'auto', candidate_only: true })
   const first = await waitFor('解析开始', async () => {
@@ -114,7 +114,8 @@ await step('导出作业运行中杀进程：重启后同一请求组完成，�
 await step('索引构建中杀进程：重启后接着完成，不新建第二个索引，期限不延长', async () => {
   for (let i = 0; i < 6; i++) await api('POST', '/api/knowledge/documents', { category: 'whitepaper', title: `S7 恢复知识 ${i}`, text: `档案扫描第 ${i} 批按目录逐项登记。\n\n${'图像清晰度复核与批次验收说明。'.repeat(20)}` })
   await stub('/config', { embed_delay: 5 })
-  const sub = await api('POST', '/api/knowledge/indexes', { request_key: 's7-recover-index', dimension: 3 })
+  // 索引构建、启用与回滚只给管理员（R2）。
+  const sub = await api('POST', '/api/knowledge/indexes', { request_key: 's7-recover-index', dimension: 3 }, { as: 'admin' })
   const id = sub.index?.id ?? sub.id
   const first = await waitFor('构建开始', async () => {
     const list = await api('GET', '/api/knowledge/indexes')

@@ -1,12 +1,10 @@
 package server
 
 // HTTP / SSE 控制面（标准库 net/http + Go 1.22 路由模式）。
-// 鉴权：配置了 Token 时所有 /api 请求必须携带 "Authorization: Bearer <token>"
-// （EventSource 无法设置请求头，SSE 端点额外接受 ?token=）。
+// 鉴权：/api 下除登录接口外全部要求服务端会话（server/auth.go），逐路由权限见 server/permissions.go。
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,7 +30,10 @@ import (
 )
 
 type APIConfig struct {
-	Token string
+	// SessionTTL 是会话的空闲有效期与绝对上限；零值取 8 小时 / 72 小时。
+	SessionTTL db.SessionTTL
+	// LoginFailures 是账号连续登录失败后的锁定策略；零值取 db.DefaultLoginFailurePolicy。
+	LoginFailures db.LoginFailurePolicy
 	// SSEHeartbeat 是 SSE 保活注释间隔，默认 15s。
 	SSEHeartbeat time.Duration
 	// WebDir 为前端构建产物目录（含 index.html）时托管静态文件；为空或不存在时不托管。
@@ -71,6 +72,11 @@ type API struct {
 	hub             *Hub
 	pg              *db.DB
 	cfg             APIConfig
+	// authn 是请求鉴权实现：生产只有 sessionAuth；测试替身只在 *_test.go 中通过本字段注入。
+	authn   authenticator
+	limiter *loginLimiter
+	// routes 是最近一次 Handler() 注册的路由（供权限矩阵测试遍历）。
+	routes *routeMux
 }
 
 func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *intercept.Interceptor, hub *Hub, cfg APIConfig) *API {
@@ -89,11 +95,28 @@ func NewAPI(runCtx context.Context, m *Manager, e *Engine, svc *LLMService, ic *
 	if cfg.Runtime == nil {
 		cfg.Runtime = fallbackRuntime(cfg.Export)
 	}
-	return &API{runCtx: runCtx, m: m, e: e, llm: svc, ic: ic, hub: hub, pg: m.DB(), cfg: cfg, sectionJobSlots: make(chan struct{}, 4)}
+	if cfg.SessionTTL.Idle <= 0 {
+		cfg.SessionTTL.Idle = 8 * time.Hour
+	}
+	if cfg.SessionTTL.Absolute <= 0 {
+		cfg.SessionTTL.Absolute = 72 * time.Hour
+	}
+	if cfg.SessionTTL.Absolute < cfg.SessionTTL.Idle {
+		cfg.SessionTTL.Absolute = cfg.SessionTTL.Idle
+	}
+	if cfg.LoginFailures.Free <= 0 {
+		cfg.LoginFailures = db.DefaultLoginFailurePolicy
+	}
+	a := &API{runCtx: runCtx, m: m, e: e, llm: svc, ic: ic, hub: hub, pg: m.DB(), cfg: cfg, sectionJobSlots: make(chan struct{}, 4),
+		limiter: newLoginLimiter()}
+	a.authn = &sessionAuth{pg: a.pg, ttl: cfg.SessionTTL}
+	return a
 }
 
 func (a *API) Handler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &routeMux{ServeMux: http.NewServeMux(), a: a}
+	a.routes = mux
+	a.registerIdentityRoutes(mux)
 	mux.HandleFunc("GET /api/tasks/{id}/section-jobs", a.withTask(a.listSectionJobs))
 	mux.HandleFunc("POST /api/tasks/{id}/section-jobs/{jobID}/cancel", a.withTask(a.cancelSectionJob))
 	mux.HandleFunc("POST /api/tasks/{id}/files", a.withTask(a.uploadProcessingFile))
@@ -242,28 +265,6 @@ func (a *API) Handler() http.Handler {
 // 通用
 // ---------------------------------------------------------------------------
 
-func (a *API) auth(next http.Handler) http.Handler {
-	if a.cfg.Token == "" {
-		return next
-	}
-	want := []byte(a.cfg.Token)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		got, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if got == "" && strings.HasSuffix(r.URL.Path, "/events") {
-			got = r.URL.Query().Get("token")
-		}
-		if subtle.ConstantTimeCompare([]byte(got), want) != 1 {
-			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid bearer token"))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 type httpError struct {
 	status int
 	err    error
@@ -380,15 +381,20 @@ type taskView struct {
 	Running  bool   `json:"running"`
 	Settling bool   `json:"settling"`
 	Inflight int64  `json:"inflight"`
+	// MyRoles 是当前账号在本项目中的角色（页面据此隐藏按钮；判定以服务端为准）。
+	MyRoles []string `json:"my_roles"`
 }
 
-func (a *API) view(ctx context.Context, t *Task) (*taskView, error) {
+func (a *API) view(ctx context.Context, t *Task, roles []string) (*taskView, error) {
 	row, err := a.pg.GetTask(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
+	if roles == nil {
+		roles = []string{}
+	}
 	return &taskView{Task: row, Goal: t.Goal, Running: a.e.IsRunning(t.ID), Settling: a.e.isSettling(t.ID),
-		Inflight: a.e.inflightCount(t.ID)}, nil
+		Inflight: a.e.inflightCount(t.ID), MyRoles: roles}, nil
 }
 
 func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
@@ -396,12 +402,39 @@ func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := a.pg.ListTasks(r.Context(), r.URL.Query().Get("status"), limit)
+	id := identityFrom(r.Context())
+	var rows []*db.Task
+	var err error
+	if id.Admin {
+		// 管理员需要看到全部项目才能管理成员；这里只有项目元数据，项目内容仍须成为成员后才能读。
+		rows, err = a.pg.ListTasks(r.Context(), r.URL.Query().Get("status"), limit)
+	} else {
+		rows, err = a.pg.ListMemberTasks(r.Context(), id.Tenant, id.UserID, r.URL.Query().Get("status"), limit)
+	}
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	mine, err := a.pg.MemberTaskIDs(r.Context(), id.Tenant, id.UserID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := make([]taskListItem, 0, len(rows))
+	for _, t := range rows {
+		roles := mine[t.ID]
+		if roles == nil {
+			roles = []string{}
+		}
+		out = append(out, taskListItem{Task: t, MyRoles: roles})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// taskListItem 是项目列表项：任务行 + 当前账号在该项目中的角色（管理员看到的非成员项目为空）。
+type taskListItem struct {
+	*db.Task
+	MyRoles []string `json:"my_roles"`
 }
 
 type scopeReq struct {
@@ -420,7 +453,7 @@ type createTaskReq struct {
 	SourceTaskIDs        []int64    `json:"source_task_ids"`
 	LLMProfileIDs        []int64    `json:"llm_profile_ids"`
 	Start                bool       `json:"start"`
-	// LegacyWriting 显式关闭 D3 强制门禁（默认 false，即新任务强制启用），结果记录在任务的 grounded_writing_required 上。
+	// LegacyWriting 为 true 时任务使用 legacy/v1 质量策略（不启用 D3 门禁）；默认 grounded/v1。
 	LegacyWriting bool `json:"legacy_writing"`
 }
 
@@ -440,13 +473,27 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	in := db.CreateTaskInput{Name: req.Name, Description: req.Description, Goal: req.Goal,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds, SourceTaskIDs: req.SourceTaskIDs,
-		LegacyWriting: req.LegacyWriting}
+		LegacyWriting: req.LegacyWriting, Owner: operator(r), Tenant: tenantOf(r)}
 	for _, s := range req.Scopes {
 		if strings.TrimSpace(s.TenderNo) == "" {
 			fail(w, badRequest("scope tender_no is required"))
 			return
 		}
 		in.Scopes = append(in.Scopes, db.TaskScope{TenderNo: s.TenderNo, LotNo: s.LotNo})
+	}
+	// 来源任务的内容会被新项目读取：创建人必须是每个来源项目的成员（非成员与不存在一律 404）。
+	if id := identityFrom(r.Context()); id != nil {
+		for _, src := range req.SourceTaskIDs {
+			have, err := a.pg.MemberRoles(r.Context(), id.Tenant, src, id.UserID)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			if len(have) == 0 {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("source project %d not found", src), "code": "not_found"})
+				return
+			}
+		}
 	}
 	t, err := a.m.CreateTask(r.Context(), in, req.Goals...)
 	if err != nil {
@@ -465,7 +512,7 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	v, err := a.view(r.Context(), t)
+	v, err := a.view(r.Context(), t, []string{db.RoleBidManager})
 	if err != nil {
 		fail(w, err)
 		return
@@ -474,7 +521,7 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getTask(w http.ResponseWriter, r *http.Request, t *Task) {
-	v, err := a.view(r.Context(), t)
+	v, err := a.view(r.Context(), t, projectRoles(r))
 	if err != nil {
 		fail(w, err)
 		return
@@ -1039,6 +1086,14 @@ func (a *API) listIntercepts(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	who := identityFrom(r.Context())
+	var mine map[int64][]string
+	if !who.Admin {
+		if mine, err = a.pg.MemberTaskIDs(r.Context(), who.Tenant, who.UserID); err != nil {
+			fail(w, err)
+			return
+		}
+	}
 	out := make([]*db.InterceptPendingRow, 0, len(ids))
 	for _, id := range ids {
 		row, err := a.pg.GetInterceptPending(r.Context(), id)
@@ -1048,6 +1103,9 @@ func (a *API) listIntercepts(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			fail(w, err)
 			return
+		}
+		if mine != nil && mine[row.TaskID] == nil {
+			continue // 只列出本人所属项目的待审批
 		}
 		out = append(out, row)
 	}

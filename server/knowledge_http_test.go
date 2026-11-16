@@ -32,9 +32,8 @@ func (c *apiClient) multipart(path string, fields map[string]string, fileName st
 	}
 	_ = mw.Close()
 	req, _ := http.NewRequest("POST", c.url+path, &buf)
-	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("X-Autobid-User", "http-tester")
+	req.Header.Set("X-Test-Actor", "http-tester")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.t.Fatalf("POST %s: %v", path, err)

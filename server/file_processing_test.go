@@ -44,7 +44,7 @@ func newFileAPIWithDB(t *testing.T, pg *db.DB) *fileAPI {
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil },
 		Config{Workers: 1, Debounce: 20 * time.Millisecond, WorkerIdlePoll: 20 * time.Millisecond})
 	web, _ := filepath.Abs("../web/dist")
-	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Token: testToken, FileStore: store, WebDir: web})
+	api := testAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{FileStore: store, WebDir: web})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() {
 		srv.Close()
@@ -83,7 +83,6 @@ func (c *fileAPI) upload(t *testing.T, taskID int64, field, name string, data []
 		t.Fatal(err)
 	}
 	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/tasks/%d/documents", c.url, taskID), &body)
-	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

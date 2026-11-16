@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -40,6 +41,7 @@ type rehearsal struct {
 	t                                                               *testing.T
 	ctx                                                             context.Context
 	root, tmp, out, oldBin, newBin, opsBin, token, tokenFile, model string
+	accountsFile                                                    string
 	admin                                                           *db.DB
 	cfg                                                             *pgx.ConnConfig
 	created                                                         []string
@@ -54,6 +56,9 @@ type process struct {
 	done     chan error
 	stopOnce sync.Once
 	log      *safeLog
+	// R2：当前程序没有共享令牌，调用方以账号登录后持有会话（Cookie）与防跨站令牌；旧程序仍用令牌。
+	hc   *http.Client
+	csrf string
 }
 type safeLog struct {
 	mu sync.Mutex
@@ -84,7 +89,7 @@ func TestUpgradeDrill(t *testing.T) {
 	r.out = filepath.Join(root, "data", "s7-checks", "upgrade", filepath.Base(r.tmp))
 	r.must(os.MkdirAll(r.out, 0700))
 	defer func() {
-		r.write("report.json", map[string]any{"baseline": baseline, "at": time.Now().UTC(), "checks": r.checks, "passed": !t.Failed(), "model": "替身模型，非真实模型；只用于知识索引协议", "identity": "X-Autobid-User 仅为审计声明，非可信身份", "limits": "合成历史数据；未做真实断网演练；不是 V/P 验收"})
+		r.write("report.json", map[string]any{"baseline": baseline, "at": time.Now().UTC(), "checks": r.checks, "passed": !t.Failed(), "model": "替身模型，非真实模型；只用于知识索引协议", "identity": "旧程序：X-Autobid-User 审计声明；当前程序：账号登录的服务端会话（R2）", "limits": "合成历史数据；未做真实断网演练；不是 V/P 验收"})
 	}()
 	r.cfg, e = ops.ParseDatabase(os.Getenv("AUTOBID_TEST_DATABASE_URL"))
 	r.must(e)
@@ -320,9 +325,7 @@ func (r *rehearsal) api(p *process, method, path string, body any) json.RawMessa
 	req, e := http.NewRequestWithContext(r.ctx, method, p.base+path, bytes.NewReader(b))
 	r.must(e)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+r.token)
-	req.Header.Set("X-Autobid-User", "s7-history-operator")
-	resp, e := (&http.Client{Timeout: 3 * time.Minute}).Do(req)
+	resp, e := r.do(p, req)
 	r.must(e)
 	defer resp.Body.Close()
 	b, e = io.ReadAll(resp.Body)
@@ -333,6 +336,67 @@ func (r *rehearsal) api(p *process, method, path string, body any) json.RawMessa
 	return b
 }
 func decode[T any](r *rehearsal, b []byte) T { var v T; r.must(json.Unmarshal(b, &v)); return v }
+
+// do sends a request as the process's caller: the old program gets the shared token and a declared
+// operator name (what it understood), the current program gets the signed-in session.
+func (r *rehearsal) do(p *process, req *http.Request) (*http.Response, error) {
+	if p.hc == nil {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+		if req.Header.Get("X-Autobid-User") == "" {
+			req.Header.Set("X-Autobid-User", "s7-history-operator")
+		}
+		return (&http.Client{Timeout: 3 * time.Minute}).Do(req)
+	}
+	if req.Method != "GET" {
+		req.Header.Set("X-Autobid-CSRF", p.csrf)
+	}
+	return p.hc.Do(req)
+}
+
+// as returns a caller of the same current-program process signed in as login (a separate session).
+func (r *rehearsal) as(p *process, login, password string) *process {
+	r.t.Helper()
+	jar, e := cookiejar.New(nil)
+	r.must(e)
+	c := &process{base: p.base, hc: &http.Client{Jar: jar, Timeout: 3 * time.Minute}}
+	b, e := json.Marshal(map[string]string{"login": login, "password": password})
+	r.must(e)
+	req, e := http.NewRequestWithContext(r.ctx, "POST", p.base+"/api/auth/login", bytes.NewReader(b))
+	r.must(e)
+	req.Header.Set("Content-Type", "application/json")
+	resp, e := c.hc.Do(req)
+	r.must(e)
+	defer resp.Body.Close()
+	body, e := io.ReadAll(resp.Body)
+	r.must(e)
+	r.assert(resp.StatusCode == 200, fmt.Sprintf("账号 %s 登录失败：%d", login, resp.StatusCode))
+	c.csrf = decode[struct {
+		CSRF string `json:"csrf_token"`
+	}](r, body).CSRF
+	return c
+}
+
+// status sends a request and returns only the status code and decoded error code (no failure on >=300).
+func (r *rehearsal) status(p *process, method, path string, body any, headers map[string]string) (int, string) {
+	r.t.Helper()
+	b, e := json.Marshal(body)
+	r.must(e)
+	req, e := http.NewRequestWithContext(r.ctx, method, p.base+path, bytes.NewReader(b))
+	r.must(e)
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, e := r.do(p, req)
+	r.must(e)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var out struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	return resp.StatusCode, out.Code
+}
 func (r *rehearsal) ops(dsn, data string, args ...string) []byte {
 	r.t.Helper()
 	c := exec.CommandContext(r.ctx, r.opsBin, args...)

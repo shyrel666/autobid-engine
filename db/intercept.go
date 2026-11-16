@@ -424,6 +424,8 @@ type InterceptApprovalFilter struct {
 	Status string
 	Limit  int
 	Offset int
+	// MemberUserID 非 0 时只返回该账号所属项目的记录（R2）；0 表示不按成员关系过滤（管理员）。
+	MemberUserID int64
 }
 
 // ListInterceptApprovals 返回包含历史已决与当前待审批的多状态审批记录及总条数（pending 优先置顶，其次按 ID 倒序）。
@@ -437,7 +439,8 @@ func (d *DB) ListInterceptApprovals(ctx context.Context, f InterceptApprovalFilt
 	var total int
 	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM intercept_pending p
 		WHERE ($1::bigint = 0 OR p.task_id = $1)
-		  AND ($2::text = '' OR p.status = $2)`, f.TaskID, f.Status).Scan(&total); err != nil {
+		  AND ($2::text = '' OR p.status = $2)
+		  AND ($3::bigint = 0 OR p.task_id IN (SELECT task_id FROM project_members WHERE user_id = $3))`, f.TaskID, f.Status, f.MemberUserID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := d.QueryContext(ctx, `SELECT p.id, p.rule_id, p.task_id, p.intent_id, p.agent_name, p.tool_name,
@@ -448,8 +451,9 @@ func (d *DB) ListInterceptApprovals(ctx context.Context, f InterceptApprovalFilt
 		LEFT JOIN intercept_rules r ON r.id = p.rule_id
 		WHERE ($1::bigint = 0 OR p.task_id = $1)
 		  AND ($2::text = '' OR p.status = $2)
+		  AND ($5::bigint = 0 OR p.task_id IN (SELECT task_id FROM project_members WHERE user_id = $5))
 		ORDER BY CASE WHEN p.status = 'pending' THEN 0 ELSE 1 END, p.id DESC
-		LIMIT $3 OFFSET $4`, f.TaskID, f.Status, f.Limit, f.Offset)
+		LIMIT $3 OFFSET $4`, f.TaskID, f.Status, f.Limit, f.Offset, f.MemberUserID)
 	if err != nil {
 		return nil, 0, err
 	}

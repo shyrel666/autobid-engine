@@ -15,8 +15,11 @@ import (
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 func run(args []string, out, errOut io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "用法：autobid-ops check [--json] | backup --out DIR | verify --dir DIR | restore --dir DIR --target-database-url-env NAME --data-root DIR")
+		fmt.Fprintln(errOut, "用法：autobid-ops check [--json] | backup --out DIR | verify --dir DIR | restore --dir DIR --target-database-url-env NAME --data-root DIR | user <create-admin|reset-password|enable|list> ...")
 		return 2
+	}
+	if args[0] == "user" {
+		return runUser(args[1:], os.Stdin, out, errOut)
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -97,6 +100,32 @@ func run(args []string, out, errOut io.Writer) int {
 	} else if args[0] != "check" {
 		fmt.Fprintln(out, "完成："+args[0])
 		fmt.Fprintln(out, ops.KeyReminder)
+	}
+	return 0
+}
+
+// runUser 处理本机账号运维：create-admin / reset-password / enable / list。口令交互输入不回显，
+// 或用 --password-stdin 从标准输入读一行；不接受命令行参数里的口令（会进入进程列表与命令历史）。
+func runUser(args []string, in io.Reader, out, errOut io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(errOut, "用法：autobid-ops user create-admin --login NAME [--display-name 名称] [--password-stdin] | reset-password --login NAME [--password-stdin] | enable --login NAME | list")
+		return 2
+	}
+	fs := flag.NewFlagSet("user "+args[0], flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	login := fs.String("login", "", "")
+	display := fs.String("display-name", "", "")
+	stdin := fs.Bool("password-stdin", false, "")
+	if fs.Parse(args[1:]) != nil || fs.NArg() != 0 {
+		fmt.Fprintln(errOut, "命令参数无效")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	err := ops.RunUser(ctx, ops.FromEnv(), ops.UserCommand{Action: args[0], Login: *login, DisplayName: *display, PasswordStdin: *stdin}, in, out, ops.ReadSecret)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
 	}
 	return 0
 }

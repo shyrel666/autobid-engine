@@ -1,5 +1,6 @@
-// AutoBid 控制面 HTTP 客户端：所有 /api/* 请求携带 Authorization: Bearer <token>；
-// SSE（EventSource 无法设置请求头）改用 ?token=。401 时广播 autobid:unauthorized 以弹出令牌设置。
+// AutoBid 控制面 HTTP 客户端（R2）：身份只来自服务端会话 Cookie（HttpOnly，脚本读不到）；
+// 改变状态的请求另带 X-Autobid-CSRF（会话派生的防跨站令牌，只存内存，登录 / 读取会话时更新）。
+// SSE 走同一 Cookie，URL 不带令牌。401 时广播 autobid:unauthorized，由会话层弹出重新登录（页面不卸载，未保存的编辑保留）。
 
 import { d3ErrorMessage } from '../lib/d3-errors'
 import type { ProcessingFile, ProcessingRecord, ProcessingDetail, TaskMaterial, FixedJobInput, FixedJob } from './processing-types'
@@ -20,44 +21,14 @@ import type {
   CompanyPerformance, EvidenceOriginal, EvidenceBinding, AdmissibilityRun, AdmissibilityDecision,
   Commitment, CommitmentInput, BidQuote, BidQuoteValidation, ObjectiveScoreRun,
   SectionStoryboard, UpsertStoryboardReq, GroundedDraftRenderResult, SectionWritingVerification,
+  SessionInfo, DirectoryEntry, UserAccount, UserEvent, LegacyActor, ProjectMember, MemberEvent, QualityPolicyView,
 } from './types'
 
-const TOKEN_KEY = 'autobid.token'
-const OPERATOR_KEY = 'autobid.operator'
+let csrfToken = ''
 
-export function getToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? ''
-  } catch {
-    return ''
-  }
-}
-
-export function setOperator(name: string) {
-  try {
-    if (name) localStorage.setItem(OPERATOR_KEY, name)
-    else localStorage.removeItem(OPERATOR_KEY)
-  } catch {
-    /* 隐私模式等场景下仅本次会话生效 */
-  }
-}
-
-export function getOperator(): string {
-  try {
-    return localStorage.getItem(OPERATOR_KEY) ?? ''
-  } catch {
-    return ''
-  }
-}
-
-export function setToken(token: string) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token)
-    else localStorage.removeItem(TOKEN_KEY)
-  } catch {
-    /* 隐私模式等场景下 localStorage 不可用，仅本次会话生效 */
-  }
-  window.dispatchEvent(new Event('autobid:token-changed'))
+/** 会话层在登录、读取会话、改口令后写入防跨站令牌；登出时清空。 */
+export function setCSRF(token: string) {
+  csrfToken = token
 }
 
 export class ApiError extends Error {
@@ -76,7 +47,9 @@ export class ApiError extends Error {
 export function errorText(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 0) return `网络错误：${err.message}`
-    if (err.status === 401) return '未授权：请检查 API Token'
+    if (err.status === 401) return err.code === 'invalid_credentials' ? '账号或口令错误' : '登录已失效，请重新登录'
+    if (err.status === 403) return forbiddenText(err)
+    if (err.status === 429) return '登录尝试过多，请稍后再试'
     const business = d3ErrorMessage(err.code, err.message)
     if (business) return business
     return `HTTP ${err.status}：${err.message}`
@@ -84,21 +57,39 @@ export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+export const ROLE_LABELS: Record<string, string> = {
+  bid_manager: '投标经理', tech_writer: '技术撰写人', commercial: '商务专员', reviewer: '审核专家',
+}
+
+function forbiddenText(err: ApiError): string {
+  const d = err.data as { required_roles?: string[] } | undefined
+  switch (err.code) {
+    case 'forbidden_role': {
+      const roles = (d?.required_roles ?? []).map((r) => ROLE_LABELS[r] ?? r).join('、')
+      return roles ? `当前账号没有所需角色（需要：${roles}）` : '当前账号没有所需角色'
+    }
+    case 'admin_required': return '需要管理员账号'
+    case 'csrf_token': case 'csrf_origin': return '请求校验失败，请刷新页面后重试'
+    default: return `无权操作：${err.message}`
+  }
+}
+
+function safe(method: string) {
+  return method === 'GET' || method === 'HEAD'
+}
+
 // send 发送请求：FormData 以 multipart/form-data 发送（由浏览器生成 boundary），其余请求体按 JSON 序列化。
-async function send(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<Response> {
+// 防跨站令牌失配（例如另一个标签页重新登录过）时重读会话并重试一次。
+async function send(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>, retried = false): Promise<Response> {
   const headers: Record<string, string> = { ...extraHeaders }
-  const token = getToken()
-  if (token) headers.Authorization = `Bearer ${token}`
-  const operator = getOperator()
-  // 请求头只能是 ASCII，中文姓名直接放进去会让 fetch 整个请求失败。
-  if (operator) headers['X-Autobid-User'] = encodeURIComponent(operator)
+  if (!safe(method) && csrfToken) headers['X-Autobid-CSRF'] = csrfToken
   const form = body instanceof FormData
   const blob = body instanceof Blob
   if (blob) headers['Content-Type'] = body.type || 'application/octet-stream'
   else if (body !== undefined && !form) headers['Content-Type'] = 'application/json'
   let resp: Response
   try {
-    resp = await fetch(path, { method, headers, body: body === undefined ? undefined : form || blob ? body as BodyInit : JSON.stringify(body) })
+    resp = await fetch(path, { method, headers, credentials: 'same-origin', body: body === undefined ? undefined : form || blob ? body as BodyInit : JSON.stringify(body) })
   } catch (e) {
     throw new ApiError(0, e instanceof Error ? e.message : '无法连接服务')
   }
@@ -112,8 +103,19 @@ async function send(method: string, path: string, body?: unknown, extraHeaders?:
     } catch {
       /* 非 JSON 错误体 */
     }
-    if (resp.status === 401) window.dispatchEvent(new Event('autobid:unauthorized'))
-    throw new ApiError(resp.status, msg, data)
+    const err = new ApiError(resp.status, msg, data)
+    if (resp.status === 403 && err.code === 'csrf_token' && !retried) {
+      try {
+        const r = await fetch('/api/auth/session', { credentials: 'same-origin' })
+        if (r.ok) {
+          csrfToken = ((await r.json()) as { csrf_token?: string }).csrf_token ?? ''
+          return send(method, path, body, extraHeaders, true)
+        }
+      } catch { /* 按原错误处理 */ }
+    }
+    // 登录接口本身的 401 是"口令错误"，不是会话失效。
+    if (resp.status === 401 && path !== '/api/auth/login') window.dispatchEvent(new CustomEvent('autobid:unauthorized', { detail: err.code ?? '' }))
+    throw err
   }
   return resp
 }
@@ -173,6 +175,42 @@ export function saveBlob(b: Blob, filename: string) {
 }
 
 export const api = {
+  // 登录、会话与账号（R2）
+  login: async (login: string, password: string) => {
+    const s = await post<SessionInfo>('/api/auth/login', { login, password })
+    setCSRF(s.csrf_token)
+    return s
+  },
+  session: async () => {
+    const s = await get<SessionInfo>('/api/auth/session')
+    setCSRF(s.csrf_token)
+    return s
+  },
+  logout: async () => {
+    try { await post<void>('/api/auth/logout') } finally { setCSRF('') }
+  },
+  changePassword: async (current_password: string, new_password: string) => {
+    const s = await post<SessionInfo>('/api/auth/password', { current_password, new_password })
+    setCSRF(s.csrf_token)
+    return s
+  },
+  userDirectory: () => get<DirectoryEntry[]>('/api/users/directory'),
+  listUsers: () => get<UserAccount[]>('/api/users'),
+  createUser: (req: { login: string; display_name: string; password: string; is_admin: boolean }) => post<UserAccount>('/api/users', req),
+  updateUser: (id: number, req: { display_name?: string; is_admin?: boolean; status?: 'active' | 'disabled' }) =>
+    json<UserAccount>('PATCH', `/api/users/${id}`, req),
+  resetUserPassword: (id: number, password: string) => post<void>(`/api/users/${id}/password`, { password }),
+  userEvents: (userId?: number) => get<UserEvent[]>(`/api/user-events${qs({ user_id: userId })}`),
+  legacyActors: () => get<LegacyActor[]>('/api/legacy-actors'),
+  mapLegacyActor: (legacy_name: string, login: string) => post<void>('/api/legacy-actors', { legacy_name, login }),
+  unmapLegacyActor: (name: string) => del(`/api/legacy-actors/${encodeURIComponent(name)}`),
+  members: (id: number) => get<ProjectMember[]>(`${t(id)}/members`),
+  setMember: (id: number, login: string, roles: string[]) => put<ProjectMember>(`${t(id)}/members/${encodeURIComponent(login)}`, { roles }),
+  removeMember: (id: number, login: string) => del(`${t(id)}/members/${encodeURIComponent(login)}`),
+  memberEvents: (id: number) => get<MemberEvent[]>(`${t(id)}/member-events`),
+  qualityPolicy: (id: number) => get<QualityPolicyView>(`${t(id)}/quality-policy`),
+  setQualityPolicy: (id: number, policy: string, reason: string) => put<QualityPolicyView>(`${t(id)}/quality-policy`, { policy, reason }),
+
   // 健康检查（/healthz 不需要鉴权）
   healthz: async () => {
     try {
@@ -451,9 +489,9 @@ export const api = {
     get<InterceptApprovalsResp>(`/api/intercept/approvals${qs(f)}`),
 }
 
+/** SSE 地址：EventSource 自动带同源 Cookie，URL 里不放任何令牌。 */
 export function eventsURL(taskID: number): string {
-  const token = getToken()
-  return `${t(taskID)}/events${token ? `?token=${encodeURIComponent(token)}` : ''}`
+  return `${t(taskID)}/events`
 }
 
 export type { Activity }

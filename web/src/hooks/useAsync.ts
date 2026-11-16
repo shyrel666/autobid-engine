@@ -12,7 +12,7 @@ export interface AsyncState<T> {
 }
 
 // useAsync 在 deps 变化时执行 fn；reload 可手动重拉。
-// 过期请求（deps 已变化、组件已卸载或被禁用）的结果一律丢弃；令牌变更后自动以新令牌重读，不重新挂载页面。
+// 过期请求（deps 已变化、组件已卸载或被禁用）的结果一律丢弃；重新登录后（autobid:token-changed）自动重读，不重新挂载页面。
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[], enabled = true): AsyncState<T> {
   const [data, setData] = useState<T>()
   const [error, setError] = useState('')

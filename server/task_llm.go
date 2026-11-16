@@ -100,7 +100,7 @@ type LLMServiceConfig struct {
 	Retrieval      *retrieval.Service
 	// Charts 为 chart_generate 工具提供图表生成 / 渲染（为 nil 时工具返回未配置），S3 / S4 起同样承载图表渲染与导出作业的提交。
 	Charts *export.Service
-	// AgentExport 是宿主授予 Worker 的任务导出能力（AUTOBID_AGENT_EXPORT_ENABLED，默认关闭）：高影响入口，R2 可信身份完成前保持关闭；
+	// AgentExport 是宿主授予 Worker 的任务导出能力（AUTOBID_AGENT_EXPORT_ENABLED，默认关闭）：高影响入口，R2 可信身份完成后仍默认关闭（不做按任务授权）；
 	// 未授予时 proposal_export_submit 返回 FEATURE_DISABLED，Planner mandate 不能自行授予。
 	AgentExport bool
 	// Runtime 是本机运行能力状态；非 nil 时 Planner 与 Worker 常驻 tool_runtime_status。

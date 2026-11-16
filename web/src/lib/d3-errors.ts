@@ -5,8 +5,10 @@ const messages: Record<string, string> = {
   storyboard_not_approved: '故事板尚未通过粉队评审，暂不能写作。请先提交评审，由另一位评审人批准。',
   storyboard_stale: '故事板依据的大纲、要求、证据或承诺已变化。请更新故事板后重新提交评审。',
   storyboard_state: '故事板状态已变化，请刷新后重试。',
-  pink_self_approval: '粉队批准人不能是故事板的作者或提交人。请把“当前操作人”改为评审人后再批准。',
-  red_self_approval: '定稿人不能是这一版正文的作者。请把“当前操作人”改为评审人后再批准定稿。',
+  pink_self_approval: '粉队批准人不能是故事板的作者或提交人。请由另一位审核专家登录后批准。',
+  red_self_approval: '定稿人不能是这一版正文的作者（AI 代写的稿件算派发人）。请由另一位审核专家登录后批准定稿。',
+  legacy_actor: '这份记录是升级前用填写的姓名提交的，不能据此判断是否为同一人。请作者登录后重新保存并提交，或请管理员在“账号管理”中把旧姓名映射到账号。',
+  quality_policy_legacy: '本项目的质量策略是旧写作门禁（legacy/v1），不能新建故事板。请投标经理在“成员与质量策略”中改为落证写作（grounded/v1）。',
   evidence_inadmissible: '引用的企业证据不可采或未列入故事板，请核对可采性结论和故事板引用。',
 }
 

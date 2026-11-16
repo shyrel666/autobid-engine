@@ -76,6 +76,7 @@ const routes: [RegExp, (m: RegExpMatchArray) => unknown][] = [
   [/^\/api\/tasks\/\d+\/retrieval-runs$/, () => []],
   [/^\/api\/llm\/records$/, () => []],
   [/^\/api\/system\/catalog$/, () => ({ skills: [], tools: [], agents: [] })],
+  [/^\/api\/auth\/session$/, () => ({ user: { id: 1, login: 'visual', display_name: '示例', is_admin: true }, csrf_token: 'visual', expires_at: created })],
 ]
 
 const realFetch = window.fetch.bind(window)

@@ -240,7 +240,7 @@ func TestBidToolsSkillDisclosureEndToEnd(t *testing.T) {
 	})
 	e := NewEngine(m, svc.Resolve, Config{Workers: 1, Debounce: 30 * time.Millisecond, WorkerIdlePoll: 30 * time.Millisecond, ModelErrorRetries: -1, OnActivity: acts.add})
 	svc.Bind(e)
-	api := NewAPI(ctx, m, e, svc, nil, NewHub(), APIConfig{Token: testToken})
+	api := testAPI(ctx, m, e, svc, nil, NewHub(), APIConfig{})
 	srv := httptest.NewServer(api.Handler())
 	defer srv.Close()
 	c := &apiClient{t: t, url: srv.URL}
@@ -400,7 +400,6 @@ func TestHTTPCredentialUpdateDeleteAndMarkdownReport(t *testing.T) {
 		t.Fatalf("upload: %d", code)
 	}
 	req, _ := http.NewRequest("GET", c.url+base+"/report?format=markdown", nil)
-	req.Header.Set("Authorization", "Bearer "+testToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

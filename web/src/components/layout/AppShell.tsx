@@ -2,15 +2,16 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react'
 import {
   BookOpen, Bot, Brain, Bug, ClipboardList, LayoutDashboard,
-  Library, Network, PanelLeft, Radio, Search, Settings2, ShieldAlert, Sparkles, Target, Wrench,
+  Library, Network, PanelLeft, Radio, Search, ShieldAlert, Sparkles, Target, UserRound, Users, Wrench,
 } from 'lucide-react'
-import { api, getToken, setToken } from '../../api/client'
+import { api } from '../../api/client'
 import type { LLMHealth } from '../../api/types'
-import { Button, Field, IconButton, Input, Modal, cx, useFocusTrap } from '../ui'
+import { IconButton, Menu, cx, useFocusTrap } from '../ui'
 import { useInterval } from '../../hooks/useAsync'
 import { linkProps, navigate } from '../../lib/router'
 import { TASK_NAV, taskUrl } from '../../lib/routes'
-import { forgetProjects, loadedProjects } from '../../lib/projectCache'
+import { loadedProjects } from '../../lib/projectCache'
+import { useOptionalSession } from '../../features/auth/session'
 import { ThemeToggle } from '../../lib/theme'
 
 // 应用框架：240 / 64px 侧栏、#fafafa 画布上 8px 外边距的白色主容器、48px 全局顶栏（项目页由项目标题替代）。
@@ -36,17 +37,16 @@ interface ShellCtx {
   toggleSidebar: () => void
   collapsed: boolean
   narrow: boolean
-  openToken: () => void
   pendingCount: number
   refreshPending: () => void
 }
-const Ctx = createContext<ShellCtx>({ toggleSidebar: () => {}, collapsed: false, narrow: false, openToken: () => {}, pendingCount: 0, refreshPending: () => {} })
+const Ctx = createContext<ShellCtx>({ toggleSidebar: () => {}, collapsed: false, narrow: false, pendingCount: 0, refreshPending: () => {} })
 export const useShell = () => useContext(Ctx)
 
 export interface NavKey {
   key:
     | 'dashboard' | 'tasks' | 'findings' | 'assets' | 'llm-records' | 'credentials' | 'knowledge'
-    | 'llm' | 'agents' | 'skills' | 'tools' | 'intercept-rules' | 'intercepts' | ''
+    | 'llm' | 'agents' | 'skills' | 'tools' | 'intercept-rules' | 'intercepts' | 'admin-users' | ''
 }
 
 const globalNav = [
@@ -66,11 +66,18 @@ const globalNav = [
     { key: 'tools', to: '/tools', label: '工具', icon: <Wrench className="size-4 shrink-0" strokeWidth={1.7} /> },
     { key: 'intercept-rules', to: '/intercepts/rules', label: '拦截规则', icon: <ShieldAlert className="size-4 shrink-0" strokeWidth={1.7} /> },
     { key: 'intercepts', to: '/intercepts', label: '审批记录', icon: <ClipboardList className="size-4 shrink-0" strokeWidth={1.7} /> },
+    { key: 'admin-users', to: '/admin/users', label: '账号管理', icon: <Users className="size-4 shrink-0" strokeWidth={1.7} /> },
   ] },
 ] as const
 
+// 只有管理员看得到的导航项（服务端同样只对管理员放行，隐藏只是方便）。
+const ADMIN_ONLY = new Set<string>(['admin-users', 'llm', 'llm-records', 'intercept-rules'])
+
 function Sidebar({ active, collapsed, pendingCount, healthy, drawer, onNavigate }:
   { active: NavKey['key']; collapsed: boolean; pendingCount: number; healthy: boolean | null; drawer?: boolean; onNavigate?: () => void }) {
+  const session = useOptionalSession()
+  const isAdmin = !!session?.user.is_admin
+  const who = session ? `${session.user.display_name}（${session.user.login}）` : ''
   return (
     <aside data-region="sidebar" aria-label="全局导航"
       className={cx('flex h-full shrink-0 flex-col overflow-y-auto p-3.5', collapsed ? 'w-16 gap-3' : 'gap-3.5', drawer ? 'w-full' : !collapsed && 'w-[240px]')}>
@@ -81,7 +88,7 @@ function Sidebar({ active, collapsed, pendingCount, healthy, drawer, onNavigate 
       {globalNav.map((g) => (
         <nav key={g.group} aria-label={g.group}>
           {!collapsed && <div className="flex h-6 items-center px-2 text-xs font-medium text-muted">{g.group}</div>}
-          {g.items.map((it) => {
+          {g.items.filter((it) => isAdmin || !ADMIN_ONLY.has(it.key)).map((it) => {
             const on = active === it.key
             const count = it.key === 'intercepts' && pendingCount > 0 ? pendingCount : 0
             return (
@@ -102,7 +109,7 @@ function Sidebar({ active, collapsed, pendingCount, healthy, drawer, onNavigate 
       ))}
       <div className={cx('mt-auto flex items-center gap-2.5 rounded-lg p-2', collapsed && 'justify-center')} title={healthy === null ? '检测中' : healthy ? '服务已连接' : '服务不可用'}>
         <span className="relative grid size-7 shrink-0 place-items-center rounded-full bg-soft text-xs font-semibold text-fg">
-          A
+          {(session?.user.display_name || 'A').slice(0, 1)}
           <span className={cx('absolute right-0 bottom-0 size-2 rounded-full ring-2 ring-canvas', healthy === null ? 'bg-slate-400' : healthy ? 'bg-ok' : 'bg-danger')} aria-hidden />
         </span>
         {!collapsed ? (
@@ -110,7 +117,7 @@ function Sidebar({ active, collapsed, pendingCount, healthy, drawer, onNavigate 
             <div className={cx('truncate text-xs font-medium', healthy === false ? 'text-danger' : 'text-fg')}>
               {healthy === null ? '检测服务中' : healthy ? 'AutoBid · 已连接' : '服务不可用'}
             </div>
-            <div className="truncate text-[11px] text-muted">辅助起草与检查</div>
+            <div className="truncate text-[11px] text-muted" title={who}>{who || '辅助起草与检查'}</div>
           </div>
         ) : <span className="sr-only">{healthy ? '服务已连接' : '服务不可用'}</span>}
       </div>
@@ -118,22 +125,21 @@ function Sidebar({ active, collapsed, pendingCount, healthy, drawer, onNavigate 
   )
 }
 
-function TokenDialog({ open, onClose, reason }: { open: boolean; onClose: () => void; reason?: string }) {
-  const [value, setValue] = useState(getToken())
-  useEffect(() => { if (open) setValue(getToken()) }, [open])
-  const save = () => { setToken(value.trim()); onClose() }
+/** 账号菜单：当前登录账号、修改口令、退出登录。 */
+export function AccountMenu() {
+  const session = useOptionalSession()
+  if (!session) return null
+  const u = session.user
   return (
-    <Modal open={open} title="API 访问令牌" onClose={onClose}
-      footer={<>
-        <Button variant="ghost" onClick={() => { setToken(''); onClose() }}>清除</Button>
-        <Button variant="primary" onClick={save}>保存</Button>
-      </>}>
-      {reason && <p className="mb-3 rounded-[10px] border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-sm text-[#92400e]">{reason}</p>}
-      <Field label="Bearer Token" hint="对应服务端 AUTOBID_API_TOKEN；保存在本浏览器 localStorage，请求时以 Authorization: Bearer 发送，SSE 以 ?token= 发送。服务端未配置令牌时可留空。令牌变更后各页面以新令牌重新读取，未保存的编辑内容保留。">
-        <Input type="password" value={value} autoFocus onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && save()} placeholder="未设置" />
-      </Field>
-    </Modal>
+    <Menu label={`当前账号：${u.display_name}（${u.login}）`} trigger={
+      <span className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm text-fg hover:bg-soft">
+        <UserRound className="size-4" strokeWidth={1.7} aria-hidden /><span className="hidden max-w-32 truncate sm:inline" data-testid="current-account">{u.display_name}</span>
+      </span>}
+      items={[
+        { key: 'who', label: <span className="text-muted">{u.login}{u.is_admin ? ' · 管理员' : ''}</span>, onSelect: () => {}, disabled: true },
+        { key: 'pw', label: '修改口令', onSelect: session.changePassword },
+        { key: 'out', label: '退出登录', onSelect: () => void session.logout() },
+      ]} />
   )
 }
 
@@ -207,7 +213,7 @@ export function GlobalHeader({ status }: { status?: ReactNode }) {
       <div className="flex items-center gap-2">
         <span className="hidden text-xs text-muted md:inline">{status}</span>
         <ThemeToggle />
-        <IconButton label="令牌设置" onClick={shell.openToken}><Settings2 className="size-4" strokeWidth={1.7} /></IconButton>
+        <AccountMenu />
       </div>
     </header>
   )
@@ -232,7 +238,6 @@ export default function AppShell({ active, taskId, children }: { active: NavKey[
   const [vw, setVW] = useState(() => viewportOf(window.innerWidth))
   const [pref, setPref] = useState(readPref)
   const [drawer, setDrawer] = useState(false)
-  const [token, setTokenOpen] = useState<{ open: boolean; reason: string }>({ open: false, reason: '' })
   const [jump, setJump] = useState(false)
   const [healthy, setHealthy] = useState<boolean | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
@@ -265,19 +270,13 @@ export default function AppShell({ active, taskId, children }: { active: NavKey[
   useInterval(refreshPending, 10000)
 
   useEffect(() => {
-    const onUnauthorized = () => setTokenOpen((t) => (t.open ? t : { open: true, reason: '服务端返回 401 未授权，请设置正确的 API Token。未保存的编辑内容仍保留在页面中。' }))
-    const onToken = () => { forgetProjects(); void refreshPending() }
     const onJump = () => setJump(true)
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setJump(true) }
     }
-    window.addEventListener('autobid:unauthorized', onUnauthorized)
-    window.addEventListener('autobid:token-changed', onToken)
     window.addEventListener('autobid:quickjump', onJump)
     window.addEventListener('keydown', onKey)
     return () => {
-      window.removeEventListener('autobid:unauthorized', onUnauthorized)
-      window.removeEventListener('autobid:token-changed', onToken)
       window.removeEventListener('autobid:quickjump', onJump)
       window.removeEventListener('keydown', onKey)
     }
@@ -285,7 +284,6 @@ export default function AppShell({ active, taskId, children }: { active: NavKey[
 
   const ctx: ShellCtx = {
     toggleSidebar, collapsed, narrow, pendingCount,
-    openToken: () => setTokenOpen({ open: true, reason: '' }),
     refreshPending: () => void refreshPending(),
   }
   return (
@@ -307,7 +305,6 @@ export default function AppShell({ active, taskId, children }: { active: NavKey[
           {children}
         </main>
       </div>
-      <TokenDialog open={token.open} reason={token.reason} onClose={() => setTokenOpen({ open: false, reason: '' })} />
       <QuickJump open={jump} onClose={() => setJump(false)} taskId={taskId} />
     </Ctx.Provider>
   )

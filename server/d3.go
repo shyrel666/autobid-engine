@@ -10,7 +10,7 @@ import (
 	"github.com/autobid/autobid-engine/db"
 )
 
-func (a *API) registerD3Routes(mux *http.ServeMux) {
+func (a *API) registerD3Routes(mux *routeMux) {
 	mux.HandleFunc("GET /api/tasks/{id}/storyboards", a.withTask(a.listTaskStoryboards))
 	mux.HandleFunc("GET /api/tasks/{id}/sections/{sectionID}/storyboard", a.withTask(a.getSectionStoryboard))
 	mux.HandleFunc("PUT /api/tasks/{id}/sections/{sectionID}/storyboard", a.withTask(a.upsertSectionStoryboard))

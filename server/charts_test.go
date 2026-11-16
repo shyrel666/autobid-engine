@@ -37,7 +37,7 @@ func newChartAPI(t *testing.T) (*apiClient, *export.Service) {
 	m := NewManager(pg)
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil }, Config{Workers: 1})
 	svc := &export.Service{DB: pg, Store: &export.Store{Root: t.TempDir()}, Renderer: pngRenderer{}}
-	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Token: testToken, Export: svc})
+	api := testAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Export: svc})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() {
 		srv.Close()
@@ -50,7 +50,6 @@ func newChartAPI(t *testing.T) (*apiClient, *export.Service) {
 func (c *apiClient) download(path string) (int, http.Header, []byte) {
 	c.t.Helper()
 	req, _ := http.NewRequest("GET", c.url+path, nil)
-	req.Header.Set("Authorization", "Bearer "+testToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.t.Fatal(err)

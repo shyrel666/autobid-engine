@@ -15,7 +15,7 @@ import type { WritingPanel } from '../../../lib/routes'
 import { ChartsCard } from '../export/ExportParts'
 import { EvidenceDetailDrawer, EvidencePicker, EvidenceStateRow } from '../evidence/Evidence'
 import { sectionTone } from '../outline/OutlinePage'
-import { OperatorField } from '../../task-workspace/OperatorField'
+import { CurrentAccount } from '../../task-workspace/CurrentAccount'
 import { useTaskWorkspace, useTick } from '../../task-workspace/TaskWorkspaceProvider'
 import RevisionCompare from './RevisionCompare'
 import SectionJobs from './SectionJobs'
@@ -201,7 +201,7 @@ export default function SectionWorkspace({ sectionId, layout, tocButton }: { sec
             写作核验：{d.writing_verification.verdict === 'stale' ? '已失效' : d.writing_verification.verdict === 'passed' ? '通过' : `未通过（无据断言 ${d.writing_verification.metrics.ungrounded_claim_count}）`}
           </Badge>
         )}
-        <OperatorField />
+        <CurrentAccount />
         {layout !== 'three' && <Button size="sm" icon={<PanelRight className="size-3.5" />} onClick={() => setPanelDrawer(true)}>写作依据</Button>}
         <Button size="sm" variant="primary" loading={saving} disabled={!dirty || !d.writable}
           title={!d.writable ? d.blocked_reason : !dirty ? '没有未保存的修改' : ''} onClick={() => void save()}>保存</Button>

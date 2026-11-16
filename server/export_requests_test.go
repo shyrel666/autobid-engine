@@ -49,7 +49,7 @@ func newExportRequestAPI(t *testing.T, svc *export.Service, runner *export.Runne
 	ctx, cancel := context.WithCancel(context.Background())
 	m := NewManager(pg)
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil }, Config{Workers: 1})
-	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Token: testToken, Export: svc, ExportRunner: runner})
+	api := testAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Export: svc, ExportRunner: runner})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() {
 		srv.Close()
@@ -151,7 +151,6 @@ func TestHTTPExportRequests(t *testing.T) {
 	headerKey := func() (int, exportSubmitResp) {
 		b, _ := json.Marshal(map[string]any{"formats": []string{"docx"}})
 		req, _ := http.NewRequest("POST", c.url+base+"/exports", bytes.NewReader(b))
-		req.Header.Set("Authorization", "Bearer "+testToken)
 		req.Header.Set("Idempotency-Key", "hdr-preview-1")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

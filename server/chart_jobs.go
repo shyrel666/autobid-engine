@@ -22,7 +22,7 @@ import (
 	"github.com/autobid/autobid-engine/toolhealth"
 )
 
-func (a *API) registerChartJobRoutes(mux *http.ServeMux) {
+func (a *API) registerChartJobRoutes(mux *routeMux) {
 	mux.HandleFunc("POST /api/tasks/{id}/chart-jobs", a.withTask(a.submitChartJob))
 	mux.HandleFunc("GET /api/tasks/{id}/chart-jobs", a.withTask(a.listChartJobs))
 	mux.HandleFunc("GET /api/tasks/{id}/chart-jobs/{jobID}", a.withTask(a.getChartJob))

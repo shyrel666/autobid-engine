@@ -20,7 +20,6 @@ import (
 func streamFile(t *testing.T, c *fileAPI, task int64, name string, data []byte) *db.TaskFileObject {
 	t.Helper()
 	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/tasks/%d/files?filename=%s", c.url, task, name), bytes.NewReader(data))
-	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -299,7 +298,6 @@ func TestFixedStreamingOversizeUpload(t *testing.T) {
 	// Exercise the actual streaming store limit without allocating a 64 MiB request.
 	c.store.SetMaxBytes(16)
 	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/tasks/%d/files?filename=large.txt", c.url, task), strings.NewReader(strings.Repeat("x", 32)))
-	req.Header.Set("Authorization", "Bearer "+testToken)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

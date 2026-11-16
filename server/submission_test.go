@@ -125,10 +125,7 @@ func TestHTTPSubmissionChecklist(t *testing.T) {
 			t.Errorf("%s: %d %q (%s), want %d %q", name, code, r.Code, r.Error, tc.status, tc.code)
 		}
 	}
-	// 没有写明操作人：拒绝（c.do 不带 X-Autobid-User）。
-	if code := c.do("PUT", sub(rid)+"/cover_check", map[string]any{"status": "confirmed"}, nil); code != 400 {
-		t.Fatalf("confirmation without an operator: %d", code)
-	}
+	// R2：确认人取自登录身份，不再存在"未写明操作人"的请求（匿名请求在鉴权层即被拒绝，见 auth_test.go）。
 
 	// 逐项处理：知悉内置模板、确认、不适用、未通过后改判。
 	if code, r := call("PUT", sub(rid)+"/own_template", map[string]any{"status": "confirmed", "note": "本项目招标文件未要求版式，接受内置模板"}); code != 200 ||

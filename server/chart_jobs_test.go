@@ -55,7 +55,7 @@ func newChartJobAPI(t *testing.T, taskID int64, svc *export.Service, writer Sect
 	m := NewManager(pg)
 	e := NewEngine(m, func(*Task) (*agent.Planner, *agent.Worker) { return nil, nil }, Config{Workers: 1})
 	runner := &export.ChartRunner{Service: svc, Owner: "http-test", TaskID: taskID, Lease: time.Minute}
-	api := NewAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Token: testToken, Export: svc, SectionWriter: writer})
+	api := testAPI(ctx, m, e, NewLLMService(pg, LLMServiceConfig{}), nil, NewHub(), APIConfig{Export: svc, SectionWriter: writer})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() {
 		srv.Close()

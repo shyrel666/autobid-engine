@@ -127,7 +127,7 @@ func (e *Engine) emitWoken(w db.WokenIntent) {
 // HTTP：GET /api/tasks/{id}/agent-jobs
 // ---------------------------------------------------------------------------
 
-func (a *API) registerAgentJobRoutes(mux *http.ServeMux) {
+func (a *API) registerAgentJobRoutes(mux *routeMux) {
 	mux.HandleFunc("GET /api/tasks/{id}/agent-jobs", a.withTask(a.listAgentJobs))
 }
 

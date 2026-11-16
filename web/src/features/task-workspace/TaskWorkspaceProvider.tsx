@@ -31,6 +31,11 @@ interface TaskCtx {
 
 const Ctx = createContext<TaskCtx | null>(null)
 
+/** 当前账号在本项目中的角色；在项目工作台之外或尚未读取时为 undefined（调用方按"未知"处理，不隐藏按钮）。 */
+export function useMyRoles(): string[] | undefined {
+  return useContext(Ctx)?.task.data?.my_roles
+}
+
 export function useTaskWorkspace(): TaskCtx {
   const c = useContext(Ctx)
   if (!c) throw new Error('useTaskWorkspace must be used inside TaskWorkspaceProvider')

@@ -90,7 +90,7 @@ await step('图表作业运行中杀进程：重启后只产生一张图', async
 await step('导出作业运行中杀进程：重启后同一请求组完成，不产生重复作业', async () => {
   await api('POST', `/api/tasks/${project.id}/compliance/verify`, {})
   await api('POST', `/api/tasks/${project.id}/consistency/runs`)
-  const sub = await api('POST', `/api/tasks/${project.id}/exports`, { request_key: 's7-recover-export', formats: ['docx', 'pdf'], mode: 'final' })
+  const sub = await api('POST', `/api/tasks/${project.id}/exports`, { request_key: 's7-recover-export', formats: ['docx', 'pdf'], mode: 'final', bidder: '合成档案服务公司' })
   const jobs = sub.jobs ?? sub.request.jobs
   await waitFor('导出开始执行', async () => {
     const list = await api('GET', `/api/tasks/${project.id}/exports`)
@@ -104,7 +104,7 @@ await step('导出作业运行中杀进程：重启后同一请求组完成，�
     return list.length === jobs.length && list.every((j) => j.status === 'succeeded') ? list : undefined
   }, { timeout: 280000 })
   assert(done.every((j) => j.business_state === 'final_ready'), '恢复后应仍是严格最终稿')
-  const again = await api('POST', `/api/tasks/${project.id}/exports`, { request_key: 's7-recover-export', formats: ['docx', 'pdf'], mode: 'final' })
+  const again = await api('POST', `/api/tasks/${project.id}/exports`, { request_key: 's7-recover-export', formats: ['docx', 'pdf'], mode: 'final', bidder: '合成档案服务公司' })
   assert(again.replayed === true, '同键重发应重放原请求组，不产生新作业')
   await page.reload()
   await page.getByText('最终稿已生成', { exact: false }).first().waitFor()

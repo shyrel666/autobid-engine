@@ -36,7 +36,7 @@ func buildDefaultTemplate() ([]byte, error) {
 		`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`)
 	files["docProps/core.xml"] = []byte(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
 		`<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/">` +
-		`<dc:title>{{title}}</dc:title><dc:creator>AutoBid Engine</dc:creator></cp:coreProperties>`)
+		`<dc:title>{{title}}</dc:title><dc:creator>{{bidder}}</dc:creator></cp:coreProperties>`)
 	files["word/_rels/document.xml.rels"] = []byte(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
 		`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
 		`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +

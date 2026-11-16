@@ -1,7 +1,7 @@
 package export
 
-// 文档引擎：WPS 或 Word 打开生成的 DOCX，刷新全部目录直到页码稳定，再另存 DOCX / 导出 PDF，使成稿目录页码与
-// 用户在 WPS / Word 中看到的排版一致。按 AUTOBID_OFFICE_ENGINE 探测（auto 时 WPS 优先、Word 备选），
+// 文档引擎：WPS 或 Word 打开生成的 DOCX，刷新全部目录与章节页码引用（PAGEREF）直到页码稳定，再另存 DOCX / 导出 PDF，
+// 使成稿目录与评分索引表的页码同用户在 WPS / Word 中看到的排版一致。按 AUTOBID_OFFICE_ENGINE 探测（auto 时 WPS 优先、Word 备选），
 // 每个候选先用内置小样本实际跑一遍刷新与回读自检，通过才启用。COM 自动化实现见 office_windows.go。
 
 import (
@@ -28,16 +28,18 @@ const (
 type Office interface {
 	Name() string    // EngineWPS / EngineWord
 	Version() string // 引擎自报的名称与版本
-	// Refresh 打开 inDocx，更新全部目录直到稳定，然后另存 outDocx 与 / 或 outPDF（为空表示不生成）。
+	// Refresh 打开 inDocx，更新全部目录与章节页码引用直到稳定，然后另存 outDocx 与 / 或 outPDF（为空表示不生成）。
+	// 两者同时给出时出自同一次排版：DOCX 域缓存里的页码与 PDF 的物理页一一对应。
 	Refresh(ctx context.Context, inDocx, outDocx, outPDF string) (*RefreshResult, error)
 }
 
 // RefreshResult 是一次刷新的结果。
 type RefreshResult struct {
-	Passes  int    `json:"passes"`
-	Indexes int    `json:"indexes"`
-	TOC     string `json:"toc"`
-	Version string `json:"version"`
+	Passes   int    `json:"passes"`
+	Indexes  int    `json:"indexes"`
+	TOC      string `json:"toc"`
+	PageRefs int    `json:"pagerefs"` // 刷新过的章节页码引用（PAGEREF _Ref...）个数
+	Version  string `json:"version"`
 }
 
 // selfTestTimeout 是启动自检单次刷新的最短上限。
@@ -103,7 +105,8 @@ func DetectOffice(ctx context.Context, opt OfficeOptions) (Office, error) {
 	return nil, fmt.Errorf("%w: %s", ErrOfficeUnavailable, strings.Join(reasons, "; "))
 }
 
-// selfTestOffice 用内置模板生成两章小样本，刷新后回读：DOCX 目录域要有带页码的条目，PDF 目录页码要与标题所在页一致。
+// selfTestOffice 用内置模板生成两章小样本（含评分索引表），刷新后回读：DOCX 目录域要有带页码的条目，PDF 目录页码要与标题
+// 所在页一致，评分索引表的章节页码引用要被刷新成标题实际所在的页。
 func selfTestOffice(ctx context.Context, o Office) error {
 	tpl, err := DefaultTemplate()
 	if err != nil {
@@ -115,6 +118,10 @@ func selfTestOffice(ctx context.Context, o Office) error {
 			{SectionID: 2, Code: "2", Title: "自检章节二", Level: 1, Seq: 1, RevNo: 1, RevID: 2},
 		}},
 		Bodies: map[int64]string{1: "文档引擎自检正文。", 2: "文档引擎自检正文。"},
+		Package: db.PackageSnapshot{ScoreIndex: []db.SnapshotScoreRow{
+			{RequirementID: 1, Code: "S1", Title: "自检评分项一", Score: 10, Sections: []db.SnapshotSectionRef{{SectionID: 1, Code: "1", Title: "自检章节一"}}},
+			{RequirementID: 2, Code: "S2", Title: "自检评分项二", Score: 5, Sections: []db.SnapshotSectionRef{{SectionID: 2, Code: "2", Title: "自检章节二"}}},
+		}},
 		Bidder: "自检", Date: "2026年01月01日",
 	}
 	built, err := Build(tpl, in)
@@ -163,6 +170,22 @@ func selfTestOffice(ctx context.Context, o Office) error {
 		switch is.Kind {
 		case IssueTOCMissing, IssueTOCPage, IssueHeadingMissing:
 			return fmt.Errorf("self-test PDF TOC check failed: %s", is.Detail)
+		}
+	}
+	docx, err := os.ReadFile(outDocx)
+	if err != nil {
+		return err
+	}
+	checks, issues, err := CheckPageRefs(docx, built.Bookmarks, built.PageRefs, pr, dr.TOC)
+	if err != nil {
+		return fmt.Errorf("self-test page references unreadable: %w", err)
+	}
+	if len(issues) > 0 {
+		return fmt.Errorf("self-test page references were not refreshed: %s", issues[0].Detail)
+	}
+	for _, c := range checks {
+		if c.Listed == 0 || c.Listed != c.Actual {
+			return fmt.Errorf("self-test page reference to %q shows page %d, the heading is on page %d", c.Title, c.Listed, c.Actual)
 		}
 	}
 	return nil

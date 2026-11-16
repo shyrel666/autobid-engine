@@ -146,7 +146,7 @@ func (a *API) exportPreflight(w http.ResponseWriter, r *http.Request, t *Task) {
 	}
 	policy := db.ExportPolicyPreviewV1
 	if strict {
-		policy = db.ExportPolicyFinalV1
+		policy = db.ExportPolicyFinal
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"readiness": pre.Readiness, "warnings": pre.Warnings, "charts": pre.Charts,
 		"strict_runtime": strict, "policy_version": policy, "status": a.exportSvc().Status(), "templates": tpls,

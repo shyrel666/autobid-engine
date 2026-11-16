@@ -222,6 +222,7 @@ if (want('export-runtime-failure')) await rec.check('导出执行失败（文档
   const { page, context } = await newPage(browser)
   await page.goto(`${BASE}/tasks/${ready.id}/export`)
   await page.getByText('可以导出').waitFor()
+  await page.getByPlaceholder('如：某某科技有限公司').fill('联调样例科技有限公司')
   await page.getByRole('button', { name: '锁定版本并导出' }).click()
   await toast(page, /已提交.*导出请求组/).waitFor()
   const pdf = page.locator('tr').filter({ hasText: 'PDF' }).first()

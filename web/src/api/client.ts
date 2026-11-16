@@ -14,7 +14,7 @@ import type {
   RequirementsView, SaveRevisionReq, SaveRevisionResult, SectionDetail, BidScopeInput, VetoStatus, SectionWriteJob,
   ComplianceCoverage, ConsistencyFinding, ConsistencyRun, ConsistencyRunDetail, ExportReadiness, MatrixView, ResolveFindingReq, VerifyMatrixResult,
   ChartJobReq, ChartJobResp, ChartRenderJob, ChartReq, CreateExportReq, ExportCancelResult, ExportJob, ExportMode, ExportPreflight, ExportRequest,
-  ExportStatus, ExportSubmitResp, ExportTemplate, ProposalChart,
+  ExportStatus, ExportSubmitResp, ExportTemplate, ProposalChart, SubmissionCheckReq, SubmissionResp,
   RuntimeCapability, RuntimeCapabilityStatus, AgentJob,
   LLMSettings, LLMPoolStatus, LLMProfileInput, LLMTestResult, LLMRecordDetail, LLMRecordsResp, SystemCatalog, AgentRoleKey, TaskGraph,
   CompanyPerformance, EvidenceOriginal, EvidenceBinding, AdmissibilityRun, AdmissibilityDecision,
@@ -394,6 +394,12 @@ export const api = {
   cancelExportRequest: (id: number, requestID: number) =>
     post<{ request: ExportRequest; results: ExportCancelResult[] }>(`${t(id)}/export-requests/${requestID}/cancel`),
   downloadExport: (id: number, jobID: number) => blob(`${t(id)}/exports/${jobID}/download`),
+  // D4 提交检查清单：按导出请求组；系统项每次由服务器重算，人工确认带操作人留痕。
+  submission: (id: number, requestID: number) => get<SubmissionResp>(`${t(id)}/export-requests/${requestID}/submission`),
+  setSubmissionCheck: (id: number, requestID: number, key: string, req: SubmissionCheckReq) =>
+    put<SubmissionResp>(`${t(id)}/export-requests/${requestID}/submission/${encodeURIComponent(key)}`, req),
+  withdrawSubmissionCheck: (id: number, requestID: number, key: string, expectedVersion?: number) =>
+    json<SubmissionResp>('DELETE', `${t(id)}/export-requests/${requestID}/submission/${encodeURIComponent(key)}${qs({ expected_version: expectedVersion })}`),
   exportTemplates: () => get<{ templates: ExportTemplate[]; default_template_hash: string }>('/api/export/templates'),
   runtimeTools: (capability?: RuntimeCapability) =>
     get<{ capabilities: RuntimeCapabilityStatus[]; now: string }>(`/api/runtime/tools${qs({ capability })}`),

@@ -1902,19 +1902,29 @@ CREATE TRIGGER trg_export_jobs_upd BEFORE UPDATE ON export_jobs
 -- 导出快照不可篡改：导出后再编辑章节、重绘图表或重新核验矩阵都不影响已创建任务的快照。
 -- S4 起同样冻结请求组、严格策略、执行版本、截止时间与尝试预算（列见文末 S4 段），终态之后状态不再变化：
 -- 取消或失败后迟到的成功、失败与心跳都不能改写作业。
+-- D4：package_snapshot（评分索引 / 承诺事项 / 证明材料索引）与其他快照一起冻结；self_check（成稿回读自检结果）随成功结果
+-- 一次写入，终态之后与产物哈希一起不可再改——提交检查清单的系统可查项与人工确认都以它们为准。
+-- 这两列必须先于触发器函数存在：旧库重放本文件时，函数一旦替换就会被后面的语句触发。
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS package_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS self_check JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE OR REPLACE FUNCTION export_jobs_immutable() RETURNS trigger AS $$
 BEGIN
     IF (NEW.tenant_id, NEW.task_id, NEW.outline_id, NEW.outline_version, NEW.format, NEW.template_id, NEW.template_key, NEW.template_hash,
         NEW.rev_snapshot, NEW.chart_snapshot, NEW.matrix_snapshot, NEW.doc_snapshot, NEW.gate, NEW.created_by, NEW.created_at,
-        NEW.export_request_id, NEW.strict_runtime, NEW.executor, NEW.deadline_at, NEW.max_attempts)
+        NEW.export_request_id, NEW.strict_runtime, NEW.executor, NEW.deadline_at, NEW.max_attempts, NEW.package_snapshot)
        IS DISTINCT FROM
        (OLD.tenant_id, OLD.task_id, OLD.outline_id, OLD.outline_version, OLD.format, OLD.template_id, OLD.template_key, OLD.template_hash,
         OLD.rev_snapshot, OLD.chart_snapshot, OLD.matrix_snapshot, OLD.doc_snapshot, OLD.gate, OLD.created_by, OLD.created_at,
-        OLD.export_request_id, OLD.strict_runtime, OLD.executor, OLD.deadline_at, OLD.max_attempts) THEN
+        OLD.export_request_id, OLD.strict_runtime, OLD.executor, OLD.deadline_at, OLD.max_attempts, OLD.package_snapshot) THEN
         RAISE EXCEPTION 'export job % snapshot is immutable', OLD.id USING ERRCODE = 'check_violation';
     END IF;
     IF OLD.status IN ('succeeded','failed','cancelled') AND NEW.status IS DISTINCT FROM OLD.status THEN
         RAISE EXCEPTION 'export job % is already %', OLD.id, OLD.status USING ERRCODE = 'check_violation';
+    END IF;
+    IF OLD.status IN ('succeeded','failed','cancelled')
+       AND (NEW.self_check, NEW.artifact_hash) IS DISTINCT FROM (OLD.self_check, OLD.artifact_hash) THEN
+        RAISE EXCEPTION 'export job % result is immutable once %', OLD.id, OLD.status USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
 END;
@@ -3288,3 +3298,87 @@ ALTER TABLE export_jobs ADD CONSTRAINT ck_export_jobs_strict
 ALTER TABLE export_jobs DROP CONSTRAINT IF EXISTS ck_export_jobs_final;
 ALTER TABLE export_jobs ADD CONSTRAINT ck_export_jobs_final
     CHECK (NOT strict_runtime OR status <> 'succeeded' OR (toc_refreshed AND office_engine <> ''));
+
+-- ---------------------------------------------------------------------------
+-- D4 (ROADMAP D4 / RELIABILITY_PLAN R3): final draft and submission. Domain C plus the export attachment domain.
+--   export_jobs            package_snapshot and self_check are added next to export_jobs_immutable above.
+--   consistency_findings   gains kind ledger_mismatch: a section states a value for a metric that differs from every
+--                          confirmed commitment-ledger entry of that metric. The ledger, not another section, is the
+--                          baseline; commitment_id / commitment_version record which entry the text was compared to.
+--   consistency_runs       ledger_mismatches counts those findings; rule_version records the rules the run used.
+--   submission_checks      white-glove confirmations for one export request: things the system cannot verify
+--                          (signature and seal, import into the trading platform's bid tool, upload receipt) and the
+--                          acknowledgement of attention items. A confirmation is bound to the artifacts it was made
+--                          against (artifact_hashes); the checklist version is fixed when the row is first written.
+--   submission_check_events  append-only audit of every confirmation, change and withdrawal.
+-- ---------------------------------------------------------------------------
+ALTER TABLE consistency_findings
+    ADD COLUMN IF NOT EXISTS commitment_id BIGINT,
+    ADD COLUMN IF NOT EXISTS commitment_version INT;
+ALTER TABLE consistency_findings DROP CONSTRAINT IF EXISTS consistency_findings_kind_check;
+ALTER TABLE consistency_findings DROP CONSTRAINT IF EXISTS ck_consistency_findings_kind;
+ALTER TABLE consistency_findings ADD CONSTRAINT ck_consistency_findings_kind
+    CHECK (kind IN ('contradiction','omission','ledger_mismatch'));
+ALTER TABLE consistency_findings DROP CONSTRAINT IF EXISTS ck_consistency_findings_shape;
+ALTER TABLE consistency_findings ADD CONSTRAINT ck_consistency_findings_shape CHECK (
+    (kind = 'contradiction' AND a_section_id IS NOT NULL AND b_section_id IS NOT NULL AND a_rev_no IS NOT NULL AND b_rev_no IS NOT NULL)
+    OR (kind = 'omission' AND requirement_item_id IS NOT NULL)
+    OR (kind = 'ledger_mismatch' AND a_section_id IS NOT NULL AND a_rev_no IS NOT NULL AND commitment_id IS NOT NULL));
+ALTER TABLE consistency_runs ADD COLUMN IF NOT EXISTS ledger_mismatches INT NOT NULL DEFAULT 0;
+-- rule_version: the extraction / comparison rules a run was made with (compliance.ConsistencyRuleVersion). Runs made by an
+-- older version are not current: they never compared the text to the ledger, so export requires a new run.
+ALTER TABLE consistency_runs ADD COLUMN IF NOT EXISTS rule_version TEXT NOT NULL DEFAULT 'consistency-v1';
+
+CREATE TABLE IF NOT EXISTS submission_checks (
+    id                BIGSERIAL PRIMARY KEY,
+    tenant_id         TEXT NOT NULL DEFAULT 'default',
+    task_id           BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    export_request_id BIGINT NOT NULL,
+    item_key          TEXT NOT NULL CHECK (item_key <> ''),
+    checklist_version TEXT NOT NULL CHECK (checklist_version <> ''),
+    status            TEXT NOT NULL CHECK (status IN ('confirmed','failed','not_applicable')),
+    note              TEXT NOT NULL DEFAULT '',
+    reference         TEXT NOT NULL DEFAULT '',
+    artifact_hashes   JSONB NOT NULL CHECK (jsonb_typeof(artifact_hashes) = 'object'),
+    confirmed_by      TEXT NOT NULL CHECK (confirmed_by <> ''),
+    confirmed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    version           INT NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_by        TEXT NOT NULL DEFAULT '',
+    updated_by        TEXT NOT NULL DEFAULT '',
+    approved_by       TEXT NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_submission_checks_item UNIQUE (tenant_id, task_id, export_request_id, item_key),
+    CONSTRAINT ck_submission_checks_note CHECK (status = 'confirmed' OR note <> ''),
+    CONSTRAINT fk_submission_checks_request FOREIGN KEY (tenant_id, task_id, export_request_id)
+        REFERENCES export_requests(tenant_id, task_id, id) ON DELETE CASCADE
+);
+DROP TRIGGER IF EXISTS trg_submission_checks_upd ON submission_checks;
+CREATE TRIGGER trg_submission_checks_upd BEFORE UPDATE ON submission_checks
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS submission_check_events (
+    id                BIGSERIAL PRIMARY KEY,
+    tenant_id         TEXT NOT NULL DEFAULT 'default',
+    task_id           BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    export_request_id BIGINT NOT NULL,
+    item_key          TEXT NOT NULL,
+    action            TEXT NOT NULL CHECK (action IN ('confirmed','failed','not_applicable','withdrawn')),
+    note              TEXT NOT NULL DEFAULT '',
+    reference         TEXT NOT NULL DEFAULT '',
+    artifact_hashes   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by        TEXT NOT NULL DEFAULT '',
+    updated_by        TEXT NOT NULL DEFAULT '',
+    approved_by       TEXT NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_submission_check_events_request
+    ON submission_check_events(tenant_id, task_id, export_request_id, id);
+CREATE OR REPLACE FUNCTION submission_check_events_append_only() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'submission_check_events is append-only' USING ERRCODE = 'check_violation';
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_submission_check_events_append_only ON submission_check_events;
+CREATE TRIGGER trg_submission_check_events_append_only BEFORE UPDATE ON submission_check_events
+    FOR EACH ROW EXECUTE FUNCTION submission_check_events_append_only();

@@ -252,7 +252,11 @@ func exportReadinessTx(ctx context.Context, q queryer, tenant string, taskID int
 	case !det.Current:
 		r.ConsistencyRun = det.Run.ID
 		reason := det.Run.StaleReason
-		if reason == "" {
+		switch {
+		case reason != "":
+		case det.Run.RuleVersion != compliance.ConsistencyRuleVersion:
+			reason = "核验规则已升级（正文承诺现在与承诺台账比对），需重新运行"
+		default:
 			reason = "快照与当前章节修订不一致"
 		}
 		r.block(ExportBlocker{Kind: BlockConsistencyStale, Message: "最近一次全文一致性核验已过期：" + reason})

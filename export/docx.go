@@ -9,7 +9,11 @@ package export
 //     列数 >= 10 或最小列宽之和超出纵向版芯时放进横向页面分节；
 //   - 图表：PNG 按版芯宽高等比缩放后内嵌（宽高比 > 2.4 的放进横向分节），未渲染的 Mermaid 插入源码占位框，
 //     设备选型表渲染为原生表格；
-//   - 《点对点应答及偏离表》：来自导出快照中的 compliance_matrix 行。
+//   - 《点对点应答及偏离表》：来自导出快照中的 compliance_matrix 行，逐条带响应章节页码；
+//   - D4 附表（快照 PackageSnapshot 非空时）：目录之后的《评分索引表》（评分项 → 响应章节 → 页码），章节标题下的
+//     「响应评分项」提示行，附录《承诺事项一览表》与《证明材料索引》。页码一律是指向章节标题书签的 PAGEREF 域，
+//     由文档引擎刷新；未刷新时的缓存结果是 PageRefPlaceholder；
+//   - 元数据：docProps/core.xml 整体重写（标题 = 项目名称，作者 / 最后修改者 = 投标人），不保留模板作者与平台字样。
 
 import (
 	"archive/zip"
@@ -35,6 +39,17 @@ const TOCPlaceholder = "目录待更新：请在 Word 中右键目录选择「�
 // DeviationTitle 是偏离表章节标题。
 const DeviationTitle = "附录 点对点应答及偏离表"
 
+// D4 附表标题与未刷新页码的占位文字。
+const (
+	ScoreIndexTitle    = "评分索引表"
+	CommitmentTitle    = "附录 承诺事项一览表"
+	EvidenceIndexTitle = "附录 证明材料索引"
+	PageRefPlaceholder = "—"
+)
+
+// SectionBookmark 是章节标题书签名（沿用 Word 交叉引用的 _Ref 前缀，不带平台字样）。
+func SectionBookmark(sectionID int64) string { return fmt.Sprintf("_Ref%d", 100000000+sectionID) }
+
 // BuildInput 是一次生成的全部输入（均来自导出快照）。
 type BuildInput struct {
 	Doc         db.DocSnapshot
@@ -42,6 +57,7 @@ type BuildInput struct {
 	Charts      []db.SnapshotChart
 	ChartImages map[int64][]byte // 图表 ID -> PNG
 	Matrix      []db.SnapshotMatrixRow
+	Package     db.PackageSnapshot
 	Bidder      string
 	Date        string
 	// UpdateFieldsOnOpen 在 settings.xml 中要求 Word 打开时更新域（目录未经文档引擎刷新时使用）。
@@ -55,6 +71,10 @@ type BuildResult struct {
 	Headings   []string // 写入的标题文字（按顺序，含偏离表标题）
 	MatrixRows int
 	Landscape  int // 横向分节数
+	// Bookmarks 是写入的章节书签（书签名 -> 标题文字）；PageRefs 是指向它们的 PAGEREF 域个数（回读时逐个核对页码）。
+	Bookmarks map[string]string
+	PageRefs  int
+	ScoreRows int
 }
 
 type block struct {
@@ -81,6 +101,9 @@ type docWriter struct {
 	fig, tbl  int
 	warnings  []db.ExportWarning
 	headings  []string
+	bookmarks map[string]string
+	nextMark  int
+	pageRefs  int
 }
 
 func (w *docWriter) style(name string) string { return w.styles[name] }
@@ -290,11 +313,59 @@ func (w *docWriter) para(style, extraPPr, runs string) {
 	w.blocks = append(w.blocks, block{pPr: ppr + extraPPr, content: runs})
 }
 
-func (w *docWriter) heading(level int, text string, pageBreak bool) {
+// heading 写入一个进目录的标题；bookmark 非空时在标题上加书签（PAGEREF 的目标）。
+func (w *docWriter) heading(level int, text string, pageBreak bool, bookmark string) {
 	level = min(max(level, 1), 6)
+	content := run(text, runStyle{})
+	if bookmark != "" {
+		w.nextMark++
+		content = fmt.Sprintf(`<w:bookmarkStart w:id="%d" w:name="%s"/>%s<w:bookmarkEnd w:id="%d"/>`, w.nextMark, bookmark, content, w.nextMark)
+		w.bookmarks[bookmark] = text
+	}
 	w.blocks = append(w.blocks, block{pPr: `<w:pStyle w:val="` + w.style(fmt.Sprintf("heading %d", level)) + `"/>`,
-		content: run(text, runStyle{}), sticky: true, pageBreak: pageBreak})
+		content: content, sticky: true, pageBreak: pageBreak})
 	w.headings = append(w.headings, text)
+}
+
+// 表格单元格中的页码引用标记：pageRef(书签名) 生成的片段在 fields 表格里渲染为 PAGEREF 域（私用区字符不会出现在正文里）。
+const (
+	refOpen  = "\uE000"
+	refClose = "\uE001"
+)
+
+var reRefMark = regexp.MustCompile(refOpen + `([A-Za-z0-9_]+)` + refClose)
+
+func pageRef(bookmark string) string { return refOpen + bookmark + refClose }
+
+// stripRefs 把页码引用标记换成等宽的数字占位（列宽估算用）。
+func stripRefs(s string) string { return reRefMark.ReplaceAllString(s, "000") }
+
+// fieldRuns 是一个复杂域（begin / instr / separate / 缓存结果 / end）。
+func fieldRuns(instr, cached string, st runStyle) string {
+	return `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ` + esc(instr) + ` </w:instrText></w:r>` +
+		`<w:r><w:fldChar w:fldCharType="separate"/></w:r>` + run(cached, st) + `<w:r><w:fldChar w:fldCharType="end"/></w:r>`
+}
+
+// cellRuns 渲染一行单元格文字；fields 为真时把页码引用标记渲染为 PAGEREF 域（目标书签不存在时写占位文字）。
+func (w *docWriter) cellRuns(line string, st runStyle, fields bool) string {
+	if !fields || !strings.Contains(line, refOpen) {
+		return inline(line, st)
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range reRefMark.FindAllStringSubmatchIndex(line, -1) {
+		b.WriteString(inline(line[last:m[0]], st))
+		name := line[m[2]:m[3]]
+		if _, ok := w.bookmarks[name]; ok {
+			b.WriteString(fieldRuns(`PAGEREF `+name+` \h`, PageRefPlaceholder, st))
+			w.pageRefs++
+		} else {
+			b.WriteString(run(PageRefPlaceholder, st))
+		}
+		last = m[1]
+	}
+	b.WriteString(inline(line[last:], st))
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +435,7 @@ func (w *docWriter) markdown(md, sectionTitle string) {
 				code = append(code, lines[i])
 			}
 			for _, c := range code {
-				w.para(w.style("autobid code"), "", run(c, runStyle{}))
+				w.para(w.style("code text"), "", run(c, runStyle{}))
 			}
 		case reMDHeading.MatchString(t):
 			flush()
@@ -372,7 +443,7 @@ func (w *docWriter) markdown(md, sectionTitle string) {
 			if first && normTitle(m[2]) == normTitle(sectionTitle) {
 				break
 			}
-			w.blocks = append(w.blocks, block{pPr: `<w:pStyle w:val="` + w.style("autobid subheading") + `"/>`, content: inline(m[2], runStyle{}), sticky: true})
+			w.blocks = append(w.blocks, block{pPr: `<w:pStyle w:val="` + w.style("subheading") + `"/>`, content: inline(m[2], runStyle{}), sticky: true})
 		case reMDRule.MatchString(t):
 			flush()
 		case strings.HasPrefix(t, "|") && i+1 < len(lines) && isTableSep(lines[i+1]):
@@ -401,7 +472,7 @@ func (w *docWriter) markdown(md, sectionTitle string) {
 				marker = strings.TrimRight(m[2], ".)") + "."
 			}
 			left := 420 + 420*min(level, 4)
-			w.para(w.style("autobid list"), fmt.Sprintf(`<w:ind w:leftChars="0" w:left="%d" w:firstLineChars="0" w:firstLine="0"/>`, left),
+			w.para(w.style("list text"), fmt.Sprintf(`<w:ind w:leftChars="0" w:left="%d" w:firstLineChars="0" w:firstLine="0"/>`, left),
 				run(marker+" ", runStyle{})+inline(m[3], runStyle{}))
 		case strings.HasPrefix(t, ">"):
 			flush()
@@ -500,7 +571,7 @@ func columnWidths(header []string, rows [][]string, portraitWidth int) (desired,
 			if c >= len(r) {
 				continue
 			}
-			p := plain(r[c])
+			p := plain(stripRefs(r[c]))
 			u := float64(textUnits(p))
 			maxLen = max(maxLen, u)
 			total += u
@@ -566,9 +637,10 @@ func fitWidths(desired, minimum []float64, width int) []int {
 	return out
 }
 
-// tableOpts 允许调用方指定列权重（偏离表）。
+// tableOpts 允许调用方指定列权重（偏离表），以及单元格里是否有页码引用标记（fields）。
 type tableOpts struct {
 	weights []float64
+	fields  bool
 }
 
 // table 写入一个表格（caption 非空时题注在表上方）。
@@ -614,7 +686,8 @@ func (w *docWriter) table(caption string, header []string, rows [][]string, opt 
 			jc = `<w:jc w:val="center"/>`
 		}
 		for _, line := range strings.Split(text, "\n") {
-			fmt.Fprintf(&b, `<w:p><w:pPr><w:pStyle w:val="%s"/>%s</w:pPr>%s</w:p>`, w.style("autobid table text"), jc, inline(line, runStyle{bold: head}))
+			fmt.Fprintf(&b, `<w:p><w:pPr><w:pStyle w:val="%s"/>%s</w:pPr>%s</w:p>`, w.style("table text"), jc,
+				w.cellRuns(line, runStyle{bold: head}, opt != nil && opt.fields))
 		}
 		b.WriteString(`</w:tc>`)
 	}
@@ -650,7 +723,7 @@ func (w *docWriter) addMedia(name string, data []byte) string {
 	if w.media == nil {
 		w.media = map[string][]byte{}
 	}
-	id := fmt.Sprintf("rIdAutobid%d", len(w.rels)+1)
+	id := fmt.Sprintf("rIdImg%d", len(w.rels)+1)
 	w.media["word/media/"+name] = data
 	w.rels = append(w.rels, rel{id: id, typ: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image", target: "media/" + name})
 	return id
@@ -691,12 +764,12 @@ func (w *docWriter) chart(c db.SnapshotChart, png []byte) {
 		w.nextDocPr++
 		n := w.nextDocPr
 		drawing := fmt.Sprintf(`<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="%d" cy="%d"/><wp:effectExtent l="0" t="0" r="0" b="0"/>`+
-			`<wp:docPr id="%d" name="Chart %d" descr="%s"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>`+
+			`<wp:docPr id="%d" name="图片 %d" descr="%s"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>`+
 			`<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="%d" name="chart%d.png"/><pic:cNvPicPr/></pic:nvPicPr>`+
 			`<pic:blipFill><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm>`+
 			`<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`,
 			int64(cx), int64(cy), n, n, esc(c.Title), n, c.ChartID, id, int64(cx), int64(cy))
-		w.blocks = append(w.blocks, block{pPr: `<w:pStyle w:val="` + w.style("autobid figure") + `"/>`, content: drawing})
+		w.blocks = append(w.blocks, block{pPr: `<w:pStyle w:val="` + w.style("figure") + `"/>`, content: drawing})
 		w.caption(c.Title)
 	default:
 		reason := c.RenderError
@@ -722,14 +795,14 @@ func (w *docWriter) placeholder(c db.SnapshotChart, reason string) {
 		`<w:bottom w:val="dashed" w:sz="8" w:space="0" w:color="C0504D"/><w:right w:val="dashed" w:sz="8" w:space="0" w:color="C0504D"/></w:tblBorders>`+
 		`<w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="%d"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="%d" w:type="dxa"/>`+
 		`<w:shd w:val="clear" w:color="auto" w:fill="F7F7F7"/></w:tcPr>`, width, width, width)
-	fmt.Fprintf(&b, `<w:p><w:pPr><w:pStyle w:val="%s"/></w:pPr>%s</w:p>`, w.style("autobid table text"),
+	fmt.Fprintf(&b, `<w:p><w:pPr><w:pStyle w:val="%s"/></w:pPr>%s</w:p>`, w.style("table text"),
 		run(fmt.Sprintf("【图表未渲染：%s】%s（Mermaid 源码如下，请渲染后替换）", reason, c.Title), runStyle{bold: true}))
 	lines := strings.Split(strings.TrimRight(c.Source, "\n"), "\n")
 	if len(lines) > 60 {
 		lines = append(lines[:60], fmt.Sprintf("……（其余 %d 行省略）", len(lines)-60))
 	}
 	for _, l := range lines {
-		fmt.Fprintf(&b, `<w:p><w:pPr><w:pStyle w:val="%s"/></w:pPr>%s</w:p>`, w.style("autobid code"), run(l, runStyle{}))
+		fmt.Fprintf(&b, `<w:p><w:pPr><w:pStyle w:val="%s"/></w:pPr>%s</w:p>`, w.style("code text"), run(l, runStyle{}))
 	}
 	b.WriteString(`</w:tc></w:tr></w:tbl>`)
 	w.blocks = append(w.blocks, block{table: true, content: b.String()})
@@ -752,22 +825,29 @@ var deviationLabels = map[string]string{
 }
 
 // DeviationHeader 是偏离表表头。
-var DeviationHeader = []string{"序号", "招标条款", "条款类型", "招标要求", "应答章节", "应答说明", "偏离情况"}
+var DeviationHeader = []string{"序号", "招标条款", "条款类型", "招标要求", "应答章节", "页码", "应答说明", "偏离情况"}
 
-func (w *docWriter) deviationTable(rows []db.SnapshotMatrixRow) int {
+// evidence 是证明材料索引的行：某条款有证明材料时，应答说明末尾指明它在《证明材料索引》中的序号。
+func (w *docWriter) deviationTable(rows []db.SnapshotMatrixRow, evidence []db.SnapshotEvidence) int {
 	w.setOrient("portrait")
-	w.heading(1, DeviationTitle, true)
-	w.para("", "", run(fmt.Sprintf("本表依据导出快照中已核验通过的响应矩阵生成，共 %d 条，与正文锁定修订一致。", len(rows)), runStyle{}))
+	w.heading(1, DeviationTitle, true, "")
+	proof := map[string][]string{} // 条款编号 -> 证明材料索引序号
+	for i, e := range evidence {
+		for _, code := range e.RequirementCodes {
+			proof[code] = append(proof[code], strconv.Itoa(i+1))
+		}
+	}
 	body := make([][]string, 0, len(rows))
 	for i, r := range rows {
 		resp := r.ResponseSummary
 		if resp == "" {
 			resp = r.AnchorExcerpt
 		}
-		where := r.SectionCode + " " + r.SectionTitle
-		if r.Anchor != "" {
-			where += "（" + r.Anchor + "）"
+		if nums := proof[r.Code]; len(nums) > 0 {
+			resp = strings.TrimSpace(resp + "\n证明材料：见《证明材料索引》第 " + strings.Join(nums, "、") + " 项")
 		}
+		// 段落锚点（p<序号>-<哈希>）是系统内部定位用的，评委看不懂，也是所有导出文件共有的可识别格式：成稿只给章节与页码。
+		where := strings.TrimSpace(r.SectionCode + " " + r.SectionTitle)
 		kind := kindLabels[r.Kind]
 		if kind == "" {
 			kind = r.Kind
@@ -776,10 +856,138 @@ func (w *docWriter) deviationTable(rows []db.SnapshotMatrixRow) int {
 		if dev == "" {
 			dev = r.Deviation
 		}
-		body = append(body, []string{strconv.Itoa(i + 1), r.Code, kind, r.Title, where, resp, dev})
+		body = append(body, []string{strconv.Itoa(i + 1), r.Code, kind, r.Title, where, pageRef(SectionBookmark(r.SectionID)), resp, dev})
 	}
-	w.table("点对点应答及偏离表", DeviationHeader, body, &tableOpts{weights: []float64{4, 7, 8, 22, 14, 30, 7}})
+	w.table("点对点应答及偏离表", DeviationHeader, body, &tableOpts{weights: []float64{4, 7, 8, 20, 13, 5, 28, 7}, fields: true})
 	return len(rows)
+}
+
+// ---------------------------------------------------------------------------
+// D4 附表：评分索引、承诺事项、证明材料索引
+// ---------------------------------------------------------------------------
+
+// ScoreIndexHeader 是评分索引表表头。
+var ScoreIndexHeader = []string{"序号", "评分项", "分值", "响应章节", "页码"}
+
+// CommitmentHeader 是承诺事项一览表表头。
+var CommitmentHeader = []string{"序号", "承诺事项", "招标要求", "我方承诺", "对应条款", "响应章节", "页码"}
+
+// EvidenceIndexHeader 是证明材料索引表头。
+var EvidenceIndexHeader = []string{"序号", "证明材料", "编号", "证明主体", "原件页码", "对应条款", "引用章节", "页码"}
+
+func formatScore(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+
+// sectionRefs 返回「响应章节」「页码」两个单元格（每个章节一行，页码为指向章节标题书签的引用标记）。
+func sectionRefs(refs []db.SnapshotSectionRef) (names, pages string) {
+	if len(refs) == 0 {
+		return PageRefPlaceholder, PageRefPlaceholder
+	}
+	var n, p []string
+	for _, r := range refs {
+		n = append(n, strings.TrimSpace(r.Code+" "+r.Title))
+		p = append(p, pageRef(SectionBookmark(r.SectionID)))
+	}
+	return strings.Join(n, "\n"), strings.Join(p, "\n")
+}
+
+// scoreIndex 在目录之后写入《评分索引表》：评委按评分表顺序逐项查到响应章节与页码。
+func (w *docWriter) scoreIndex(rows []db.SnapshotScoreRow) int {
+	if len(rows) == 0 {
+		return 0
+	}
+	w.setOrient("portrait")
+	w.heading(1, ScoreIndexTitle, true, "")
+	body := make([][]string, 0, len(rows))
+	for i, r := range rows {
+		names, pages := sectionRefs(r.Sections)
+		body = append(body, []string{strconv.Itoa(i + 1), strings.TrimSpace(r.Code + " " + r.Title), formatScore(r.Score), names, pages})
+	}
+	w.table("", ScoreIndexHeader, body, &tableOpts{weights: []float64{4, 30, 5, 24, 5}, fields: true})
+	return len(rows)
+}
+
+// scoreNote 在章节标题下写一行「响应评分项」，让评委在本节开头就知道这里对应评分表的哪几项、各多少分。
+func (w *docWriter) scoreNote(rows []db.SnapshotScoreRow) {
+	if len(rows) == 0 {
+		return
+	}
+	var parts []string
+	for _, r := range rows {
+		parts = append(parts, fmt.Sprintf("%s（%s 分）", strings.TrimSpace(r.Code+" "+r.Title), formatScore(r.Score)))
+	}
+	w.blocks = append(w.blocks, block{pPr: `<w:keepNext/><w:ind w:firstLineChars="0" w:firstLine="0"/>`,
+		content: run("响应评分项：", runStyle{bold: true}) + run(strings.Join(parts, "；"), runStyle{}), sticky: true})
+}
+
+func (w *docWriter) commitmentTable(rows []db.SnapshotCommitment) {
+	if len(rows) == 0 {
+		return
+	}
+	w.setOrient("portrait")
+	w.heading(1, CommitmentTitle, true, "")
+	body := make([][]string, 0, len(rows))
+	for i, c := range rows {
+		names, pages := sectionRefs(c.Sections)
+		label := c.MetricLabel
+		if label == "" {
+			label = c.Code
+		}
+		body = append(body, []string{strconv.Itoa(i + 1), label, orDash(c.TenderThreshold), orDash(committedText(c.Committed, c.Unit)),
+			orDash(c.RequirementCode), names, pages})
+	}
+	w.table("承诺事项一览表", CommitmentHeader, body, &tableOpts{weights: []float64{4, 14, 18, 14, 8, 20, 5}, fields: true})
+}
+
+// committedText 是承诺值的展示文字：承诺原文只是一个数时补上单位（「5」+「年」），原文自带单位时原样使用（「90 天」）。
+func committedText(committed, unit string) string {
+	committed, unit = strings.TrimSpace(committed), strings.TrimSpace(unit)
+	if committed == "" || unit == "" {
+		return committed
+	}
+	if _, err := strconv.ParseFloat(committed, 64); err != nil {
+		return committed
+	}
+	return committed + " " + unit
+}
+
+var originalKindLabels = map[string]string{"certificate": "证书", "contract": "合同", "acceptance_report": "验收报告", "social_security": "社保证明",
+	"product_catalog": "产品资料", "other": "其他"}
+
+func (w *docWriter) evidenceIndex(rows []db.SnapshotEvidence) {
+	if len(rows) == 0 {
+		return
+	}
+	w.setOrient("portrait")
+	w.heading(1, EvidenceIndexTitle, true, "")
+	body := make([][]string, 0, len(rows))
+	for i, e := range rows {
+		var orig []string
+		for _, o := range e.Originals {
+			kind := originalKindLabels[o.DocumentKind]
+			if kind == "" {
+				kind = o.DocumentKind
+			}
+			pages := fmt.Sprintf("第 %d 页", o.PageStart)
+			if o.PageEnd > o.PageStart {
+				pages = fmt.Sprintf("第 %d-%d 页", o.PageStart, o.PageEnd)
+			}
+			if o.PageLabel != "" {
+				pages += "（" + o.PageLabel + "）"
+			}
+			orig = append(orig, kind+" "+pages)
+		}
+		names, pages := sectionRefs(e.Sections)
+		body = append(body, []string{strconv.Itoa(i + 1), e.Name, orDash(e.Number), orDash(e.Subject), orDash(strings.Join(orig, "\n")),
+			orDash(strings.Join(e.RequirementCodes, "、")), names, pages})
+	}
+	w.table("证明材料索引", EvidenceIndexHeader, body, &tableOpts{weights: []float64{4, 16, 12, 12, 12, 8, 16, 5}, fields: true})
+}
+
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return PageRefPlaceholder
+	}
+	return s
 }
 
 // ---------------------------------------------------------------------------
@@ -789,14 +997,14 @@ func (w *docWriter) deviationTable(rows []db.SnapshotMatrixRow) int {
 // Build 套用模板生成成稿 .docx。
 func Build(t *Template, in BuildInput) (*BuildResult, error) {
 	styles, stylesXML := t.resolveStyles()
-	w := &docWriter{t: t, styles: styles, geom: t.Geometry, orient: "portrait", nextDocPr: 1000}
+	w := &docWriter{t: t, styles: styles, geom: t.Geometry, orient: "portrait", nextDocPr: 1000, bookmarks: map[string]string{}, nextMark: 20000}
 
 	// 目录
 	tocPPr := ""
 	if t.needsBrk {
 		tocPPr = `<w:pageBreakBefore/>`
 	}
-	w.para(w.style("autobid toc title"), tocPPr, run("目  录", runStyle{}))
+	w.para(w.style("contents title"), tocPPr, run("目  录", runStyle{}))
 	w.blocks = append(w.blocks,
 		block{pPr: `<w:pStyle w:val="` + w.style("toc 1") + `"/>`, content: `<w:r><w:fldChar w:fldCharType="begin"/></w:r>` +
 			`<w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>` +
@@ -807,9 +1015,21 @@ func Build(t *Template, in BuildInput) (*BuildResult, error) {
 	for _, c := range in.Charts {
 		charts[c.SectionID] = append(charts[c.SectionID], c)
 	}
+	// 书签先登记：评分索引表在正文之前，引用的是后面才写入的章节标题。
+	for _, s := range in.Doc.Sections {
+		w.bookmarks[SectionBookmark(s.SectionID)] = strings.TrimSpace(s.Code + " " + s.Title)
+	}
+	scoreRows := w.scoreIndex(in.Package.ScoreIndex)
+	scoreBySection := map[int64][]db.SnapshotScoreRow{}
+	for _, r := range in.Package.ScoreIndex {
+		for _, ref := range r.Sections {
+			scoreBySection[ref.SectionID] = append(scoreBySection[ref.SectionID], r)
+		}
+	}
 	for _, s := range in.Doc.Sections {
 		w.setOrient("portrait")
-		w.heading(s.Level, strings.TrimSpace(s.Code+" "+s.Title), s.Level == 1)
+		w.heading(s.Level, strings.TrimSpace(s.Code+" "+s.Title), s.Level == 1, SectionBookmark(s.SectionID))
+		w.scoreNote(scoreBySection[s.SectionID])
 		body, ok := in.Bodies[s.RevID]
 		if !ok {
 			return nil, fmt.Errorf("export: revision %d of section %s is missing", s.RevID, s.Code)
@@ -828,7 +1048,9 @@ func Build(t *Template, in BuildInput) (*BuildResult, error) {
 			w.chart(c, png)
 		}
 	}
-	rows := w.deviationTable(in.Matrix)
+	rows := w.deviationTable(in.Matrix, in.Package.Evidence)
+	w.commitmentTable(in.Package.Commitments)
+	w.evidenceIndex(in.Package.Evidence)
 	final := w.t.sectPr
 	if w.orient == "landscape" {
 		final = w.sectPrFor("landscape")
@@ -888,14 +1110,18 @@ func Build(t *Template, in BuildInput) (*BuildResult, error) {
 	if s, ok := out["word/settings.xml"]; ok && in.UpdateFieldsOnOpen {
 		out["word/settings.xml"] = withUpdateFields(s)
 	}
-	if core, ok := out["docProps/core.xml"]; ok {
-		out["docProps/core.xml"] = []byte(repl.Replace(string(core)))
+	if _, ok := out["docProps/core.xml"]; ok {
+		out["docProps/core.xml"] = coreProps(DocMeta{Title: in.Doc.TaskName, Author: in.Bidder, At: in.Doc.CreatedAt})
+	}
+	if app, ok := out["docProps/app.xml"]; ok {
+		out["docProps/app.xml"] = scrubAppProps(app)
 	}
 	data, err := writeZip(t.names, out)
 	if err != nil {
 		return nil, err
 	}
-	return &BuildResult{Data: data, Warnings: w.warnings, Headings: w.headings, MatrixRows: rows, Landscape: landscape}, nil
+	return &BuildResult{Data: data, Warnings: w.warnings, Headings: w.headings, MatrixRows: rows, Landscape: landscape,
+		Bookmarks: w.bookmarks, PageRefs: w.pageRefs, ScoreRows: scoreRows}, nil
 }
 
 // pPrOrder 是 CT_PPr 子元素的 schema 顺序（Word 对乱序的段落属性会报文件损坏）。

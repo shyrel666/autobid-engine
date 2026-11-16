@@ -187,7 +187,10 @@ func squash(s string) string {
 // 去掉否定后果与通用措辞，避免关键词覆盖率被「投标人须提供……否则投标无效」这类套话拉高。
 var (
 	consequenceRe = regexp.MustCompile(`[，,；;]?\s*(否则|不满足|未提供|未按).{0,30}?(无效|废标|否决|不得分|扣分)[^，,；;。]*`)
-	stopTerms     = []string{"投标人", "供应商", "招标人", "采购人", "本项目", "须", "必须", "应当", "应", "需", "要求", "提供", "具备", "具有",
+	// 计分步长（「质保期每延长一年得 1 分」「每提前 1 天加 0.5 分」）里的数值是加分单位，不是门槛：按门槛比对会把
+	// 「承诺质保 5 年」判成不满足「一年」。只在抽取数值门槛时去掉，关键词覆盖率仍按全文计算。
+	scoreStepRe = regexp.MustCompile(`每[^，,；;。]{0,24}?(?:得|加|扣|减|计)\s*\d+(?:\.\d+)?\s*分`)
+	stopTerms   = []string{"投标人", "供应商", "招标人", "采购人", "本项目", "须", "必须", "应当", "应", "需", "要求", "提供", "具备", "具有",
 		"不少于", "不低于", "不超过", "不大于", "至少", "以上", "以内", "以下", "的", "和", "与", "及", "或", "等", "并", "在", "对", "按", "为", "是",
 		"进行", "相关", "有关", "其他", "包括", "满足", "符合", "以及", "并且", "投标文件", "招标文件"}
 	fillerRe = regexp.MustCompile(`详见[^，。；]*|参见[^，。；]*|见附件[^，。；]*|见本章[^，。；]*|如下[：:]?|同上|略|待补充|此处省略`)
@@ -336,7 +339,7 @@ func (v RuleVerifier) Verify(_ context.Context, in Input) (Verdict, error) {
 	}
 	terms := keyTerms(req)
 	var wants []Quantity
-	for _, q := range Quantities(consequenceRe.ReplaceAllString(req.Title+"。"+req.Description, "")) {
+	for _, q := range Quantities(scoreStepRe.ReplaceAllString(consequenceRe.ReplaceAllString(req.Title+"。"+req.Description, ""), "")) {
 		if q.Cmp != CmpEQ || q.Dim != DimItems {
 			wants = append(wants, q)
 		}

@@ -181,7 +181,7 @@ func TestExportStrictPolicyAndFinalConstraint(t *testing.T) {
 	}
 	sub := f.submitExport(ctx, t, "final-1", "h-final", true, ExportDOCX, ExportPDF)
 	q := sub.Request
-	if !q.StrictRuntime || q.PolicyVersion != ExportPolicyFinalV1 || q.Executor != "WPS 12.1.0.29161" || len(sub.Jobs[0].Charts) != 1 {
+	if !q.StrictRuntime || q.PolicyVersion != ExportPolicyFinal || q.Executor != "WPS 12.1.0.29161" || len(sub.Jobs[0].Charts) != 1 {
 		t.Fatalf("strict request = %+v", q)
 	}
 	// 数据库约束：严格作业未刷新目录或未记录引擎时不能成功。

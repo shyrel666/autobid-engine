@@ -186,6 +186,7 @@ func (a *API) Handler() http.Handler {
 	a.registerRuntimeRoutes(mux)
 	a.registerAgentJobRoutes(mux)
 	a.registerExportRoutes(mux)
+	a.registerSubmissionRoutes(mux)
 	// D3：章节故事板（Pink Team 评审）、受控引用渲染与句子级写作核验（server/d3.go）
 	a.registerD3Routes(mux)
 

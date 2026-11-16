@@ -45,7 +45,7 @@ func (r ExportRequest) Strict() bool { return r.Mode == ExportModeFinal }
 // ExportPolicy 返回请求对应的显式策略版本。
 func (r ExportRequest) ExportPolicy() string {
 	if r.Strict() {
-		return db.ExportPolicyFinalV1
+		return db.ExportPolicyFinal
 	}
 	return db.ExportPolicyPreviewV1
 }
@@ -73,6 +73,11 @@ func (r *ExportRequest) normalize() error {
 	return db.ValidExportRequestKey(r.RequestKey)
 }
 
+// hash 是规范化客户端输入在给定策略版本下的请求哈希。
+func (r ExportRequest) hash(policy string) string {
+	return requestHash("export", r.Formats, r.TemplateID, r.Bidder, r.ExpectedOutlineVersion, policy)
+}
+
 // officeExecutor 返回新的最终稿请求固定的执行版本；文档引擎不可用时拒绝提交（RUNTIME_UNAVAILABLE），不降级为预览稿。
 func (s *Service) officeExecutor() (string, error) {
 	if s != nil && s.Office != nil {
@@ -95,18 +100,29 @@ func (s *Service) SubmitExport(ctx context.Context, tenant string, taskID int64,
 	}
 	in := db.SubmitExportInput{RequestKey: req.RequestKey, Formats: req.Formats, TemplateID: req.TemplateID, DefaultTemplateHash: DefaultTemplateHash(),
 		Bidder: req.Bidder, ExpectedOutlineVersion: req.ExpectedOutlineVersion, StrictRuntime: req.Strict(), Deadline: ExportJobDeadline(), Actor: actor,
-		RequestHash: requestHash("export", req.Formats, req.TemplateID, req.Bidder, req.ExpectedOutlineVersion, req.ExportPolicy())}
-	// 同键重放返回原请求组，不受当前运行能力影响；只有新的最终稿请求检查文档引擎并固定执行版本。
-	if _, err := s.DB.FindExportRequest(ctx, tenant, taskID, req.RequestKey); errors.Is(err, db.ErrNotFound) {
+		RequestHash: req.hash(req.ExportPolicy())}
+	// 同键重放返回原请求组，不受当前运行能力与当前策略版本影响；只有新的最终稿请求检查投标人名称与文档引擎并固定执行版本。
+	switch prev, err := s.DB.FindExportRequest(ctx, tenant, taskID, req.RequestKey); {
+	case errors.Is(err, db.ErrNotFound):
 		if in.StrictRuntime {
+			// D4：最终稿的封面与文档属性都用投标人名称；没有它的成稿过不了提交检查，只能重导，所以在提交时就拒绝。
+			if req.Bidder == "" {
+				return nil, fmt.Errorf("%w: a final draft needs the bidder name (it goes on the cover and into the document properties)", db.ErrInvalidExport)
+			}
 			exec, err := s.officeExecutor()
 			if err != nil {
 				return nil, err
 			}
 			in.Executor = exec
 		}
-	} else if err != nil {
+	case err != nil:
 		return nil, err
+	default:
+		// 请求哈希含策略版本。重放按原请求提交时的版本求哈希：策略升级（如 export-final/v1 → v2）不应把同一请求的重发
+		// 判成“同键异参”。严格 / 预览不同仍是不同的输入。
+		if prev.StrictRuntime == in.StrictRuntime {
+			in.RequestHash = req.hash(prev.PolicyVersion)
+		}
 	}
 	sub, err := s.DB.SubmitExport(ctx, tenant, taskID, in)
 	if err == nil && !sub.Replayed {

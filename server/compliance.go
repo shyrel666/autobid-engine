@@ -141,7 +141,8 @@ func (a *API) runConsistency(w http.ResponseWriter, r *http.Request, t *Task) {
 		return
 	}
 	a.hub.Publish(db.Activity{TaskID: t.ID, Worker: "proposal", Kind: "state", At: time.Now(),
-		Summary: fmt.Sprintf("全文一致性核验 #%d：矛盾 %d、漏项 %d", det.Run.ID, det.Run.Contradictions, det.Run.Omissions)})
+		Summary: fmt.Sprintf("全文一致性核验 #%d：矛盾 %d、与承诺台账不一致 %d、漏项 %d", det.Run.ID, det.Run.Contradictions, det.Run.LedgerMismatches,
+			det.Run.Omissions)})
 	writeJSON(w, http.StatusCreated, det)
 }
 

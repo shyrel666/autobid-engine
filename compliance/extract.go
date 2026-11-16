@@ -63,8 +63,43 @@ type SectionText struct {
 
 var sentenceRe = regexp.MustCompile(`[^。；;！!？?\n]+`)
 
-// 引述招标方要求的句子不是我方承诺，跳过（如「招标文件要求工期不超过 120 天」）。
+// ConsistencyRuleVersion 是一致性核验规则（Extract / Compare / CompareWithLedger）的版本。修改抽取或比对规则时升级：
+// 按旧版本完成的运行不再算当前结论，须重新核验后才能导出（db.runIsCurrentTx）。
+//
+//	consistency-v1  章节之间互相比对；句中出现「招标文件 / 招标要求」等引述词即整句跳过
+//	consistency-v2  D4：另与承诺台账比对；引述只作用于引述词之后的部分（见 ourVoice）
+const ConsistencyRuleVersion = "consistency-v2"
+
+// 引述招标方要求的内容不是我方承诺（如「招标文件要求工期不超过 120 天」）。
 var quotedReqRe = regexp.MustCompile(`招标文件|招标要求|采购需求|采购文件|招标人要求|采购人要求|根据要求|要求为|要求：|要求:`)
+
+// 第一人称自称：引述之后出现自称，后面的内容重新算作我方表述（如「招标文件要求工期不超过 120 天，我方承诺工期 90 天」）。
+var selfVoiceRe = regexp.MustCompile(`我方|我司|我公司|我单位|我们|本公司|本单位|本投标人|本团队`)
+
+// ourVoice 返回一个判定函数：句中某个字节位置是否属于我方表述。句首默认是我方表述；引述词之后转为引述，直到出现自称。
+// v1 把含引述词的句子整句跳过，「我方承诺免费质保期 5 年，优于招标要求」这类最常见的承诺句因此从不参与比对；
+// 现在只有引述词之后的关键词与数值不算承诺，承诺在前、引述在后的句子照常抽取。
+func ourVoice(sent string) func(pos int) bool {
+	quotes := quotedReqRe.FindAllStringIndex(sent, -1)
+	if len(quotes) == 0 {
+		return func(int) bool { return true }
+	}
+	selves := selfVoiceRe.FindAllStringIndex(sent, -1)
+	return func(pos int) bool {
+		lastQuote, lastSelf := -1, -1
+		for _, q := range quotes {
+			if q[0] <= pos {
+				lastQuote = q[0]
+			}
+		}
+		for _, s := range selves {
+			if s[0] <= pos {
+				lastSelf = s[0]
+			}
+		}
+		return lastQuote < 0 || lastSelf > lastQuote
+	}
+}
 
 // 型号：<产品名><采用 / 选用 / 型号为 / （型号：>MODEL，后随可选数量。
 var modelRe = regexp.MustCompile(`([\p{Han}A-Za-z]{2,12}?)\s*(?:采用|选用|选型为|型号为|型号[:：]|[（(]\s*型号[:：]?)\s*([A-Za-z][A-Za-z0-9][A-Za-z0-9\-_/.]{1,30})`)
@@ -77,14 +112,19 @@ func Extract(s SectionText) []Mention {
 	text := strings.ReplaceAll(s.ContentMD, "\r\n", "\n")
 	for _, loc := range sentenceRe.FindAllStringIndex(text, -1) {
 		sent := strings.TrimSpace(text[loc[0]:loc[1]])
-		if sent == "" || quotedReqRe.MatchString(sent) {
+		if sent == "" {
 			continue
 		}
+		ours := ourVoice(sent)
 		excerpt := truncateRunes(sent, 160)
 		qs := Quantities(sent)
 		for _, d := range metricDefs {
 			for _, kw := range d.kw.FindAllStringIndex(sent, -1) {
-				if q, ok := nearestValue(sent, kw, qs, d.dim); ok {
+				if !ours(kw[0]) {
+					continue
+				}
+				// 关键词与数值都须在我方表述内：「质保期优于招标要求的 3 年」里的 3 年是招标方的门槛。
+				if q, ok := nearestValue(sent, kw, qs, d.dim); ok && ours(q.Start) {
 					out = append(out, Mention{Metric: d.key, Label: d.label, SectionID: s.SectionID, RevNo: s.RevNo, Seq: s.Seq,
 						Value: q.Value, Dim: d.dim, Text: q.Raw, Excerpt: excerpt})
 					break // 每句每指标只取一个值
@@ -94,7 +134,7 @@ func Extract(s SectionText) []Mention {
 		for _, m := range modelRe.FindAllStringSubmatchIndex(sent, -1) {
 			label := labelTrimRe.ReplaceAllString(sent[m[2]:m[3]], "")
 			model := strings.TrimRight(sent[m[4]:m[5]], ".-_/")
-			if utf8.RuneCountInString(label) < 2 {
+			if utf8.RuneCountInString(label) < 2 || !ours(m[0]) {
 				continue
 			}
 			mm := Mention{Metric: MetricModel + ":" + label, Label: label + " 型号", SectionID: s.SectionID, RevNo: s.RevNo, Seq: s.Seq,

@@ -94,7 +94,7 @@ func TestStrictFinalExportEndToEnd(t *testing.T) {
 	req := finalRequest("final-e2e-1", db.ExportPDF, db.ExportDOCX)
 	req.ExpectedOutlineVersion = pre.Readiness.OutlineVersion
 	sub, err := svc.SubmitExport(ctx, db.DefaultTenant, p.TaskID, "exporter", req)
-	if err != nil || len(sub.Jobs) != 2 || sub.Request.Executor != OfficeLabel(office) || sub.Request.PolicyVersion != db.ExportPolicyFinalV1 {
+	if err != nil || len(sub.Jobs) != 2 || sub.Request.Executor != OfficeLabel(office) || sub.Request.PolicyVersion != db.ExportPolicyFinal {
 		t.Fatalf("SubmitExport = %+v %v", sub, err)
 	}
 	runAll(t, &Runner{Service: svc, Owner: "s4-e2e", Lease: 5 * time.Minute, TaskID: p.TaskID})
@@ -192,6 +192,23 @@ func TestStrictExportRefusesDegradedRuntime(t *testing.T) {
 	if _, err := none.SubmitExport(ctx, db.DefaultTenant, p.TaskID, "exporter", finalRequest("final-none", db.ExportDOCX)); !errors.Is(err, ErrOfficeUnavailable) {
 		t.Fatalf("final without engine: %v", err)
 	}
+	// D4：新的最终稿必须带投标人名称（封面与文档属性都用它）；预览稿不要求。
+	noBidder := finalRequest("final-nobidder", db.ExportDOCX)
+	noBidder.Bidder = "  "
+	if _, err := withFake.SubmitExport(ctx, db.DefaultTenant, p.TaskID, "exporter", noBidder); !errors.Is(err, db.ErrInvalidExport) {
+		t.Fatalf("final draft without a bidder: %v", err)
+	}
+	if _, err := d.FindExportRequest(ctx, db.DefaultTenant, p.TaskID, "final-nobidder"); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("a rejected final draft left a request behind: %v", err)
+	}
+	// 请求哈希随策略版本变化；重放时按原请求的策略版本求哈希（Service.SubmitExport），策略升级不会把重发判成同键异参。
+	req := finalRequest("k", db.ExportDOCX)
+	if err := req.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if req.hash(db.ExportPolicyFinalV1) == req.hash(db.ExportPolicyFinalV2) || req.hash(db.ExportPolicyFinal) != req.hash(req.ExportPolicy()) {
+		t.Fatal("request hash must depend on the policy version it was submitted under")
+	}
 	// 执行时引擎缺失：失败而不是生成未刷新目录的 DOCX；同键重放不受当前运行能力影响。
 	a, err := withFake.SubmitExport(ctx, db.DefaultTenant, p.TaskID, "exporter", finalRequest("final-a", db.ExportDOCX))
 	if err != nil || a.Request.Executor != fake.label {
@@ -217,7 +234,8 @@ func TestStrictExportRefusesDegradedRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	run(withFake)
-	failedWith(c.Jobs[0].ID, db.JobErrReadbackFailed, "最终稿回读未通过")
+	// （D4 起严格 DOCX 也要对照同一次排版的 PDF 核对页码：替身给不出可读的 PDF，两种格式都在回读这一步失败。）
+	failedWith(c.Jobs[0].ID, db.JobErrReadbackFailed, "最终稿回读失败")
 	failedWith(c.Jobs[1].ID, db.JobErrReadbackFailed, "最终稿回读失败")
 
 	// 快照中的 PNG 被篡改（哈希不符）：最终稿失败，不插入源码占位框。

@@ -6,6 +6,7 @@ package ingest
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // PDFLine 是一行版面文字。Box 的 Y 为 PDF 坐标（越大越靠上）；X1 止于最后一个可见字形，不含行尾空格
@@ -77,4 +78,32 @@ func imageBox(m pdfMat) [4]float64 {
 		x0, y0, x1, y1 = math.Min(x0, x), math.Min(y0, y), math.Max(x1, x), math.Max(y1, y)
 	}
 	return [4]float64{x0, y0, x1, y1}
+}
+
+// ReadPDFInfo 读取 PDF 文档信息字典（Title / Author / Subject / Keywords / Creator / Producer 等文本项）与 XMP 元数据包
+// 原文（没有时为空串）。导出回读用它核对成稿不带平台字样与无关作者。
+func ReadPDFInfo(data []byte) (info map[string]string, xmp string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			info, xmp, err = nil, "", fmt.Errorf("%w: malformed PDF: %v", ErrUnsupportedFormat, r)
+		}
+	}()
+	d, err := openPDF(data)
+	if err != nil {
+		return nil, "", err
+	}
+	info = map[string]string{}
+	for k, v := range d.dictOf(d.trailer["Info"]) {
+		if s, ok := d.resolve(v).(pdfString); ok {
+			info[string(k)] = strings.TrimSpace(pdfTextString(s))
+		}
+	}
+	if root := d.dictOf(d.trailer["Root"]); root != nil {
+		if st, ok := d.resolve(root["Metadata"]).(*pdfStream); ok {
+			if raw, derr := d.decodeStream(st); derr == nil {
+				xmp = string(raw)
+			}
+		}
+	}
+	return info, xmp, nil
 }

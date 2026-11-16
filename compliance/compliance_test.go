@@ -183,3 +183,29 @@ func TestRequirementKind(t *testing.T) {
 		}
 	}
 }
+
+// 计分步长里的数值（每延长一年得 1 分）不是门槛；同一要求里真正的门槛（不少于 3 年）仍然生效。
+func TestRuleVerifierScoringStepIsNotAThreshold(t *testing.T) {
+	ctx := context.Background()
+	sec := Section{ID: 2, Code: "2", Title: "质保与售后"}
+	verify := func(desc, body string) Verdict {
+		t.Helper()
+		out, err := RuleVerifier{}.Verify(ctx, Input{Requirement: Requirement{ID: 1, Code: "S-1", Category: "scoring_item", Title: "质保期承诺", Description: desc},
+			Section: sec, Revision: Revision{ID: 1, RevNo: 1, ContentMD: body}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	body := "响应评分项 S-1 质保期承诺：我方承诺免费质保期 5 年，质保期内免费上门维修。"
+	if v := verify("质保期每延长一年得 1 分，最高 5 分。", body); v.Status != StatusVerified || v.Deviation == DeviationNegative {
+		t.Fatalf("scoring step treated as a threshold: %+v", v)
+	}
+	if v := verify("每提前 1 天完成加 0.5 分；质保期每延长 6 个月得 2 分。", body); v.Deviation == DeviationNegative {
+		t.Fatalf("scoring steps treated as thresholds: %+v", v)
+	}
+	// 门槛仍然生效：要求不少于 6 年，承诺 5 年是负偏离。
+	if v := verify("质保期不少于 6 年；在此基础上每延长一年得 1 分。", body); v.Status == StatusVerified || v.Deviation != DeviationNegative {
+		t.Fatalf("real threshold next to a scoring step was lost: %+v", v)
+	}
+}

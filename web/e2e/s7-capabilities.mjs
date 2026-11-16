@@ -24,7 +24,7 @@ await step('准备：带图表的可导出项目、另一项目，用真实文�
   await waitFor('图表渲染', async () => (await api('GET', `/api/tasks/${ready.id}/chart-jobs/${job.job.id}`)).job.status === 'succeeded')
   await api('POST', `/api/tasks/${ready.id}/compliance/verify`, {})
   await api('POST', `/api/tasks/${ready.id}/consistency/runs`)
-  const sub = await api('POST', `/api/tasks/${ready.id}/exports`, { request_key: 's7-cap-final', formats: ['docx'], mode: 'final' })
+  const sub = await api('POST', `/api/tasks/${ready.id}/exports`, { request_key: 's7-cap-final', formats: ['docx'], mode: 'final', bidder: '合成档案服务公司' })
   const id = (sub.jobs ?? sub.request?.jobs)[0].id
   finalJob = await waitFor('最终稿完成', async () => {
     const j = await api('GET', `/api/tasks/${ready.id}/exports/${id}`)
@@ -70,7 +70,7 @@ await step('文档引擎关闭：最终稿被拒绝不降级，DOCX 只能是预
   await page.getByText(/文档引擎不可用/).first().waitFor()
   await page.getByRole('radio', { name: /最终稿/ }).check()
   assert(await page.getByRole('button', { name: /锁定版本并导出最终稿/ }).isDisabled(), '引擎关闭时最终稿入口应禁用')
-  const r = await fetch(`${BASE}/api/tasks/${ready.id}/exports`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ request_key: 's7-cap-off', formats: ['docx'], mode: 'final' }) })
+  const r = await fetch(`${BASE}/api/tasks/${ready.id}/exports`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ request_key: 's7-cap-off', formats: ['docx'], mode: 'final', bidder: '合成档案服务公司' }) })
   const body = await r.json()
   assert(!r.ok && /runtime_unavailable|export_blocked/.test(body.code ?? ''), `接口应拒绝最终稿：${r.status} ${JSON.stringify(body).slice(0, 200)}`)
   await page.getByRole('radio', { name: /预览稿/ }).check()

@@ -158,7 +158,7 @@ func TestExportEndToEndDOCXAndPDF(t *testing.T) {
 	tpl, _ := DefaultTemplate()
 	pdf := artifact(t, svc, pdfJob)
 	docx := artifact(t, svc, docxJob)
-	wantHeadings := append(p.Headings(), DeviationTitle)
+	wantHeadings := append(append([]string{ScoreIndexTitle}, p.Headings()...), DeviationTitle) // D4：目录之后先是评分索引表
 
 	// 3. 文件合法性：两种格式均能被 ingest 解析器回读。
 	if _, err := ingest.Parse(ctx, ingest.File{Name: "out.pdf", Data: pdf}, ingest.ParseOptions{}); err != nil {
@@ -537,6 +537,11 @@ func TestExportWithRealMermaidCharts(t *testing.T) {
 	}
 	for _, w := range j.Warnings {
 		t.Errorf("warning %s: %s", w.Kind, w.Message)
+	}
+	// 这次导出没有填投标人：PDF 的作者必须为空，不能是本机办公软件账号（WPS 在另存 DOCX 时会把空作者填成登录账号，
+	// 所以引擎脚本先导出 PDF 再另存 DOCX）。
+	if md, issues, err := CheckPDFMetadata(artifact(t, svc, j), ""); err != nil || len(issues) != 0 || md.Author != "" {
+		t.Fatalf("PDF metadata without a bidder = %+v issues = %+v %v", md, issues, err)
 	}
 	tpl, _ := DefaultTemplate()
 	rep, err := CheckPDF(artifact(t, svc, j), tpl.Geometry)

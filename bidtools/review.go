@@ -78,7 +78,7 @@ func (k *Kit) complianceVerifyTool() tool.CoreTool {
 func (k *Kit) fulltextConsistencyTool() tool.CoreTool {
 	spec := tool.Spec{Name: ToolFulltextConsistent,
 		Description: "横向比对当前批准大纲下所有章节有效修订稿中的关键定量承诺（总工期、免费质保期、SLA 响应/到场/修复时限与可用性、项目团队人数、核心设备型号与数量），" +
-			"检出跨章节前后矛盾项（contradictions），并汇总所有尚未通过实质性响应核验的 ★/▲ 强制条款漏项（omissions）。",
+			"检出跨章节前后矛盾项（contradictions）、与已确认承诺台账不一致的承诺（ledger_mismatches），并汇总所有尚未通过实质性响应核验的 ★/▲ 强制条款漏项（omissions）。",
 		Schema: obj(map[string]any{"reverify": boolean("检查前是否先对全部章节重新运行响应矩阵核验（默认 true）")})}
 	return tool.New(spec, func(ctx context.Context, in json.RawMessage, _ *tool.ToolContext) (tool.Result, error) {
 		req, err := decode[struct {
@@ -96,20 +96,25 @@ func (k *Kit) fulltextConsistencyTool() tool.CoreTool {
 		if err != nil {
 			return reviewErr(err)
 		}
-		var contradictions, omissions []map[string]any
+		var contradictions, omissions, ledger []map[string]any
 		for _, f := range det.Findings {
-			if f.Kind == db.FindingContradiction {
+			switch f.Kind {
+			case db.FindingContradiction:
 				contradictions = append(contradictions, map[string]any{"finding_id": f.ID, "metric": f.MetricLabel,
 					"a": map[string]any{"section": f.ASectionCode, "rev_no": f.ARevNo, "value": f.AValue, "excerpt": f.AExcerpt},
 					"b": map[string]any{"section": f.BSectionCode, "rev_no": f.BRevNo, "value": f.BValue, "excerpt": f.BExcerpt}})
-			} else {
+			case db.FindingLedger:
+				ledger = append(ledger, map[string]any{"finding_id": f.ID, "metric": f.MetricLabel, "section": f.ASectionCode, "rev_no": f.ARevNo,
+					"value": f.AValue, "excerpt": f.AExcerpt, "commitment": f.CommitmentCode, "ledger_value": f.BValue, "detail": f.Detail})
+			default:
 				omissions = append(omissions, map[string]any{"finding_id": f.ID, "requirement": f.RequirementCode, "title": f.RequirementTitle,
 					"kind": f.RequirementKind, "detail": f.Detail})
 			}
 		}
 		return tool.JSON(map[string]any{"run_id": det.Run.ID, "outline_version": det.Run.OutlineVersion, "snapshot": det.Run.Snapshot,
-			"contradictions": contradictions, "omissions": omissions,
-			"note": "rule-based extraction (recall/precision not evaluated); report every contradiction and omission to the human reviewer"}), nil
+			"contradictions": contradictions, "omissions": omissions, "ledger_mismatches": ledger,
+			"note": "rule-based extraction (recall/precision not evaluated); report every contradiction, ledger mismatch and omission to the human reviewer. " +
+				"A ledger mismatch is fixed in the section text (render the value from the commitment ledger), never by changing the ledger to match the text"}), nil
 	})
 }
 

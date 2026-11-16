@@ -17,6 +17,8 @@ import { chartStateView, keyForInput, retryRequestKey, splitCharts } from './cha
 import type { InputKey } from './chartJobs'
 import { exportInputSig, exportJobView, exportRequestView, groupExportJobs, keepKeyAfter } from './exportJobs'
 import type { ExportInput } from './exportJobs'
+import { SubmissionChecklist } from './SubmissionChecklist'
+import { hasChecklist, selfCheckNote } from './submission'
 import { RuntimeNotice } from '../../runtime/RuntimeStatus'
 import { useAsync, useInterval } from '../../../hooks/useAsync'
 import {
@@ -251,7 +253,7 @@ function Warnings({ list }: { list: ExportWarning[] }) {
 }
 
 const modeOptions: { mode: ExportMode; title: string; desc: string }[] = [
-  { mode: 'final', title: '最终稿（严格）', desc: '文档引擎（WPS / Word）真实刷新目录页码；图表必须已渲染，不插入源码占位框；成稿回读核对目录、图片与表格。引擎不可用时拒绝，不降级。' },
+  { mode: 'final', title: '最终稿（严格）', desc: '文档引擎（WPS / Word）真实刷新目录与评分索引表的页码；图表必须已渲染；成稿回读逐处核对页码、图片、表格与文档属性。引擎不可用时拒绝，不降级。生成后在下方逐项完成提交检查清单。' },
   { mode: 'preview', title: '预览稿', desc: '用于内部审阅：引擎不可用时 DOCX 目录页码不刷新，未渲染图表为源码占位框；结果标为“仅预览稿”，不作为最终交付。' },
 ]
 
@@ -283,6 +285,8 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
   const create = async () => {
     const fs = (Object.keys(formats) as ExportFormat[]).filter((f) => formats[f])
     if (!fs.length) { toast('error', '至少选择一种格式'); return }
+    // 最终稿的封面与文档属性都用投标人名称；留空的成稿过不了提交检查，只能重新导出，所以在这里就拦住。
+    if (mode === 'final' && !bidder.trim()) { toast('error', '最终稿请填写封面投标人名称（与营业执照一致）'); return }
     const input: ExportInput = { formats: fs, template_id: template || undefined, bidder, mode, expected_outline_version: r?.outline_version || undefined }
     key.current = keyForInput(key.current, exportInputSig(input),
       () => `ui-export-${taskID}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
@@ -402,7 +406,7 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
               {(p?.templates ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}（{t.file_name}）</option>)}
             </Select>
           </Field>
-          <Field label="封面投标人（可选）"><Input value={bidder} onChange={(e) => setBidder(e.target.value)} placeholder="如：某某科技有限公司" /></Field>
+          <Field label={finalMode ? '封面投标人（最终稿必填）' : '封面投标人（可选）'} hint={finalMode ? '与营业执照一致；同时写入成稿的作者属性' : undefined}><Input value={bidder} onChange={(e) => setBidder(e.target.value)} placeholder="如：某某科技有限公司" /></Field>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="primary" icon={<Lock className="size-4" />} loading={busy === 'create'} disabled={!r?.ready} onClick={create}>
@@ -427,7 +431,8 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
           </ul>
         )}
         <p className="text-xs text-slate-400">模板中可使用 {'{{content}}'}（正文插入位置）、{'{{title}}'}、{'{{bidder}}'}、{'{{date}}'}、{'{{outline_version}}'} 占位符（须在同一文字段内）；
-          标题按样式名「heading 1~6」匹配。目录与页码由文档引擎（WPS / Word）刷新，打开时无需手动更新域。</p>
+          标题按样式名「heading 1~6」匹配。目录与页码由文档引擎（WPS / Word）刷新，打开时无需手动更新域。
+          成稿的作者等文档属性只写投标人名称。建议上传本企业自己的模板：内置模板的版式与其他使用本系统的投标人相同。</p>
       </Card>
 
       <Card title="导出请求" subtitle={active ? '有排队或执行中的作业，每 2 秒刷新；全部结束后停止轮询' : '导出成功只表示产物已生成，不代表已签章、已被交易平台接收或已通过外部评审'}
@@ -460,6 +465,7 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
                           <td className="pr-2 py-2"><Badge tone={v.tone}>{v.active && <Loader2 className="size-3 animate-spin" aria-hidden />}{v.label}</Badge>
                             {v.note && <div className={cx('max-w-md text-xs', v.tone === 'red' ? 'text-red-600' : v.tone === 'amber' ? 'text-amber-700' : 'text-slate-500')}>{v.note}</div>}</td>
                           <td className="pr-2 py-2 text-xs text-slate-500">{Object.keys(j.rev_snapshot).length} 章 · {j.chart_snapshot.length} 图 · 偏离表 {j.matrix_snapshot.length} 行
+                            {selfCheckNote(j) && <div>{selfCheckNote(j)}</div>}
                             {j.finished_at && <div>完成 {fmtTime(j.finished_at)}</div>}</td>
                           <td className="pr-2 py-2 text-xs">{j.warnings.length ? <Badge tone="amber">{j.warnings.length} 项提示</Badge> : ''}</td>
                           <td className="whitespace-nowrap py-2 pr-3 text-right">
@@ -472,6 +478,7 @@ export function ExportPanel({ taskID, tick, onCreated }: { taskID: number; tick:
                       )
                     })}</tbody>
                   </table>
+                  {q && hasChecklist(q) && <SubmissionChecklist taskID={taskID} requestID={q.id} tick={tick} />}
                 </section>
               )
             })}
@@ -501,6 +508,20 @@ function JobModal({ job, request, onClose }: { job: ExportJob; request?: ExportR
         </div>
         {v.note && <p className={v.tone === 'red' ? 'text-red-600' : 'text-slate-600'}>{v.note}</p>}
         <Warnings list={job.warnings} />
+        {job.self_check && <SelfCheck job={job} />}
+        {!!job.package_snapshot?.score_index?.length && <div>
+          <div className="mb-1 text-xs font-medium text-slate-500">评分索引（评分项 → 响应章节；页码由文档引擎排版后写入成稿）</div>
+          <table className="w-full text-xs">
+            <tbody>{job.package_snapshot.score_index.map((r) => (
+              <tr key={r.requirement_item_id} className="border-b border-slate-100 align-top">
+                <td className="py-1 pr-2 font-mono text-slate-400">{r.requirement_code}</td><td className="pr-2">{r.requirement_title}</td>
+                <td className="pr-2 text-slate-500">{r.score} 分</td>
+                <td className="text-slate-600">{r.sections.map((x) => `${x.section_code} ${x.title}`).join('；')}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+          <p className="mt-1 text-xs text-slate-500">附录另含承诺事项 {job.package_snapshot.commitments?.length ?? 0} 条、证明材料 {job.package_snapshot.evidence?.length ?? 0} 件。</p>
+        </div>}
         <div>
           <div className="mb-1 text-xs font-medium text-slate-500">锁定的章节修订（rev_snapshot）</div>
           <table className="w-full text-xs">
@@ -520,5 +541,31 @@ function JobModal({ job, request, onClose }: { job: ExportJob; request?: ExportR
         </div>}
       </div>
     </Modal>
+  )
+}
+
+// 成稿回读自检的结构化结果（提交检查清单的系统项由它判定）。
+function SelfCheck({ job }: { job: ExportJob }) {
+  const sc = job.self_check!
+  const cell = (label: string, value: string, bad = false) => (
+    <div className="rounded border border-slate-100 px-2 py-1">
+      <div className="text-slate-400">{label}</div><div className={bad ? 'text-red-600' : 'text-slate-700'}>{value}</div>
+    </div>
+  )
+  return (
+    <div>
+      <div className="mb-1 text-xs font-medium text-slate-500">成稿回读自检</div>
+      <div className="grid grid-cols-2 gap-1.5 text-xs md:grid-cols-4">
+        {cell('页数', sc.layout_checked ? `${sc.pages ?? 0} 页` : '没有版面可核对', !sc.layout_checked && job.strict_runtime)}
+        {cell('目录', `${sc.toc_entries} 条，问题 ${sc.toc_issues} 项`, sc.toc_issues > 0)}
+        {cell('章节页码引用', sc.page_refs ? `${sc.page_refs_verified}/${sc.page_refs} 处一致${sc.verified_against === 'pdf' ? '（对照 PDF 版面）' : sc.verified_against === 'toc' ? '（对照目录）' : ''}` : '无',
+          sc.page_ref_issues > 0 || sc.page_refs_verified < sc.page_refs)}
+        {cell('文档属性', sc.metadata_checked ? (sc.metadata_issues ? `问题 ${sc.metadata_issues} 项` : `作者：${sc.author || '（空）'}`) : '未检查', sc.metadata_issues > 0)}
+        {cell('版式', sc.layout_checked ? `越出版芯 ${sc.out_of_bounds}，图片问题 ${sc.image_issues}` : '—', sc.out_of_bounds + sc.image_issues > 0)}
+        {cell('页码与空白页', sc.layout_checked ? `页码不连续 ${sc.footer_issues}，空白页 ${sc.blank_pages}` : '—', sc.footer_issues + sc.blank_pages > 0)}
+        {cell('图片', `${sc.images} 张`)}
+        {cell('表格', `${sc.tables} 个`)}
+      </div>
+    </div>
   )
 }

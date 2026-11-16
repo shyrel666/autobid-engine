@@ -26,15 +26,15 @@ var (
 
 // 承诺指标与状态。
 const (
-	MetricDuration    = "duration"
-	MetricWarranty    = "warranty"
-	MetricSLAResponse = "sla_response"
-	MetricSLAOnsite   = "sla_onsite"
-	MetricSLARepair   = "sla_repair"
+	MetricDuration     = "duration"
+	MetricWarranty     = "warranty"
+	MetricSLAResponse  = "sla_response"
+	MetricSLAOnsite    = "sla_onsite"
+	MetricSLARepair    = "sla_repair"
 	MetricAvailability = "availability"
-	MetricTeamSize    = "team_size"
-	MetricPrice       = "price"
-	MetricOther       = "other"
+	MetricTeamSize     = "team_size"
+	MetricPrice        = "price"
+	MetricOther        = "other"
 
 	CommitmentDraft     = "draft"
 	CommitmentConfirmed = "confirmed"
@@ -216,12 +216,12 @@ func (d *DB) UpsertCommitment(ctx context.Context, tenant string, taskID int64, 
 		return nil, err
 	}
 	if in.CommittedValue == nil {
-		if v, ok := parseCommitmentValue(in.CommittedRaw); ok {
+		if v, ok := parseCommitmentValue(in.CommittedRaw, in.Unit); ok {
 			in.CommittedValue = &v
 		}
 	}
 	if in.TenderThresholdValue == nil {
-		if v, ok := parseCommitmentValue(in.TenderThresholdRaw); ok {
+		if v, ok := parseCommitmentValue(in.TenderThresholdRaw, in.Unit); ok {
 			in.TenderThresholdValue = &v
 		}
 	}
@@ -292,10 +292,15 @@ func (d *DB) UpsertCommitment(ctx context.Context, tenant string, taskID int64, 
 	return out, nil
 }
 
-// parseCommitmentValue 从原文解析归一数值：优先复用 compliance.Quantities（年/月/天、小时/分钟、%）；
-// 对“元”等不在量纲词表中的金额回退为第一个数字。仅在调用方未提供归一值时使用。
-func parseCommitmentValue(raw string) (float64, bool) {
+// parseCommitmentValue 从原文解析数值，并换算到台账声明的单位：阈值、承诺值与能力上限在同一条台账里必须同口径，
+// 页面与接口直接填写的数就是按 unit 计的（D3 的渲染与核验也按这个口径读）。早先这里一律归一到天 / 分钟，于是
+// 「阈值原文 不少于 3 年 + 承诺值 5（单位 年）」会被比成 5 < 1095 而拒绝确认。单位为空或与原文量纲不同时保持归一值。
+// 原文里没有带单位的数值时退回提取首个数字。
+func parseCommitmentValue(raw, unit string) (float64, bool) {
 	if qs := compliance.Quantities(raw); len(qs) > 0 {
+		if dim, factor := compliance.UnitDim(unit); strings.TrimSpace(unit) != "" && dim == qs[0].Dim && factor > 0 {
+			return qs[0].Value / factor, true
+		}
 		return qs[0].Value, true
 	}
 	var b strings.Builder

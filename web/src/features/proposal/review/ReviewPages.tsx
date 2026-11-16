@@ -280,7 +280,7 @@ export function ConsistencyPage() {
     try {
       if (reverify) await api.verifyCompliance(taskId)
       const r = await api.runConsistency(taskId)
-      toast('ok', `一致性核验 #${r.run?.id}：矛盾 ${r.run?.contradictions ?? 0}，漏项 ${r.run?.omissions ?? 0}`)
+      toast('ok', `一致性核验 #${r.run?.id}：矛盾 ${r.run?.contradictions ?? 0}，与承诺台账不一致 ${r.run?.ledger_mismatches ?? 0}，漏项 ${r.run?.omissions ?? 0}`)
       setQuery({ run: undefined, finding: undefined })
       invalidate(reverify ? ['matrix', 'consistency', 'business', 'export'] : 'consistency_changed')
     } catch (e) { toast('error', errorText(e)) } finally { setBusy('') }
@@ -288,6 +288,9 @@ export function ConsistencyPage() {
 
   const contradictions = d?.findings.filter((f) => f.kind === 'contradiction') ?? []
   const omissions = d?.findings.filter((f) => f.kind === 'omission') ?? []
+  const ledger = d?.findings.filter((f) => f.kind === 'ledger_mismatch') ?? []
+  const ledgerCount = d?.run?.summary?.ledger_commitments ?? 0
+  const uncomparable = d?.run?.summary?.ledger_uncomparable ?? []
   const fTone = (s: string): Tone => (s === 'open' ? 'amber' : s === 'resolved' ? 'green' : 'red')
   const actions = (f: ConsistencyFinding) => f.status === 'open'
     ? <Button size="sm" icon={<ClipboardCheck className="size-3.5" />} onClick={() => setResolving(f)}>处理</Button>
@@ -310,13 +313,41 @@ export function ConsistencyPage() {
           <ErrorBanner error={data.error} onRetry={data.reload} />
           {runId && <Notice tone="info" action={<Button size="sm" onClick={() => setQuery({ run: undefined })}>查看最新运行</Button>}>正在查看核验运行 #{runId}，它可能不是最新一次。</Notice>}
           {focus !== undefined && d && !focused && <Notice tone="warn">当前筛选下没有结论 #{String(params.get('finding'))}；它可能已处理、已失效或属于其他运行。</Notice>}
-          <p className="text-xs text-muted">只比较同一指标的数值（总工期、质保期、SLA、团队人数、核心型号与数量等），不理解分阶段 / 分子系统语境；★/▲ 条款在响应矩阵中没有当前修订上的实质响应即记为漏项。规则抽取未经人工标注评测，无结论不代表全文一致。</p>
+          <p className="text-xs text-muted">只比较同一指标的数值（总工期、质保期、SLA、团队人数、核心型号与数量等），不理解分阶段 / 分子系统语境；正文里的承诺另与已确认的承诺台账逐处比对；★/▲ 条款在响应矩阵中没有当前修订上的实质响应即记为漏项。规则抽取未经人工标注评测，无结论不代表全文一致。</p>
           {d?.run && d.run.stale_reason && !d.current && <Notice>{d.run.stale_reason}</Notice>}
           <div className="flex flex-wrap gap-1.5">
             {(['', 'open', 'resolved', 'stale'] as const).map((s) => <Chip key={s} active={status === s} onClick={() => setQuery({ status: s || undefined })}>{s ? findingStatusLabel[s] : '全部'}</Chip>)}
           </div>
           {data.loading && !d ? <Spinner /> : !d?.run ? <Empty>尚未执行一致性核验。</Empty> : (
             <div className="space-y-5">
+              <section aria-label="与承诺台账不一致">
+                <h3 className="mb-1 text-sm font-semibold">与承诺台账不一致（{ledger.length}）</h3>
+                <p className="mb-2 text-xs text-muted">
+                  {ledgerCount > 0
+                    ? `本次以 ${ledgerCount} 条已确认的承诺为基准。承诺台账是先定下来、经交付确认的基线：不一致时改正文，不要改台账去迁就正文。`
+                    : <>本项目还没有已确认的承诺台账，这一项没有可比对的基准。到<a {...linkProps(taskUrl(taskId, 'evidence'))} className="underline">证据与承诺</a>录入并确认后重新核验。</>}
+                  {uncomparable.length > 0 && ` 另有 ${uncomparable.length} 条台账的承诺值无法换算成数值，未参与比对：${uncomparable.join('、')}。`}
+                </p>
+                {ledger.length === 0 ? (ledgerCount > 0 && <Empty>当前筛选下没有与台账不一致的结论。</Empty>) : ledger.map((f) => (
+                  <div key={f.id} id={`finding-${f.id}`} className={cx('mb-2 rounded-[10px] border p-3', f.status === 'open' ? 'border-[#fde68a] bg-[#fffbeb]/60' : 'border-line bg-soft', focus === f.id && 'ring-1 ring-fg')}>
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{f.metric_label}</span><Badge dot tone={fTone(f.status)}>{findingStatusLabel[f.status]}</Badge>
+                      <span className="ml-auto">{actions(f)}</span>
+                    </div>
+                    <div className="flex flex-col gap-2 md:flex-row">
+                      <Side taskId={taskId} id={f.a_section_id} code={f.a_section_code} title={f.a_section_title} rev={f.a_rev_no} value={f.a_value} excerpt={f.a_excerpt} />
+                      <div className="self-center text-xs font-semibold text-danger" aria-label="不一致">≠</div>
+                      <div className="min-w-0 flex-1 rounded-[10px] border border-line bg-panel p-2 text-sm">
+                        <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+                          <a {...linkProps(taskUrl(taskId, 'evidence'))} className="font-medium text-fg hover:underline">承诺台账 {f.commitment_code || `#${f.commitment_id}`}</a>
+                          {f.commitment_version && <span>v{f.commitment_version}</span>}
+                        </div>
+                        <div className="font-medium">{f.b_value}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </section>
               <section>
                 <h3 className="mb-2 text-sm font-semibold">前后矛盾（{contradictions.length}）</h3>
                 {contradictions.length === 0 ? <Empty>当前筛选下没有矛盾结论。</Empty> : contradictions.map((f) => (
@@ -380,7 +411,7 @@ function ResolveModal({ taskId, finding, onClose, onDone, onStale }: { taskId: n
     } finally { setBusy(false) }
   }
   return (
-    <Modal open title={`处理结论：${finding.kind === 'contradiction' ? finding.metric_label : finding.requirement_code}`} onClose={onClose} dirty={!!note.trim()}
+    <Modal open title={`处理结论：${finding.kind === 'omission' ? finding.requirement_code : finding.metric_label}`} onClose={onClose} dirty={!!note.trim()}
       footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={() => void submit()} disabled={kind !== 'fixed' && !note.trim()}>确认处理</Button></>}>
       <div className="space-y-3">
         <p className="text-sm">{finding.detail}</p>

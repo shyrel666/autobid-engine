@@ -10,6 +10,7 @@ const step = stepper(page)
 const modal = page.getByRole('dialog')
 page.on('dialog', (d) => d.accept(process.env.E2E_PROMPT_TEXT || '已对照原件逐项复核（工程样本）'))
 let taskID, cert
+const BIDDER = '合成档案服务公司'
 
 try {
   await step('环境：配置替身模型（非真实模型）', async () => { await ensureStubProfile() })
@@ -286,6 +287,12 @@ try {
       return (r.runs ?? r).length > 0
     })
     await page.reload()
+    // D4：一致性以承诺台账为基准，按当前规则版本运行；页面单列“与承诺台账不一致”。
+    const latest = await api('GET', `/api/tasks/${taskID}/consistency/findings`)
+    assert(latest.current && latest.run.rule_version === 'consistency-v2', `一致性运行应按当前规则：${JSON.stringify(latest.run).slice(0, 300)}`)
+    assert(latest.run.summary.ledger_commitments >= 1, '一致性核验应读到已确认的承诺台账')
+    assert(latest.run.ledger_mismatches === 0, `受控引用渲染的正文不应与台账不一致：${JSON.stringify(latest.findings).slice(0, 400)}`)
+    await page.getByRole('region', { name: '与承诺台账不一致' }).getByText(/已确认的承诺为基准/).waitFor()
     await shot(page, 'consistency')
   })
 
@@ -295,6 +302,10 @@ try {
     const ready = await api('GET', `/api/tasks/${taskID}/export-readiness`)
     assert(ready.ready, `导出门禁未通过：${JSON.stringify(ready.blockers).slice(0, 800)}`)
     await page.getByRole('radio', { name: /最终稿/ }).check()
+    // D4：最终稿的封面与文档属性都用投标人名称，不填不能提交。
+    await page.getByRole('button', { name: /提交导出|开始导出|锁定/ }).first().click()
+    await page.getByText('最终稿请填写封面投标人名称', { exact: false }).first().waitFor()
+    await page.getByLabel(/封面投标人/).fill(BIDDER)
     await page.getByRole('button', { name: /提交导出|开始导出|锁定/ }).first().click()
     jobs = await waitFor('导出完成', async () => {
       const list = await api('GET', `/api/tasks/${taskID}/exports`)
@@ -328,6 +339,100 @@ try {
     }
     assert(seen.has('pdf') && seen.has('docx'), `应下载到 DOCX 和 PDF：${[...seen]}`)
     return [...seen].join(' + ')
+  })
+
+  let rid
+  await step('D4 成稿回读：章节页码引用逐处与 PDF 版面一致，文档属性只含投标人', async () => {
+    const reqs = await api('GET', `/api/tasks/${taskID}/export-requests`)
+    const q = reqs.requests[0]
+    rid = q.id
+    assert(q.policy_version === 'export-final/v2', `最终稿策略应为 v2：${q.policy_version}`)
+    let refs = 0
+    for (const j of q.jobs) {
+      const sc = j.self_check
+      assert(sc, `${j.format} 没有回读自检记录`)
+      assert(sc.page_refs > 0 && sc.page_refs_verified === sc.page_refs && sc.page_ref_issues === 0 && sc.verified_against === 'pdf',
+        `${j.format} 页码引用未全部核对：${JSON.stringify(sc)}`)
+      assert(sc.toc_issues === 0 && sc.toc_entries > 0 && sc.layout_checked, `${j.format} 目录或版面未核对：${JSON.stringify(sc)}`)
+      assert(sc.metadata_checked && sc.metadata_issues === 0 && sc.author === BIDDER, `${j.format} 文档属性：${JSON.stringify(sc)}`)
+      refs = sc.page_refs
+    }
+    const pkg = q.jobs[0].package_snapshot
+    return `页码引用 ${refs} 处，评分索引 ${pkg.score_index?.length ?? 0} 项，承诺 ${pkg.commitments?.length ?? 0} 条，证明材料 ${pkg.evidence?.length ?? 0} 件`
+  })
+
+  await step('D4 提交检查清单：系统项按回读判定，必须写明操作人，逐项处理后就绪，刷新后保留', async () => {
+    const list = page.getByRole('region', { name: `提交检查清单（请求组 #${rid}）` })
+    await list.getByRole('button', { name: '提交检查清单', exact: true }).click()
+    const cl = (await api('GET', `/api/tasks/${taskID}/export-requests/${rid}/submission`)).checklist
+    assert(cl.final && cl.current && !cl.ready, `清单初始状态：${JSON.stringify(cl).slice(0, 400)}`)
+    const failed = cl.items.filter((it) => it.status === 'fail')
+    assert(failed.length === 0, `系统项不通过：${JSON.stringify(failed)}`)
+    for (const key of ['final_draft', 'current_content', 'bidder_name', 'toc_pages', 'layout', 'page_numbers', 'metadata']) {
+      await list.locator(`[data-check="${key}"]`).getByText('通过', { exact: true }).waitFor()
+      assert(await list.locator(`[data-check="${key}"]`).getByRole('button').count() === 0, `系统判定项 ${key} 不应有手工操作`)
+    }
+    const todo = cl.items.filter((it) => it.confirmable)
+    assert(todo.some((it) => it.key === 'own_template' && it.status === 'attention'), '使用内置模板应要求确认知悉')
+    // 没有操作人不能确认。
+    await setOperator(page, '')
+    const cover = todo.find((it) => it.key === 'cover_check')
+    await list.getByRole('button', { name: `确认：${cover.label}`, exact: true }).click()
+    await modal.getByRole('button', { name: '确认', exact: true }).click()
+    await modal.getByText('请先在页面顶部填写“当前操作人”', { exact: false }).waitFor()
+    await modal.getByRole('button', { name: '取消', exact: true }).click()
+    await modal.waitFor({ state: 'hidden' })
+    await setOperator(page, REVIEWER)
+    for (const it of todo) {
+      const row = list.locator(`[data-check="${it.key}"]`)
+      if (it.kind === 'auto') {
+        await row.getByRole('button', { name: `确认知悉：${it.label}`, exact: true }).click()
+        // 知悉必须写明理由，空着不能提交。
+        assert(await modal.getByRole('button', { name: '确认知悉', exact: true }).isDisabled(), '知悉类不写说明不应能提交')
+        await modal.getByLabel(/^说明/).fill('工程验收样本：接受该提示')
+        await modal.getByRole('button', { name: '确认知悉', exact: true }).click()
+      } else if (/^platform_/.test(it.key)) {
+        // 验收环境没有真实交易平台：如实标为不适用，而不是确认。
+        await row.getByRole('button', { name: `不适用：${it.label}`, exact: true }).click()
+        await modal.getByLabel(/^说明/).fill('工程验收环境没有接入交易平台，未做导入与上传')
+        await modal.getByRole('button', { name: '标为不适用', exact: true }).click()
+      } else {
+        await row.getByRole('button', { name: `确认：${it.label}`, exact: true }).click()
+        await modal.getByRole('button', { name: '确认', exact: true }).click()
+      }
+      await modal.waitFor({ state: 'hidden' })
+    }
+    await list.getByText('清单已全部处理', { exact: true }).waitFor()
+    await shot(page, 'submission')
+    await page.reload()
+    const again = page.getByRole('region', { name: `提交检查清单（请求组 #${rid}）` })
+    await again.getByText('清单已全部处理', { exact: true }).waitFor()
+    const after = await api('GET', `/api/tasks/${taskID}/export-requests/${rid}/submission`)
+    assert(after.checklist.ready && after.events.length === todo.length, `刷新后清单应保持就绪并留有 ${todo.length} 条记录：${after.events.length}`)
+    assert(after.events.every((e) => e.actor === REVIEWER), '确认记录应写明操作人')
+    assert(!/已提交|提交成功/.test(await again.innerText()), '清单就绪不能说成已提交')
+    return `${todo.length} 项人工处理（其中平台导入 / 上传标为不适用）`
+  })
+
+  await step('D4 导出后再改正文：这份成稿显示已过期，不能再确认', async () => {
+    const s = rest[0] ?? first
+    await page.goto(`${BASE}/tasks/${taskID}/writing/${s.id}`)
+    await setOperator(page, AUTHOR)
+    await page.getByRole('button', { name: '编辑正文', exact: true }).click()
+    const area = page.getByLabel('章节正文（Markdown）', { exact: true })
+    await area.fill(`${await area.inputValue()}\n\n各批次交付物以目录索引为准逐项清点。`)
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByText(/已保存为修订/).first().waitFor()
+    await page.goto(`${BASE}/tasks/${taskID}/export`)
+    const list = page.getByRole('region', { name: `提交检查清单（请求组 #${rid}）` })
+    await list.getByText('成稿已过期', { exact: true }).waitFor()
+    await list.getByRole('button', { name: '提交检查清单', exact: true }).click()
+    await list.locator('[data-check="current_content"]').getByText('不通过', { exact: true }).waitFor()
+    assert(await list.getByRole('button', { name: /^(确认|确认知悉|未通过|不适用)：/ }).count() === 0, '过期的成稿不应再提供确认操作')
+    const cl = (await api('GET', `/api/tasks/${taskID}/export-requests/${rid}/submission`)).checklist
+    assert(!cl.current && !cl.ready && cl.stale_reason, `过期清单：${JSON.stringify(cl).slice(0, 300)}`)
+    await shot(page, 'submission-stale')
+    return cl.stale_reason
   })
 
   await finish()

@@ -103,7 +103,7 @@ func TestHTTPExportRequests(t *testing.T) {
 		StrictRuntime bool               `json:"strict_runtime"`
 		PolicyVersion string             `json:"policy_version"`
 	}
-	if code := c.raw("GET", base+"/exports/preflight?mode=final", nil, &pre); code != 200 || !pre.Readiness.Ready || !pre.StrictRuntime || pre.PolicyVersion != db.ExportPolicyFinalV1 {
+	if code := c.raw("GET", base+"/exports/preflight?mode=final", nil, &pre); code != 200 || !pre.Readiness.Ready || !pre.StrictRuntime || pre.PolicyVersion != db.ExportPolicyFinal {
 		t.Fatalf("final preflight: %d %+v", code, pre)
 	}
 	if code, r := call(c, "GET", base+"/exports/preflight?mode=draft", nil); code != 400 {
@@ -111,6 +111,10 @@ func TestHTTPExportRequests(t *testing.T) {
 	}
 	if code, r := call(c, "POST", base+"/exports", map[string]any{"formats": []string{"docx"}, "mode": "final"}); code != 400 {
 		t.Fatalf("final without request_key: %d %+v", code, r)
+	}
+	// D4：最终稿必须带投标人名称，不登记请求组。
+	if code, r := call(c, "POST", base+"/exports", map[string]any{"formats": []string{"docx"}, "mode": "final", "request_key": "ui-nobidder"}); code != 400 || r.Code != "invalid_export" {
+		t.Fatalf("final without a bidder: %d %+v", code, r)
 	}
 	// 旧调用（不带请求键）保持兼容：201、预览稿。
 	var legacy struct {
@@ -134,7 +138,7 @@ func TestHTTPExportRequests(t *testing.T) {
 	}
 	for name, body := range map[string]map[string]any{
 		"idempotency_conflict": {"formats": []string{"docx"}, "mode": "final", "request_key": "ui-final-1", "expected_outline_version": pre.Readiness.OutlineVersion},
-		"stale_revision":       {"formats": []string{"docx"}, "mode": "final", "request_key": "ui-stale", "expected_outline_version": pre.Readiness.OutlineVersion + 1},
+		"stale_revision":       {"formats": []string{"docx"}, "mode": "final", "bidder": "示例科技有限公司", "request_key": "ui-stale", "expected_outline_version": pre.Readiness.OutlineVersion + 1},
 	} {
 		if code, r := call(c, "POST", base+"/exports", body); code != 409 || r.Code != name {
 			t.Fatalf("%s: %d %+v", name, code, r)
@@ -201,7 +205,7 @@ func TestHTTPExportRequests(t *testing.T) {
 
 	// 文档引擎不可用：最终稿新请求 503，同键重放不受影响；最终稿预检显示阻断。
 	offline := newExportRequestAPI(t, &export.Service{DB: d, Store: svc.Store, OfficeReason: "测试：文档引擎未安装"}, nil)
-	if code, r := call(offline, "POST", base+"/exports", map[string]any{"formats": []string{"docx"}, "mode": "final", "request_key": "offline-final"}); code != 503 ||
+	if code, r := call(offline, "POST", base+"/exports", map[string]any{"formats": []string{"docx"}, "mode": "final", "bidder": "示例科技有限公司", "request_key": "offline-final"}); code != 503 ||
 		r.Code != "runtime_unavailable" {
 		t.Fatalf("final without engine: %d %+v", code, r)
 	}

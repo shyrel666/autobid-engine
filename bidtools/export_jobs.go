@@ -101,7 +101,8 @@ func (k *Kit) exportJobView(j *db.ExportJob) map[string]any {
 	out := map[string]any{"job_ref": db.JobRef{Kind: db.JobKindProposalExport, ID: j.ID}, "format": j.Format, "status": j.Status,
 		"business_state": j.BusinessState, "strict_runtime": j.StrictRuntime, "attempts": j.Attempts, "max_attempts": j.MaxAttempts,
 		"outline_version": j.OutlineVersion, "next_action": exportNextAction(j.Status, j.BusinessState),
-		"snapshot": map[string]any{"sections": len(j.Doc.Sections), "charts": len(j.Charts), "deviation_rows": len(j.Matrix), "template": j.TemplateKey}}
+		"snapshot": map[string]any{"sections": len(j.Doc.Sections), "charts": len(j.Charts), "deviation_rows": len(j.Matrix), "template": j.TemplateKey,
+			"score_index_rows": len(j.Package.ScoreIndex), "commitments": len(j.Package.Commitments), "evidence": len(j.Package.Evidence)}}
 	if j.ExportRequestID != nil {
 		out["export_request_id"] = *j.ExportRequestID
 	}
@@ -123,6 +124,14 @@ func (k *Kit) exportJobView(j *db.ExportJob) map[string]any {
 		out["download_route"] = fmt.Sprintf("/api/tasks/%d/exports/%d/download", j.TaskID, j.ID)
 		if n := len(j.Warnings); n > 0 {
 			out["warnings"] = n
+		}
+		if sc := j.SelfCheck; sc != nil { // D4：成稿回读自检（页码引用逐处核对、文档属性）
+			out["self_check"] = map[string]any{"pages": sc.Pages, "page_refs": sc.PageRefs, "page_refs_verified": sc.PageRefsVerified,
+				"verified_against": sc.VerifiedAgainst, "toc_issues": sc.TOCIssues, "metadata_issues": sc.MetadataIssues}
+		}
+		if j.BusinessState == db.ExportFinalReady {
+			// 提交检查清单（签章、交易平台导入与上传等）只能由人在导出页确认；Agent 没有对应工具，也不应声称已提交。
+			out["human_step"] = "a person must complete the submission checklist on the export page before the file is handed in"
 		}
 	}
 	return out
@@ -206,7 +215,7 @@ func (k *Kit) exportCheckTool() tool.CoreTool {
 				runtime["office_executor"] = export.OfficeLabel(k.charts.Office)
 			}
 			return tool.JSON(map[string]any{"ready": len(blockers) == 0, "outline_version": pre.Readiness.OutlineVersion, "formats": formats,
-				"policy_version": db.ExportPolicyFinalV1, "strict_runtime": true, "blockers": blockers, "warnings": pre.Warnings, "charts": pre.Charts,
+				"policy_version": db.ExportPolicyFinal, "strict_runtime": true, "blockers": blockers, "warnings": pre.Warnings, "charts": pre.Charts,
 				"checked_at": pre.Readiness.CheckedAt.UTC().Format(time.RFC3339), "runtime": runtime,
 				"note": "precheck only: submission re-validates the gate inside the snapshot transaction"}), nil
 		})
@@ -222,7 +231,7 @@ func (k *Kit) exportSubmitTool() tool.CoreTool {
 		Schema: obj(map[string]any{
 			"formats":                  exportFormatsSchema,
 			"template_id":              integer("上传的套版模板 ID；省略或 0 表示内置默认模板"),
-			"bidder_name":              str("封面投标人名称（可选，最多 200 字）"),
+			"bidder_name":              str("投标人名称（必填，最多 200 字；与营业执照一致，写入封面与文档属性）"),
 			"expected_outline_version": integer("当前批准大纲版本（>0）"),
 			"request_key":              str("幂等请求键（1~200 字符，不得以 sys: 开头）"),
 		}, "formats", "expected_outline_version", "request_key")}

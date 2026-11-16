@@ -143,6 +143,92 @@ type SnapshotMatrixRow struct {
 	VerifyStatus    string `json:"verify_status"`
 }
 
+// SnapshotSectionRef 是附表中对一个章节的引用（页码由成稿中的书签解析）。
+type SnapshotSectionRef struct {
+	SectionID int64  `json:"section_id"`
+	Code      string `json:"section_code"`
+	Title     string `json:"title"`
+}
+
+// SnapshotScoreRow 是《评分索引表》的一行：技术 / 商务评分项及响应它的章节（按评分表顺序）。
+type SnapshotScoreRow struct {
+	RequirementID int64                `json:"requirement_item_id"`
+	Code          string               `json:"requirement_code"`
+	Title         string               `json:"requirement_title"`
+	ScoreGroup    string               `json:"score_group,omitempty"`
+	EvalKind      string               `json:"eval_kind,omitempty"`
+	Score         float64              `json:"score"`
+	Sections      []SnapshotSectionRef `json:"sections"`
+}
+
+// SnapshotOriginal 是证明材料的一份原件定位（原件文件内的页码范围，不是成稿页码）。
+type SnapshotOriginal struct {
+	DocumentKind string `json:"document_kind"`
+	PageLabel    string `json:"page_label,omitempty"`
+	SHA256       string `json:"sha256"`
+	PageStart    int    `json:"page_start"`
+	PageEnd      int    `json:"page_end"`
+}
+
+// SnapshotEvidence 是《证明材料索引》的一行：锁定修订引用的、当前可采的企业证据。
+type SnapshotEvidence struct {
+	Domain           string               `json:"evidence_domain"`
+	EvidenceID       int64                `json:"evidence_id"`
+	Code             string               `json:"code"`
+	Name             string               `json:"name"`
+	Number           string               `json:"number,omitempty"`
+	Subject          string               `json:"subject,omitempty"`
+	Originals        []SnapshotOriginal   `json:"originals"`
+	RequirementCodes []string             `json:"requirement_codes"`
+	Sections         []SnapshotSectionRef `json:"sections"`
+}
+
+// SnapshotCommitment 是《承诺事项一览表》的一行：锁定修订引用的、已确认或已会签的承诺台账条目。
+type SnapshotCommitment struct {
+	ID              int64                `json:"id"`
+	Code            string               `json:"code"`
+	Version         int                  `json:"version"`
+	Metric          string               `json:"metric"`
+	MetricLabel     string               `json:"metric_label"`
+	Unit            string               `json:"unit,omitempty"`
+	TenderThreshold string               `json:"tender_threshold,omitempty"`
+	Committed       string               `json:"committed"`
+	Status          string               `json:"status"`
+	RequirementCode string               `json:"requirement_code,omitempty"`
+	Sections        []SnapshotSectionRef `json:"sections"`
+}
+
+// PackageSnapshot 是 D4 成稿附表的快照（与 doc / chart / matrix 快照同一事务固化，不可修改）。S4 及更早的作业为空。
+type PackageSnapshot struct {
+	ScoreIndex  []SnapshotScoreRow   `json:"score_index,omitempty"`
+	Evidence    []SnapshotEvidence   `json:"evidence,omitempty"`
+	Commitments []SnapshotCommitment `json:"commitments,omitempty"`
+}
+
+// ExportSelfCheck 是成稿回读自检的结构化结果，随成功结果一次写入 export_jobs.self_check（之后不可修改）。
+// 提交检查清单（submission.go）的系统可查项由它判定。LayoutChecked 为假表示没有 PDF 版面可核对（未刷新的预览稿）。
+type ExportSelfCheck struct {
+	Pages            int    `json:"pages,omitempty"`
+	TOCEntries       int    `json:"toc_entries"`
+	TOCIssues        int    `json:"toc_issues"`
+	ScoreRows        int    `json:"score_rows"`
+	PageRefs         int    `json:"page_refs"`
+	PageRefsVerified int    `json:"page_refs_verified"`
+	PageRefIssues    int    `json:"page_ref_issues"`
+	VerifiedAgainst  string `json:"verified_against,omitempty"` // pdf（同一次刷新的 PDF 版面）/ toc（目录条目）
+	MetadataChecked  bool   `json:"metadata_checked"`
+	MetadataIssues   int    `json:"metadata_issues"`
+	Author           string `json:"author,omitempty"`
+	LastModifiedBy   string `json:"last_modified_by,omitempty"`
+	LayoutChecked    bool   `json:"layout_checked"`
+	OutOfBounds      int    `json:"out_of_bounds"`
+	BlankPages       int    `json:"blank_pages"`
+	FooterIssues     int    `json:"footer_issues"`
+	ImageIssues      int    `json:"image_issues"`
+	Images           int    `json:"images"`
+	Tables           int    `json:"tables"`
+}
+
 // ExportJob 是一次导出任务。BusinessState 区分作业状态与业务状态：成功作业只有严格最终稿（文档引擎已刷新目录并记录引擎）
 // 才是 final_ready，其余成功产物（含 S4 之前的旧作业）一律 preview_only。
 type ExportJob struct {
@@ -167,6 +253,8 @@ type ExportJob struct {
 	Charts          []SnapshotChart     `json:"chart_snapshot"`
 	Matrix          []SnapshotMatrixRow `json:"matrix_snapshot"`
 	Doc             DocSnapshot         `json:"doc_snapshot"`
+	Package         PackageSnapshot     `json:"package_snapshot"`
+	SelfCheck       *ExportSelfCheck    `json:"self_check,omitempty"`
 	Gate            json.RawMessage     `json:"gate"`
 	ArtifactPath    string              `json:"-"`
 	ArtifactName    string              `json:"artifact_name"`
@@ -212,7 +300,7 @@ type CreateExportInput struct {
 const exportJobCols = `id, task_id, outline_id, outline_version, format, status, template_id, template_key, template_hash, rev_snapshot,
 	chart_snapshot, matrix_snapshot, doc_snapshot, gate, artifact_path, artifact_name, artifact_hash, artifact_size, toc_refreshed, warnings,
 	error, attempts, max_attempts, lease_owner, lease_token, lease_until, started_at, finished_at, created_by, created_at, updated_at,
-	export_request_id, strict_runtime, executor, deadline_at, error_code, office_engine, office_version`
+	export_request_id, strict_runtime, executor, deadline_at, error_code, office_engine, office_version, package_snapshot, self_check`
 
 // 导出业务状态（作业成功之后的含义；未成功时与作业状态相同）。
 const (
@@ -223,12 +311,12 @@ const (
 func scanExportJob(sc rowScanner) (*ExportJob, error) {
 	var j ExportJob
 	var tpl, reqID sql.NullInt64
-	var revs, charts, matrix, doc, gate, warns []byte
+	var revs, charts, matrix, doc, gate, warns, pkg, selfCheck []byte
 	var leaseUntil, started, finished, deadline sql.NullTime
 	if err := sc.Scan(&j.ID, &j.TaskID, &j.OutlineID, &j.OutlineVersion, &j.Format, &j.Status, &tpl, &j.TemplateKey, &j.TemplateHash, &revs,
 		&charts, &matrix, &doc, &gate, &j.ArtifactPath, &j.ArtifactName, &j.ArtifactHash, &j.ArtifactSize, &j.TOCRefreshed, &warns,
 		&j.Error, &j.Attempts, &j.MaxAttempts, &j.LeaseOwner, &j.LeaseToken, &leaseUntil, &started, &finished, &j.CreatedBy,
-		&j.CreatedAt, &j.UpdatedAt, &reqID, &j.StrictRuntime, &j.Executor, &deadline, &j.ErrorCode, &j.OfficeEngine, &j.OfficeVersion); err != nil {
+		&j.CreatedAt, &j.UpdatedAt, &reqID, &j.StrictRuntime, &j.Executor, &deadline, &j.ErrorCode, &j.OfficeEngine, &j.OfficeVersion, &pkg, &selfCheck); err != nil {
 		return nil, err
 	}
 	if tpl.Valid {
@@ -250,7 +338,7 @@ func scanExportJob(sc rowScanner) (*ExportJob, error) {
 	for _, x := range []struct {
 		raw []byte
 		v   any
-	}{{revs, &j.RevSnapshot}, {charts, &j.Charts}, {matrix, &j.Matrix}, {doc, &j.Doc}, {warns, &j.Warnings}} {
+	}{{revs, &j.RevSnapshot}, {charts, &j.Charts}, {matrix, &j.Matrix}, {doc, &j.Doc}, {warns, &j.Warnings}, {pkg, &j.Package}} {
 		if err := json.Unmarshal(x.raw, x.v); err != nil {
 			return nil, fmt.Errorf("export job %d snapshot: %w", j.ID, err)
 		}
@@ -263,6 +351,13 @@ func scanExportJob(sc rowScanner) (*ExportJob, error) {
 	}
 	if j.Warnings == nil {
 		j.Warnings = []ExportWarning{}
+	}
+	if len(selfCheck) > 2 { // 未写入时为 {}
+		var sc ExportSelfCheck
+		if err := json.Unmarshal(selfCheck, &sc); err != nil {
+			return nil, fmt.Errorf("export job %d self_check: %w", j.ID, err)
+		}
+		j.SelfCheck = &sc
 	}
 	j.Gate = json.RawMessage(gate)
 	j.LeaseUntil, j.StartedAt, j.FinishedAt = nullTimePtr(leaseUntil), nullTimePtr(started), nullTimePtr(finished)
@@ -534,6 +629,7 @@ type ExportResult struct {
 	OfficeEngine  string
 	OfficeVersion string
 	Warnings      []ExportWarning
+	SelfCheck     *ExportSelfCheck // 回读自检结果（未回读时为 nil）
 }
 
 // lockRunningExportJobTx 是写回的围栏：任务行（共享，与暂停串行化）未暂停，作业仍以该令牌运行且未过截止时间。
@@ -562,15 +658,19 @@ func (d *DB) CompleteExportJob(ctx context.Context, id, token int64, r ExportRes
 	if r.Warnings == nil {
 		warns = []byte("[]")
 	}
+	check := []byte("{}")
+	if r.SelfCheck != nil {
+		check, _ = json.Marshal(r.SelfCheck)
+	}
 	return d.Transaction(ctx, func(tx *DB) error {
 		if err := lockRunningExportJobTx(ctx, tx, id, token); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE export_jobs SET status = 'succeeded', artifact_path = $3, artifact_name = $4, artifact_hash = $5,
 			artifact_size = $6, toc_refreshed = $7, office_engine = $8, office_version = $9, warnings = warnings || $10::jsonb, error = '', error_code = '',
-			finished_at = now(), lease_until = NULL, lease_owner = ''
+			self_check = $11::jsonb, finished_at = now(), lease_until = NULL, lease_owner = ''
 			WHERE id = $1 AND lease_token = $2`, id, token, r.ArtifactPath, r.ArtifactName, r.ArtifactHash, r.ArtifactSize,
-			r.TOCRefreshed, r.OfficeEngine, r.OfficeVersion, string(warns))
+			r.TOCRefreshed, r.OfficeEngine, r.OfficeVersion, string(warns), string(check))
 		return err
 	})
 }

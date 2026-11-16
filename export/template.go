@@ -2,7 +2,9 @@ package export
 
 // .docx 套版模板：保留模板的样式、主题、页眉页脚、页面设置与封面，只替换正文中的 {{content}} 段落，
 // 并替换 {{title}} / {{task}} / {{bidder}} / {{date}} / {{outline_version}} 文本占位符（须位于同一个 w:t 内）。
-// 生成正文所需而模板缺少的样式（标题 1~6、目录 1~3、题注、表格网格与 Autobid 正文样式）按样式名补齐。
+// 生成正文所需而模板缺少的样式（标题 1~6、目录 1~3、题注、表格网格与正文辅助样式）按样式名补齐。
+// 补齐的样式使用中性名称（Contents Title、Subheading、Table Text 等），不带平台字样：同一平台导出的不同企业文件不应在
+// styles.xml 里留下可识别的共同标记。早期模板中名为「Autobid ...」的同用途样式仍被识别并沿用（legacy）。
 
 import (
 	"archive/zip"
@@ -254,7 +256,8 @@ func (t *Template) Meta() TemplateMeta {
 		MarginsMM:     []float64{round1(mm(g.Top)), round1(mm(g.Right)), round1(mm(g.Bottom)), round1(mm(g.Left))},
 		HasContentTag: t.bodyPost != "" || strings.Contains(string(t.files["word/document.xml"]), "{{content}}"), MissingStyles: []string{}}
 	for _, s := range builtinStyles {
-		if _, ok := t.styles[s.name]; !ok {
+		_, ok := t.styles[s.name]
+		if _, old := t.styles[s.legacy]; !ok && !(old && s.legacy != "") {
 			m.MissingStyles = append(m.MissingStyles, s.name)
 		}
 	}
@@ -274,6 +277,7 @@ const zeroInd = `<w:ind w:firstLineChars="0" w:firstLine="0"/>`
 
 type builtinStyle struct {
 	name, id, kind, xml string
+	legacy              string // 早期版本的样式名（小写），模板里有它时沿用模板定义
 }
 
 // builtinStyles 是导出正文用到的样式；模板已有同名样式时沿用模板定义。
@@ -303,17 +307,17 @@ var builtinStyles = func() []builtinStyle {
 			`<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/><w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>` +
 			`<w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/></w:tblBorders>` +
 			`<w:tblCellMar><w:left w:w="85" w:type="dxa"/><w:right w:w="85" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>`},
-		{name: "autobid toc title", id: "AutobidTOCTitle", kind: "paragraph", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="AutobidTOCTitle"><w:name w:val="Autobid TOC Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>` +
+		{name: "contents title", id: "ContentsTitle", kind: "paragraph", legacy: "autobid toc title", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="ContentsTitle"><w:name w:val="Contents Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>` +
 			`<w:pPr><w:spacing w:before="240" w:after="240" w:line="240" w:lineRule="auto"/>` + zeroInd + `<w:jc w:val="center"/></w:pPr><w:rPr><w:rFonts w:eastAsia="SimHei"/><w:b/><w:sz w:val="32"/></w:rPr></w:style>`},
-		{name: "autobid subheading", id: "AutobidSubheading", kind: "paragraph", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="AutobidSubheading"><w:name w:val="Autobid Subheading"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>` +
+		{name: "subheading", id: "Subheading", kind: "paragraph", legacy: "autobid subheading", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="Subheading"><w:name w:val="Subheading"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>` +
 			`<w:pPr><w:keepNext/><w:spacing w:before="120" w:after="60"/>` + zeroInd + `</w:pPr><w:rPr><w:rFonts w:eastAsia="SimHei"/><w:b/></w:rPr></w:style>`},
-		{name: "autobid list", id: "AutobidList", kind: "paragraph", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="AutobidList"><w:name w:val="Autobid List"/><w:basedOn w:val="Normal"/>` +
+		{name: "list text", id: "ListText", kind: "paragraph", legacy: "autobid list", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="ListText"><w:name w:val="List Text"/><w:basedOn w:val="Normal"/>` +
 			`<w:pPr><w:spacing w:before="0" w:after="0"/>` + zeroInd + `</w:pPr></w:style>`},
-		{name: "autobid table text", id: "AutobidTableText", kind: "paragraph", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="AutobidTableText"><w:name w:val="Autobid Table Text"/><w:basedOn w:val="Normal"/>` +
+		{name: "table text", id: "TableText", kind: "paragraph", legacy: "autobid table text", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="TableText"><w:name w:val="Table Text"/><w:basedOn w:val="Normal"/>` +
 			`<w:pPr><w:spacing w:before="20" w:after="20" w:line="240" w:lineRule="auto"/><w:ind w:firstLineChars="0" w:firstLine="0"/><w:jc w:val="left"/></w:pPr><w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>`},
-		{name: "autobid code", id: "AutobidCode", kind: "paragraph", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="AutobidCode"><w:name w:val="Autobid Code"/><w:basedOn w:val="Normal"/>` +
+		{name: "code text", id: "CodeText", kind: "paragraph", legacy: "autobid code", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="CodeText"><w:name w:val="Code Text"/><w:basedOn w:val="Normal"/>` +
 			`<w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:firstLineChars="0" w:firstLine="0"/><w:jc w:val="left"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="SimSun" w:cs="Consolas"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr></w:style>`},
-		{name: "autobid figure", id: "AutobidFigure", kind: "paragraph", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="AutobidFigure"><w:name w:val="Autobid Figure"/><w:basedOn w:val="Normal"/><w:next w:val="Caption"/>` +
+		{name: "figure", id: "Figure", kind: "paragraph", legacy: "autobid figure", xml: `<w:style w:type="paragraph" w:customStyle="1" w:styleId="Figure"><w:name w:val="Figure"/><w:basedOn w:val="Normal"/><w:next w:val="Caption"/>` +
 			`<w:pPr><w:keepNext/><w:spacing w:before="120" w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:firstLineChars="0" w:firstLine="0"/><w:jc w:val="center"/></w:pPr></w:style>`},
 	}
 }()
@@ -324,6 +328,10 @@ func (t *Template) resolveStyles() (map[string]string, []byte) {
 	var add strings.Builder
 	for _, s := range builtinStyles {
 		if id, ok := t.styles[s.name]; ok {
+			out[s.name] = id
+			continue
+		}
+		if id, ok := t.styles[s.legacy]; ok && s.legacy != "" {
 			out[s.name] = id
 			continue
 		}

@@ -99,6 +99,9 @@ func normCmp(c string) string {
 	return CmpEQ
 }
 
+// UnitDim 返回单位的量纲，以及换算到该量纲归一单位（天 / 分钟 / % / 人）的系数；不认识的单位为 (DimItems, 1)。
+func UnitDim(u string) (dim string, factor float64) { return unitDim(strings.TrimSpace(u)) }
+
 func unitDim(u string) (dim string, factor float64) {
 	switch u {
 	case "个日历天", "日历天", "个工作日", "工作日", "个自然日", "自然日", "天", "日":

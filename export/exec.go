@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/autobid/autobid-engine/db"
+	"github.com/autobid/autobid-engine/ingest"
 	"github.com/autobid/autobid-engine/toolhealth"
 )
 
@@ -109,9 +110,13 @@ func ArtifactName(job *db.ExportJob) string {
 // Execute 执行一次导出（调用方已持有租约）：生成 docx，经文档引擎（WPS / Word）刷新目录、另存 docx 或导出 PDF，
 // 结果写到 <job>/t<token>/ 目录。返回产物与提示；不写数据库。
 //
-// 严格最终稿（job.StrictRuntime，策略 db.ExportPolicyFinalV1）在执行时重验：文档引擎必须可用且与提交时固定的执行版本一致
+// 严格最终稿（job.StrictRuntime）在执行时重验：文档引擎必须可用且与提交时固定的执行版本一致
 // （否则 RUNTIME_UNAVAILABLE，不降级为未刷新目录的 DOCX，也不换用另一个引擎）；快照中的 PNG 须可读且哈希一致，不插入源码
-// 占位框；产物回读须有刷新后的目录、全部图片与表格（READBACK_FAILED）。
+// 占位框；产物回读须有刷新后的目录、全部图片与表格，章节页码引用（评分索引表 / 偏离表 / 附录）与标题实际所在页一致，
+// 文档属性不带平台字样与无关作者（READBACK_FAILED）。
+//
+// D4：同一次引擎会话同时另存 DOCX 与导出 PDF——PDF 作业借 DOCX 读出页码引用的缓存结果，严格 DOCX 作业借 PDF 版面取得
+// 标题实际所在页；另一种格式只用于核对，不作为产物。引擎另存的 DOCX 再经 SanitizeDOCX 清洗文档属性后才落盘。
 func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob) (*db.ExportResult, error) {
 	reason := s.OfficeReason
 	if reason == "" {
@@ -158,7 +163,8 @@ func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob)
 			return nil, permanent("图表 #%d《%s》在快照中未渲染（%s）：最终稿不插入源码占位框", c.ChartID, c.Title, c.RenderStatus)
 		}
 	}
-	in := BuildInput{Doc: job.Doc, Bodies: bodies, Charts: job.Charts, ChartImages: images, Matrix: job.Matrix,
+	meta := DocMeta{Title: job.Doc.TaskName, Author: job.Doc.Bidder, At: job.Doc.CreatedAt}
+	in := BuildInput{Doc: job.Doc, Bodies: bodies, Charts: job.Charts, ChartImages: images, Matrix: job.Matrix, Package: job.Package,
 		Bidder: job.Doc.Bidder, Date: job.Doc.CreatedAt.In(time.Local).Format("2006年01月02日"), UpdateFieldsOnOpen: s.Office == nil}
 	built, err := Build(tpl, in)
 	if err != nil {
@@ -198,7 +204,7 @@ func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob)
 		return nil, err
 	}
 	defer removeAllRetry(work)
-	var final []byte
+	var final, companion []byte // companion：同一次刷新的另一种格式，只用于核对页码
 	if s.Office == nil {
 		final = built.Data
 		res.Warnings = append(res.Warnings, db.ExportWarning{Kind: db.WarnTOCNotRefreshed,
@@ -208,9 +214,12 @@ func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob)
 		if err := os.WriteFile(draft, built.Data, 0o644); err != nil {
 			return nil, err
 		}
-		outDocx, outPDF := filepath.Join(work, "refreshed.docx"), ""
-		if job.Format == db.ExportPDF {
-			outDocx, outPDF = "", filepath.Join(work, "out.pdf")
+		outDocx, outPDF := filepath.Join(work, "refreshed.docx"), filepath.Join(work, "out.pdf")
+		switch {
+		case job.Format == db.ExportPDF && built.PageRefs == 0:
+			outDocx = ""
+		case job.Format == db.ExportDOCX && !job.StrictRuntime:
+			outPDF = ""
 		}
 		if _, err := s.Office.Refresh(ctx, draft, outDocx, outPDF); err != nil {
 			if ctx.Err() == nil { // 取消 / 租约丢失不算引擎故障
@@ -219,20 +228,38 @@ func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob)
 			return nil, err
 		}
 		s.Health.Recover(toolhealth.Office)
-		out := outDocx
-		if outPDF != "" {
-			out = outPDF
+		read := func(p string) ([]byte, error) {
+			if p == "" {
+				return nil, nil
+			}
+			return os.ReadFile(p)
 		}
-		if final, err = os.ReadFile(out); err != nil {
+		docx, err := read(outDocx)
+		if err != nil {
 			return nil, err
+		}
+		if docx != nil {
+			// 引擎另存时写入本机账号等属性：落盘前清洗，回读核对的是清洗后的文件。
+			if docx, err = SanitizeDOCX(docx, meta); err != nil {
+				return nil, permanent("清洗文档属性失败：%v", err)
+			}
+		}
+		pdf, err := read(outPDF)
+		if err != nil {
+			return nil, err
+		}
+		final, companion = docx, pdf
+		if job.Format == db.ExportPDF {
+			final, companion = pdf, docx
 		}
 		res.TOCRefreshed, res.OfficeEngine, res.OfficeVersion = true, s.Office.Name(), s.Office.Version()
 	}
-	warns, rerr := readback(ctx, job, final, tpl.Geometry, res.TOCRefreshed)
+	warns, check, rerr := readback(ctx, job, final, companion, tpl.Geometry, built, res.TOCRefreshed)
 	if rerr != nil {
 		return nil, rerr
 	}
 	res.Warnings = append(res.Warnings, warns...)
+	res.SelfCheck = check
 	rel := dirRel + "/" + safeFileName(name)
 	sum, err := s.Store.WriteFile(rel, final)
 	if err != nil {
@@ -242,36 +269,116 @@ func (s *Service) Execute(ctx context.Context, tenant string, job *db.ExportJob)
 	return res, nil
 }
 
-// readback 用 ingest 解析器回读产物：PDF 核对目录页码与版式，刷新过的 DOCX 核对目录域缓存结果，问题记为提示，不改变成败。
-// 严格最终稿另行要求目录结构问题为零（目录存在、带页码、与标题实际页一致），且图片与表格数量不少于快照，否则返回
-// READBACK_FAILED（重试无意义）。
-func readback(ctx context.Context, job *db.ExportJob, data []byte, g Geometry, refreshed bool) ([]db.ExportWarning, error) {
+// readback 用 ingest 解析器回读产物并返回提示与结构化自检结果（db.ExportSelfCheck，随成功结果写入作业）：
+//   - PDF：目录页码、版式；DOCX（刷新过或严格）：目录域缓存结果、表格与图片数；
+//   - companion 是同一次刷新导出的另一种格式：PDF 作业用它（DOCX）读出章节页码引用的缓存结果，DOCX 作业用它（PDF）取得
+//     标题实际所在页与版式；没有 PDF 时页码引用只能与目录中同名条目比对；
+//   - 文档属性：作者类字段只能是投标人或空，不带平台字样。
+//
+// 问题记为提示，不改变成败。严格最终稿另行要求目录结构、章节页码引用与文档属性问题为零，且图片与表格数量不少于快照，
+// 否则返回 READBACK_FAILED（重试无意义）。
+func readback(ctx context.Context, job *db.ExportJob, data, companion []byte, g Geometry, built *BuildResult, refreshed bool) ([]db.ExportWarning, *db.ExportSelfCheck, error) {
+	check := &db.ExportSelfCheck{ScoreRows: built.ScoreRows, PageRefs: built.PageRefs}
 	var issues []Issue
-	var images, tables int
-	var err error
-	switch {
-	case job.Format == db.ExportPDF:
-		var r *PDFReport
-		if r, err = CheckPDF(data, g); err == nil {
-			issues, images, tables = r.Issues, r.Images, -1
-		}
-	case refreshed || job.StrictRuntime:
-		var r *DOCXReport
-		if r, err = CheckDOCX(ctx, data); err == nil {
-			issues, tables = r.Issues, len(r.Tables)
-			images, err = DOCXBodyImages(data)
-		}
-	}
-	if err != nil {
+	images, tables := 0, -1
+	fail := func(err error) ([]db.ExportWarning, *db.ExportSelfCheck, error) {
 		if job.StrictRuntime {
-			return nil, permanentCode(db.JobErrReadbackFailed, "最终稿回读失败：%v", err)
+			return nil, nil, permanentCode(db.JobErrReadbackFailed, "最终稿回读失败：%v", err)
 		}
-		return []db.ExportWarning{{Kind: db.WarnSelfCheck, Message: strings.ToUpper(job.Format) + " 自检回读失败：" + err.Error()}}, nil
+		return []db.ExportWarning{{Kind: db.WarnSelfCheck, Message: strings.ToUpper(job.Format) + " 自检回读失败：" + err.Error()}}, nil, nil
 	}
+	docx, pdf := data, companion
+	if job.Format == db.ExportPDF {
+		docx, pdf = companion, data
+	}
+	var pdfReport *PDFReport
+	if pdf != nil {
+		r, err := CheckPDF(pdf, g)
+		if err != nil {
+			return fail(err)
+		}
+		pdfReport = r
+		check.Pages, check.TOCEntries, check.LayoutChecked = r.Pages, len(r.TOC), true
+		for _, is := range r.Issues {
+			switch is.Kind {
+			case IssueOutOfBounds:
+				check.OutOfBounds++
+			case IssueBlankPage:
+				check.BlankPages++
+			case IssueFooterPage:
+				check.FooterIssues++
+			case IssueImageOverlap, IssueImageOverText:
+				check.ImageIssues++
+			}
+		}
+		issues = append(issues, r.Issues...)
+		images = r.Images
+	}
+	var toc []ingest.TOCEntry
+	if docx != nil && (refreshed || job.StrictRuntime) {
+		r, err := CheckDOCX(ctx, docx)
+		if err != nil {
+			return fail(err)
+		}
+		toc = r.TOC
+		if job.Format == db.ExportDOCX {
+			issues = append(issues, r.Issues...)
+			tables = len(r.Tables)
+			if images, err = DOCXBodyImages(docx); err != nil {
+				return fail(err)
+			}
+			if pdfReport == nil {
+				check.TOCEntries = len(r.TOC)
+			}
+		}
+	}
+	// 章节页码引用：生成时写入了引用才核对；没有刷新过的 DOCX 可读时如实记为未核对。
+	if built.PageRefs > 0 && refreshed {
+		if docx == nil {
+			issues = append(issues, Issue{Kind: IssuePageRefUnresolved, Detail: "没有可回读的 DOCX，章节页码引用未核对"})
+		} else {
+			checks, pis, err := CheckPageRefs(docx, built.Bookmarks, built.PageRefs, pdfReport, toc)
+			if err != nil {
+				return fail(err)
+			}
+			for _, c := range checks {
+				if c.Listed > 0 && c.Actual == c.Listed {
+					check.PageRefsVerified++
+				}
+			}
+			check.PageRefIssues = len(pis)
+			check.VerifiedAgainst = "toc"
+			if pdfReport != nil {
+				check.VerifiedAgainst = "pdf"
+			}
+			issues = append(issues, pis...)
+		}
+	}
+	// 文档属性。
+	var md *Metadata
+	var mis []Issue
+	var merr error
+	if job.Format == db.ExportPDF {
+		md, mis, merr = CheckPDFMetadata(data, job.Doc.Bidder)
+	} else {
+		md, mis, merr = CheckDOCXMetadata(data, job.Doc.Bidder)
+	}
+	if merr != nil {
+		return fail(merr)
+	}
+	check.MetadataChecked, check.MetadataIssues, check.Author, check.LastModifiedBy = true, len(mis), md.Author, md.LastModifiedBy
+	issues = append(issues, mis...)
+	for _, is := range issues {
+		if tocIssue(is.Kind) {
+			check.TOCIssues++
+		}
+	}
+	check.Images, check.Tables = images, max(tables, 0)
+
 	if job.StrictRuntime {
 		var bad []string
 		for _, is := range issues {
-			if tocIssue(is.Kind) {
+			if strictIssue(is.Kind) {
 				bad = append(bad, is.Detail)
 			}
 		}
@@ -280,13 +387,13 @@ func readback(ctx context.Context, job *db.ExportJob, data []byte, g Geometry, r
 			bad = append(bad, fmt.Sprintf("回读到 %d 张图片，快照有 %d 张渲染图", images, wantImages))
 		}
 		if tables >= 0 && tables < wantTables {
-			bad = append(bad, fmt.Sprintf("回读到 %d 个表格，快照至少有 %d 个（设备选型表与偏离表）", tables, wantTables))
+			bad = append(bad, fmt.Sprintf("回读到 %d 个表格，快照至少有 %d 个（设备选型表、偏离表与附表）", tables, wantTables))
 		}
 		if len(bad) > 0 {
 			if len(bad) > 5 {
 				bad = append(bad[:5], fmt.Sprintf("另有 %d 项", len(bad)-5))
 			}
-			return nil, permanentCode(db.JobErrReadbackFailed, "最终稿回读未通过：%s", strings.Join(bad, "；"))
+			return nil, nil, permanentCode(db.JobErrReadbackFailed, "最终稿回读未通过：%s", strings.Join(bad, "；"))
 		}
 	}
 	var out []db.ExportWarning
@@ -301,10 +408,10 @@ func readback(ctx context.Context, job *db.ExportJob, data []byte, g Geometry, r
 		}
 		out = append(out, db.ExportWarning{Kind: db.WarnSelfCheck, Message: msg})
 	}
-	return out, nil
+	return out, check, nil
 }
 
-// tocIssue 报告问题是否属于目录结构（严格最终稿不容许）；版式类问题只记为提示。
+// tocIssue 报告问题是否属于目录结构；版式类问题只记为提示。
 func tocIssue(kind string) bool {
 	switch kind {
 	case IssueTOCMissing, IssueTOCPage, IssueHeadingMissing, IssueTOCPlaceholder, IssueTOCEntryNoPage, IssueTOCFieldMissing:
@@ -313,7 +420,16 @@ func tocIssue(kind string) bool {
 	return false
 }
 
-// expectedContent 返回快照要求成稿至少包含的图片数（PNG 渲染图）与表格数（设备选型表 + 偏离表）。
+// strictIssue 报告严格最终稿不容许的问题：目录结构、章节页码引用与文档属性。
+func strictIssue(kind string) bool {
+	switch kind {
+	case IssuePageRefMissing, IssuePageRefUnresolved, IssuePageRefPage, IssueMetadata:
+		return true
+	}
+	return tocIssue(kind)
+}
+
+// expectedContent 返回快照要求成稿至少包含的图片数（PNG 渲染图）与表格数（设备选型表、偏离表与 D4 附表）。
 func expectedContent(job *db.ExportJob) (images, tables int) {
 	for _, c := range job.Charts {
 		switch {
@@ -325,6 +441,11 @@ func expectedContent(job *db.ExportJob) (images, tables int) {
 	}
 	if len(job.Matrix) > 0 {
 		tables++
+	}
+	for _, n := range []int{len(job.Package.ScoreIndex), len(job.Package.Commitments), len(job.Package.Evidence)} {
+		if n > 0 {
+			tables++
+		}
 	}
 	return images, tables
 }

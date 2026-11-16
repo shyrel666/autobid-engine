@@ -6,10 +6,11 @@ package db
 // 不同则 ErrIdempotencyKeyConflict；只有新键才解析当前批准大纲、冻结快照并检查提交门禁。snapshot_hash 在首次提交时冻结，
 // 之后章节、图表变化不影响原请求的重放。一个请求组与全部格式作业、订阅在同一事务内创建，不会半组入队。
 //
-// 严格最终稿策略（ExportPolicyFinalV1，strict_runtime=true，Agent 提交强制）：
+// 严格最终稿策略（ExportPolicyFinal，strict_runtime=true，Agent 提交强制）：
 //   - 提交：服务层确认文档引擎（WPS / Word）可用并固定执行版本 executor；纳入导出的图表须是已登记哈希的 PNG 或原生设备选型表；
 //   - 执行（export.Service.Execute）：引擎缺失或与固定版本不符时失败（RUNTIME_UNAVAILABLE），不降级为未刷新目录的 DOCX；
 //     PNG 须可读且哈希一致；产物回读须有刷新后的目录、全部图片与表格（READBACK_FAILED）；
+//     export-final/v2（D4）起另核对章节页码引用（评分索引表 / 偏离表 / 附录）与标题实际所在页一致、文档属性不带平台字样；
 //   - 结果：ck_export_jobs_final 保证严格作业只有在目录已刷新并记录引擎时才能成功，业务状态为 final_ready。
 // 预览稿（ExportPolicyPreviewV1）保持 Phase 6B 行为，成功结果为 preview_only，不能当作最终交付。
 //
@@ -38,8 +39,12 @@ import (
 
 // 导出质量策略（显式版本化；修改判定规则时升级版本号，旧请求保留原版本）。
 const (
-	ExportPolicyFinalV1   = "export-final/v1"
+	ExportPolicyFinalV1   = "export-final/v1" // S4：文档引擎刷新目录，回读目录 / 图片 / 表格
+	ExportPolicyFinalV2   = "export-final/v2" // D4：另含评分索引与附表快照、章节页码引用回读、文档属性清洗
 	ExportPolicyPreviewV1 = "export-preview/v1"
+
+	// ExportPolicyFinal 是新提交的严格最终稿使用的策略版本；已有请求保留提交时的版本。
+	ExportPolicyFinal = ExportPolicyFinalV2
 )
 
 // 导出作业错误码（与 AGENT_TOOL_SKILLS_PLAN 4.2 的作业错误码同一命名空间）。
@@ -431,9 +436,13 @@ func (d *DB) insertExportRequestTx(ctx context.Context, tenant string, taskID in
 	}
 	policy := ExportPolicyPreviewV1
 	if in.StrictRuntime {
-		policy = ExportPolicyFinalV1
+		policy = ExportPolicyFinal
 	}
-	snapHash := exportSnapshotHash(templateKey, templateHash, approved.ID, approved.Version, doc.Sections, chartSnap, matrixSnap, in.Bidder, in.StrictRuntime, policy)
+	pkg, err := buildPackageSnapshotTx(ctx, d, tenant, taskID, approved.ID, doc.Sections)
+	if err != nil {
+		return err
+	}
+	snapHash := exportSnapshotHash(templateKey, templateHash, approved.ID, approved.Version, doc.Sections, chartSnap, matrixSnap, pkg, in.Bidder, in.StrictRuntime, policy)
 	formatsJSON, _ := json.Marshal(in.Formats)
 	var expected any
 	if in.ExpectedOutlineVersion > 0 {
@@ -453,15 +462,16 @@ func (d *DB) insertExportRequestTx(ctx context.Context, tenant string, taskID in
 	chartJSON, _ := json.Marshal(chartSnap)
 	matrixJSON, _ := json.Marshal(matrixSnap)
 	docJSON, _ := json.Marshal(doc)
+	pkgJSON, _ := json.Marshal(pkg)
 	warnJSON, _ := json.Marshal(pre.Warnings)
 	for _, f := range in.Formats {
 		j, err := scanExportJob(d.QueryRowContext(ctx, `INSERT INTO export_jobs(tenant_id, task_id, outline_id, outline_version, format, template_id,
 				template_key, template_hash, rev_snapshot, chart_snapshot, matrix_snapshot, doc_snapshot, gate, warnings, max_attempts, created_by, updated_by,
-				export_request_id, strict_runtime, executor, deadline_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16,$17,$18,$19,$20) RETURNING `+exportJobCols,
+				export_request_id, strict_runtime, executor, deadline_at, package_snapshot)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16,$17,$18,$19,$20,$21) RETURNING `+exportJobCols,
 			tenant, taskID, approved.ID, approved.Version, f, templateID, templateKey, templateHash, string(revJSON), string(chartJSON),
 			string(matrixJSON), string(docJSON), string(gate), string(warnJSON), in.MaxAttempts, in.Actor,
-			req.ID, req.StrictRuntime, req.Executor, req.DeadlineAt))
+			req.ID, req.StrictRuntime, req.Executor, req.DeadlineAt, string(pkgJSON)))
 		if err != nil {
 			return err
 		}
@@ -472,9 +482,9 @@ func (d *DB) insertExportRequestTx(ctx context.Context, tenant string, taskID in
 	return nil
 }
 
-// exportSnapshotHash 是快照指纹：模板、批准大纲、锁定修订（含修订 ID）、图表（源码与产物哈希）、偏离表与策略。
+// exportSnapshotHash 是快照指纹：模板、批准大纲、锁定修订（含修订 ID）、图表（源码与产物哈希）、偏离表、D4 附表与策略。
 func exportSnapshotHash(templateKey, templateHash string, outlineID int64, outlineVersion int, sections []SnapshotSection, charts []SnapshotChart,
-	matrix []SnapshotMatrixRow, bidder string, strict bool, policy string) string {
+	matrix []SnapshotMatrixRow, pkg PackageSnapshot, bidder string, strict bool, policy string) string {
 	type chartPart struct {
 		ID           int64  `json:"id"`
 		RevNo        int    `json:"rev_no"`
@@ -487,7 +497,8 @@ func exportSnapshotHash(templateKey, templateHash string, outlineID int64, outli
 		parts = append(parts, chartPart{c.ChartID, c.RevNo, c.SourceHash, c.RenderStatus, c.ArtifactHash})
 	}
 	b, _ := json.Marshal(map[string]any{"template_key": templateKey, "template_hash": templateHash, "outline_id": outlineID,
-		"outline_version": outlineVersion, "sections": sections, "charts": parts, "matrix": matrix, "bidder": bidder, "strict": strict, "policy": policy})
+		"outline_version": outlineVersion, "sections": sections, "charts": parts, "matrix": matrix, "package": pkg, "bidder": bidder, "strict": strict,
+		"policy": policy})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }

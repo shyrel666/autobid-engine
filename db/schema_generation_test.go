@@ -20,7 +20,7 @@ import (
 // generationSchemaHash is the SHA-256 of db/schema.sql (LF line endings) at SchemaGeneration.
 // If this test fails you changed the schema: bump SchemaGeneration and update this hash together,
 // otherwise an older program could replay its DDL over the newer database.
-const generationSchemaHash = "47a29f44cf6ec8d848be8d9f137fa658fba2512266c05a8ce1c988334b595e54"
+const generationSchemaHash = "a12825da0800be0752776ba29e2f79015cb93951873b8457ccde9c3b876bd59e"
 
 func TestSchemaGenerationBumped(t *testing.T) {
 	sum := sha256.Sum256([]byte(strings.ReplaceAll(schemaSQL, "\r\n", "\n")))

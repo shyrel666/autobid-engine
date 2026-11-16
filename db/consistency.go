@@ -4,6 +4,9 @@ package db
 // 输入为当前批准大纲下每个章节的有效修订，在 REPEATABLE READ 事务中先按「批准大纲 FOR SHARE -> 章节 FOR SHARE」加锁
 // 再读取，保证快照（section_id -> rev_no）与被比对的正文一致；规则抽取关键承诺（compliance.Extract）并比对，
 // ★/▲ 要求在第二层矩阵中没有当前修订上的 verified 结论的全部记为漏项。结论与 explorations/findings 推演域隔离。
+//
+// D4：承诺台账是比对的基准。正文中每一处关键承诺另与已确认 / 已会签的同指标台账条目比对（compliance.CompareWithLedger），
+// 不一致记为 ledger_mismatch 结论（open 时同样阻断导出）。台账变更由 D2 触发器把运行置为 stale，须重新核验。
 
 import (
 	"context"
@@ -22,6 +25,7 @@ import (
 const (
 	FindingContradiction = "contradiction"
 	FindingOmission      = "omission"
+	FindingLedger        = "ledger_mismatch" // 正文承诺与承诺台账不一致
 	FindingOpen          = "open"
 	FindingResolved      = "resolved"
 	FindingStale         = "stale"
@@ -30,54 +34,62 @@ const (
 )
 
 type ConsistencyRun struct {
-	ID             int64           `json:"id"`
-	TaskID         int64           `json:"task_id"`
-	OutlineID      int64           `json:"outline_id"`
-	OutlineVersion int             `json:"outline_version"`
-	Snapshot       map[string]int  `json:"snapshot"`
-	Status         string          `json:"status"`
-	StaleReason    string          `json:"stale_reason"`
-	Contradictions int             `json:"contradictions"`
-	Omissions      int             `json:"omissions"`
-	Summary        json.RawMessage `json:"summary"`
-	CreatedBy      string          `json:"created_by"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID             int64          `json:"id"`
+	TaskID         int64          `json:"task_id"`
+	OutlineID      int64          `json:"outline_id"`
+	OutlineVersion int            `json:"outline_version"`
+	Snapshot       map[string]int `json:"snapshot"`
+	Status         string         `json:"status"`
+	StaleReason    string         `json:"stale_reason"`
+	Contradictions int            `json:"contradictions"`
+	Omissions      int            `json:"omissions"`
+	// LedgerMismatches 是正文承诺与承诺台账不一致的结论数（D4）。
+	LedgerMismatches int `json:"ledger_mismatches"`
+	// RuleVersion 是本次运行使用的规则版本；与 compliance.ConsistencyRuleVersion 不同的运行不算当前结论。
+	RuleVersion string          `json:"rule_version"`
+	Summary     json.RawMessage `json:"summary"`
+	CreatedBy   string          `json:"created_by"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 type ConsistencyFinding struct {
-	ID               int64      `json:"id"`
-	RunID            int64      `json:"run_id"`
-	Kind             string     `json:"kind"`
-	Metric           string     `json:"metric"`
-	MetricLabel      string     `json:"metric_label"`
-	RequirementID    *int64     `json:"requirement_item_id,omitempty"`
-	RequirementCode  string     `json:"requirement_code,omitempty"`
-	RequirementTitle string     `json:"requirement_title,omitempty"`
-	RequirementKind  string     `json:"requirement_kind,omitempty"`
-	SectionIDs       []int64    `json:"section_ids"`
-	ASectionID       *int64     `json:"a_section_id,omitempty"`
-	ASectionCode     string     `json:"a_section_code,omitempty"`
-	ASectionTitle    string     `json:"a_section_title,omitempty"`
-	ARevNo           *int       `json:"a_rev_no,omitempty"`
-	AValue           string     `json:"a_value"`
-	AExcerpt         string     `json:"a_excerpt"`
-	BSectionID       *int64     `json:"b_section_id,omitempty"`
-	BSectionCode     string     `json:"b_section_code,omitempty"`
-	BSectionTitle    string     `json:"b_section_title,omitempty"`
-	BRevNo           *int       `json:"b_rev_no,omitempty"`
-	BValue           string     `json:"b_value"`
-	BExcerpt         string     `json:"b_excerpt"`
-	Detail           string     `json:"detail"`
-	Status           string     `json:"status"`
-	StaleReason      string     `json:"stale_reason"`
-	ResolutionKind   string     `json:"resolution_kind"`
-	ResolutionNote   string     `json:"resolution_note"`
-	ResolvedBy       string     `json:"resolved_by"`
-	ResolvedAt       *time.Time `json:"resolved_at,omitempty"`
-	Version          int        `json:"version"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID               int64   `json:"id"`
+	RunID            int64   `json:"run_id"`
+	Kind             string  `json:"kind"`
+	Metric           string  `json:"metric"`
+	MetricLabel      string  `json:"metric_label"`
+	RequirementID    *int64  `json:"requirement_item_id,omitempty"`
+	RequirementCode  string  `json:"requirement_code,omitempty"`
+	RequirementTitle string  `json:"requirement_title,omitempty"`
+	RequirementKind  string  `json:"requirement_kind,omitempty"`
+	SectionIDs       []int64 `json:"section_ids"`
+	ASectionID       *int64  `json:"a_section_id,omitempty"`
+	ASectionCode     string  `json:"a_section_code,omitempty"`
+	ASectionTitle    string  `json:"a_section_title,omitempty"`
+	ARevNo           *int    `json:"a_rev_no,omitempty"`
+	AValue           string  `json:"a_value"`
+	AExcerpt         string  `json:"a_excerpt"`
+	BSectionID       *int64  `json:"b_section_id,omitempty"`
+	BSectionCode     string  `json:"b_section_code,omitempty"`
+	BSectionTitle    string  `json:"b_section_title,omitempty"`
+	BRevNo           *int    `json:"b_rev_no,omitempty"`
+	BValue           string  `json:"b_value"`
+	BExcerpt         string  `json:"b_excerpt"`
+	// ledger_mismatch：被比对的承诺台账条目及其当时的版本（B 侧为台账值，没有章节）。
+	CommitmentID      *int64     `json:"commitment_id,omitempty"`
+	CommitmentCode    string     `json:"commitment_code,omitempty"`
+	CommitmentVersion *int       `json:"commitment_version,omitempty"`
+	Detail            string     `json:"detail"`
+	Status            string     `json:"status"`
+	StaleReason       string     `json:"stale_reason"`
+	ResolutionKind    string     `json:"resolution_kind"`
+	ResolutionNote    string     `json:"resolution_note"`
+	ResolvedBy        string     `json:"resolved_by"`
+	ResolvedAt        *time.Time `json:"resolved_at,omitempty"`
+	Version           int        `json:"version"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 type ConsistencyRunDetail struct {
@@ -87,13 +99,13 @@ type ConsistencyRunDetail struct {
 	Current bool `json:"current"`
 }
 
-const consistencyRunCols = `id, task_id, outline_id, outline_version, snapshot, status, stale_reason, contradictions, omissions, summary, created_by, created_at, updated_at`
+const consistencyRunCols = `id, task_id, outline_id, outline_version, snapshot, status, stale_reason, contradictions, omissions, summary, created_by, created_at, updated_at, ledger_mismatches, rule_version`
 
 func scanConsistencyRun(r rowScanner) (*ConsistencyRun, error) {
 	var x ConsistencyRun
 	var snap []byte
 	err := r.Scan(&x.ID, &x.TaskID, &x.OutlineID, &x.OutlineVersion, &snap, &x.Status, &x.StaleReason, &x.Contradictions, &x.Omissions, &x.Summary,
-		&x.CreatedBy, &x.CreatedAt, &x.UpdatedAt)
+		&x.CreatedBy, &x.CreatedAt, &x.UpdatedAt, &x.LedgerMismatches, &x.RuleVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -109,29 +121,39 @@ const findingCols = `f.id, f.run_id, f.kind, f.metric, f.metric_label, f.require
 	COALESCE(r.category, ''), COALESCE(r.description, ''), COALESCE(r.is_mandatory, false), to_jsonb(f.section_ids),
 	f.a_section_id, COALESCE(sa.section_code, ''), COALESCE(sa.title, ''), f.a_rev_no, f.a_value, f.a_excerpt,
 	f.b_section_id, COALESCE(sb.section_code, ''), COALESCE(sb.title, ''), f.b_rev_no, f.b_value, f.b_excerpt,
-	f.detail, f.status, f.stale_reason, f.resolution_kind, f.resolution_note, f.resolved_by, f.resolved_at, f.version, f.created_at, f.updated_at`
+	f.detail, f.status, f.stale_reason, f.resolution_kind, f.resolution_note, f.resolved_by, f.resolved_at, f.version, f.created_at, f.updated_at,
+	f.commitment_id, f.commitment_version, COALESCE(cl.code, '')`
 
 const findingFrom = ` FROM consistency_findings f
 	LEFT JOIN requirement_items r ON r.tenant_id = f.tenant_id AND r.id = f.requirement_item_id
 	LEFT JOIN proposal_sections sa ON sa.tenant_id = f.tenant_id AND sa.id = f.a_section_id
-	LEFT JOIN proposal_sections sb ON sb.tenant_id = f.tenant_id AND sb.id = f.b_section_id`
+	LEFT JOIN proposal_sections sb ON sb.tenant_id = f.tenant_id AND sb.id = f.b_section_id
+	LEFT JOIN commitment_ledger cl ON cl.tenant_id = f.tenant_id AND cl.id = f.commitment_id`
 
 func scanFinding(rs rowScanner) (*ConsistencyFinding, error) {
 	var x ConsistencyFinding
-	var rid, aid, bid sql.NullInt64
-	var arev, brev sql.NullInt32
+	var rid, aid, bid, cid sql.NullInt64
+	var arev, brev, cver sql.NullInt32
 	var cat, desc string
 	var mand bool
 	var secs []byte
 	var at sql.NullTime
 	err := rs.Scan(&x.ID, &x.RunID, &x.Kind, &x.Metric, &x.MetricLabel, &rid, &x.RequirementCode, &x.RequirementTitle, &cat, &desc, &mand, &secs,
 		&aid, &x.ASectionCode, &x.ASectionTitle, &arev, &x.AValue, &x.AExcerpt, &bid, &x.BSectionCode, &x.BSectionTitle, &brev, &x.BValue, &x.BExcerpt,
-		&x.Detail, &x.Status, &x.StaleReason, &x.ResolutionKind, &x.ResolutionNote, &x.ResolvedBy, &at, &x.Version, &x.CreatedAt, &x.UpdatedAt)
+		&x.Detail, &x.Status, &x.StaleReason, &x.ResolutionKind, &x.ResolutionNote, &x.ResolvedBy, &at, &x.Version, &x.CreatedAt, &x.UpdatedAt,
+		&cid, &cver, &x.CommitmentCode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	if cid.Valid {
+		x.CommitmentID = &cid.Int64
+	}
+	if cver.Valid {
+		v := int(cver.Int32)
+		x.CommitmentVersion = &v
 	}
 	if rid.Valid {
 		x.RequirementID = &rid.Int64
@@ -235,6 +257,31 @@ func (d *DB) RunConsistencyCheck(ctx context.Context, tenant string, taskID int6
 		}
 		contradictions := compliance.Compare(mentions)
 
+		// 承诺台账基准：已确认 / 已会签的条目（价格与 other 没有对应的正文指标）。
+		var ledger []compliance.LedgerCommitment
+		lrows, err := tx.QueryContext(ctx, `SELECT id, code, version, metric, metric_label, committed_raw, unit, committed_value::float8
+			FROM commitment_ledger WHERE tenant_id = $1 AND task_id = $2 AND status IN ('confirmed','signed_off') ORDER BY code, id`, tenant, taskID)
+		if err != nil {
+			return err
+		}
+		for lrows.Next() {
+			var c compliance.LedgerCommitment
+			var v sql.NullFloat64
+			if err := lrows.Scan(&c.ID, &c.Code, &c.Version, &c.Metric, &c.Label, &c.Raw, &c.Unit, &v); err != nil {
+				lrows.Close()
+				return err
+			}
+			if v.Valid {
+				c.Value = &v.Float64
+			}
+			ledger = append(ledger, c)
+		}
+		lrows.Close()
+		if err := lrows.Err(); err != nil {
+			return err
+		}
+		mismatches, uncomparable := compliance.CompareWithLedger(mentions, ledger)
+
 		// 漏项：★/▲ 要求在当前修订上没有 verified 的矩阵结论（含未映射、未核验、核验失败、已失效）。
 		omissions, err := omissionsTx(ctx, tx, tenant, taskID, approved.ID)
 		if err != nil {
@@ -244,13 +291,25 @@ func (d *DB) RunConsistencyCheck(ctx context.Context, tenant string, taskID int6
 		for _, m := range mentions {
 			metrics[m.Metric]++
 		}
-		summary, _ := json.Marshal(map[string]any{"sections": len(secs), "sections_with_text": written, "mentions": len(mentions), "by_metric": metrics})
+		summary, _ := json.Marshal(map[string]any{"sections": len(secs), "sections_with_text": written, "mentions": len(mentions), "by_metric": metrics,
+			"ledger_commitments": len(ledger), "ledger_uncomparable": uncomparable})
 		snap, _ := json.Marshal(snapshot)
 		if err := tx.QueryRowContext(ctx, `INSERT INTO consistency_runs(tenant_id, task_id, outline_id, outline_version, snapshot, status,
-				contradictions, omissions, summary, created_by, updated_by)
-			VALUES ($1, $2, $3, $4, $5::jsonb, 'completed', $6, $7, $8::jsonb, $9, $9) RETURNING id`,
-			tenant, taskID, approved.ID, approved.Version, string(snap), len(contradictions), len(omissions), string(summary), actor).Scan(&runID); err != nil {
+				contradictions, omissions, summary, created_by, updated_by, ledger_mismatches, rule_version)
+			VALUES ($1, $2, $3, $4, $5::jsonb, 'completed', $6, $7, $8::jsonb, $9, $9, $10, $11) RETURNING id`,
+			tenant, taskID, approved.ID, approved.Version, string(snap), len(contradictions), len(omissions), string(summary), actor,
+			len(mismatches), compliance.ConsistencyRuleVersion).Scan(&runID); err != nil {
 			return err
+		}
+		for _, m := range mismatches {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO consistency_findings(tenant_id, task_id, run_id, kind, metric, metric_label, section_ids,
+					a_section_id, a_rev_no, a_value, a_excerpt, b_value, b_excerpt, commitment_id, commitment_version, detail, created_by, updated_by)
+				VALUES ($1, $2, $3, 'ledger_mismatch', $4, $5, $6::bigint[], $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)`,
+				tenant, taskID, runID, m.Metric, m.Label, pgInt64Array([]int64{m.Mention.SectionID}), m.Mention.SectionID, m.Mention.RevNo,
+				compliance.Describe(m.Mention), m.Mention.Excerpt, m.LedgerText, fmt.Sprintf("承诺台账 %s v%d", m.Commitment.Code, m.Commitment.Version),
+				m.Commitment.ID, m.Commitment.Version, m.Detail, actor); err != nil {
+				return err
+			}
 		}
 		for _, c := range contradictions {
 			secIDs := uniqueIDs([]int64{c.A.SectionID, c.B.SectionID})
@@ -407,9 +466,9 @@ func consistencyRunTx(ctx context.Context, q queryer, tenant string, taskID, run
 	return det, err
 }
 
-// runIsCurrentTx：运行未 stale、属于当前批准大纲，且快照与各章节 current_rev_no 完全一致。
+// runIsCurrentTx：运行未 stale、按当前规则版本完成、属于当前批准大纲，且快照与各章节 current_rev_no 完全一致。
 func runIsCurrentTx(ctx context.Context, q queryer, tenant string, taskID int64, run *ConsistencyRun) (bool, error) {
-	if run.Status != RunCompleted {
+	if run.Status != RunCompleted || run.RuleVersion != compliance.ConsistencyRuleVersion {
 		return false, nil
 	}
 	rows, err := q.QueryContext(ctx, `SELECT s.id, s.current_rev_no FROM proposal_sections s JOIN proposal_outlines o ON o.id = s.outline_id

@@ -1171,11 +1171,19 @@ export type ResolutionKind = 'fixed' | 'accepted' | 'false_positive'
 export interface ConsistencyRun {
   id: number; task_id: number; outline_id: number; outline_version: number; snapshot: Record<string, number>
   status: 'completed' | 'stale'; stale_reason: string; contradictions: number; omissions: number
-  summary: { sections?: number; sections_with_text?: number; mentions?: number; by_metric?: Record<string, number> }
+  /** D4：正文承诺与承诺台账不一致的结论数；rule_version 与服务器当前规则不同的运行不算当前结论。 */
+  ledger_mismatches: number; rule_version: string
+  summary: {
+    sections?: number; sections_with_text?: number; mentions?: number; by_metric?: Record<string, number>
+    /** D4：参与比对的已确认台账条数；ledger_uncomparable 是承诺值无法换算、未能比对的台账编号。 */
+    ledger_commitments?: number; ledger_uncomparable?: string[] | null
+  }
   created_by: string; created_at: string; updated_at: string
 }
 export interface ConsistencyFinding {
-  id: number; run_id: number; kind: 'contradiction' | 'omission'; metric: string; metric_label: string
+  id: number; run_id: number; kind: 'contradiction' | 'omission' | 'ledger_mismatch'; metric: string; metric_label: string
+  /** ledger_mismatch：被比对的承诺台账条目（B 侧是台账值，没有章节）。 */
+  commitment_id?: number; commitment_code?: string; commitment_version?: number
   requirement_item_id?: number; requirement_code?: string; requirement_title?: string; requirement_kind?: RequirementKind
   section_ids: number[]
   a_section_id?: number; a_section_code?: string; a_section_title?: string; a_rev_no?: number; a_value: string; a_excerpt: string
@@ -1287,11 +1295,47 @@ export interface ExportJob {
   chart_snapshot: { chart_id: number; section_id: number; rev_no: number; chart_type: ChartType; title: string; render_status: ChartRenderStatus }[]
   matrix_snapshot: { requirement_code: string; section_code: string; deviation: string }[]
   doc_snapshot: { task_name: string; bidder?: string; outline_version: number; sections: SnapshotSection[]; created_at: string }
+  /** D4：成稿附表快照（评分索引 / 承诺事项 / 证明材料索引）与回读自检结果（成功后写入，之后不可改）。 */
+  package_snapshot?: PackageSnapshot; self_check?: ExportSelfCheck
   artifact_name: string; artifact_hash: string; artifact_size: number; toc_refreshed: boolean
   warnings: ExportWarning[]; error: string; attempts: number; max_attempts: number
   lease_owner?: string; lease_until?: string; started_at?: string; finished_at?: string
   created_by: string; created_at: string; updated_at: string
 }
+
+export interface SnapshotSectionRef { section_id: number; section_code: string; title: string }
+export interface PackageSnapshot {
+  score_index?: { requirement_item_id: number; requirement_code: string; requirement_title: string; score: number; sections: SnapshotSectionRef[] }[]
+  evidence?: { evidence_domain: string; evidence_id: number; code: string; name: string; number?: string; sections: SnapshotSectionRef[] }[]
+  commitments?: { id: number; code: string; metric_label: string; committed: string; unit?: string; sections: SnapshotSectionRef[] }[]
+}
+/** 成稿回读自检（export/exec.go readback）。verified_against=pdf 表示页码与同一次排版的 PDF 版面逐处核对过。 */
+export interface ExportSelfCheck {
+  pages?: number; toc_entries: number; toc_issues: number; score_rows: number
+  page_refs: number; page_refs_verified: number; page_ref_issues: number; verified_against?: 'pdf' | 'toc'
+  metadata_checked: boolean; metadata_issues: number; author?: string; last_modified_by?: string
+  layout_checked: boolean; out_of_bounds: number; blank_pages: number; footer_issues: number; image_issues: number
+  images: number; tables: number
+}
+
+/** D4：提交检查清单（server/submission.go）。auto 项由成稿的回读结果判定，manual 项与 attention 项由人确认并留痕。 */
+export type SubmissionItemStatus = 'pass' | 'fail' | 'attention' | 'pending' | 'confirmed' | 'failed' | 'not_applicable'
+export interface SubmissionItem {
+  key: string; kind: 'auto' | 'manual'; label: string; help?: string; status: SubmissionItemStatus; detail?: string
+  confirmable: boolean; note?: string; reference?: string; confirmed_by?: string; confirmed_at?: string; version?: number
+}
+export interface SubmissionChecklist {
+  task_id: number; export_request_id: number; checklist_version: string; business_state: string
+  /** final：全部格式都是严格最终稿；current：成稿锁定的修订仍是当前批准的修订。两者都为真才能确认。 */
+  final: boolean; current: boolean; stale_reason?: string
+  artifact_hashes: Record<string, string>; items: SubmissionItem[]; ready: boolean; open: number
+}
+export interface SubmissionCheckEvent {
+  id: number; item_key: string; action: 'confirmed' | 'failed' | 'not_applicable' | 'withdrawn'
+  note: string; reference: string; actor: string; created_at: string
+}
+export interface SubmissionResp { checklist: SubmissionChecklist; events: SubmissionCheckEvent[] }
+export interface SubmissionCheckReq { status: 'confirmed' | 'failed' | 'not_applicable'; note?: string; reference?: string; expected_version?: number }
 
 /** request_key 同一次提交的重发（含响应丢失后）复用；改变输入或明确重新执行时换新键。不带键的旧调用按预览稿兼容。 */
 export interface CreateExportReq {

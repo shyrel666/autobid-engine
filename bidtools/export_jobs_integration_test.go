@@ -90,7 +90,7 @@ func TestProposalExportTools(t *testing.T) {
 	// 预检：严格最终稿口径，返回批准大纲版本；文档引擎不可用时显示为阻断。
 	pre := call(tools, ctx, ToolProposalExportCheck, map[string]any{"formats": []string{"pdf", "docx"}})
 	version := pre["outline_version"]
-	if pre["ready"] != true || pre["strict_runtime"] != true || pre["policy_version"] != db.ExportPolicyFinalV1 || version == float64(0) {
+	if pre["ready"] != true || pre["strict_runtime"] != true || pre["policy_version"] != db.ExportPolicyFinal || version == float64(0) {
 		t.Fatalf("check = %v", pre)
 	}
 	offline := call(newKit(noOffice, true), ctx, ToolProposalExportCheck, map[string]any{"formats": []string{"docx"}})
@@ -106,13 +106,15 @@ func TestProposalExportTools(t *testing.T) {
 	bound := intent()
 	wantCode(call(tools, bound, ToolProposalExportSubmit, map[string]any{"formats": []string{"docx"}, "request_key": "k"}), "INVALID_ARGUMENT")
 	wantCode(call(tools, bound, ToolProposalExportSubmit, map[string]any{"formats": []string{"docx"}, "expected_outline_version": version, "request_key": "sys:x"}), "INVALID_ARGUMENT")
-	stale := map[string]any{"formats": []string{"docx"}, "expected_outline_version": version.(float64) + 1, "request_key": "agent-stale"}
+	// D4：最终稿必须带投标人名称（Agent 提交强制最终稿）。
+	wantCode(call(tools, bound, ToolProposalExportSubmit, map[string]any{"formats": []string{"docx"}, "expected_outline_version": version, "request_key": "agent-nobidder"}), "INVALID_ARGUMENT")
+	stale := map[string]any{"formats": []string{"docx"}, "bidder_name": "示例科技有限公司", "expected_outline_version": version.(float64) + 1, "request_key": "agent-stale"}
 	wantCode(call(tools, bound, ToolProposalExportSubmit, stale), "CONFLICT_STALE_REVISION")
 	wantCode(call(newKit(noOffice, true), bound, ToolProposalExportSubmit, submit), "RUNTIME_UNAVAILABLE")
 	noExport := db.WithExecutionScope(bound, &db.IntentMandate{AllowedJobKinds: []string{db.JobKindChartRender}})
 	wantCode(call(tools, noExport, ToolProposalExportSubmit, submit), "SCOPE_VIOLATION")
 	tplScope := db.WithExecutionScope(bound, &db.IntentMandate{AllowedTemplateIDs: []int64{1}})
-	wantCode(call(tools, tplScope, ToolProposalExportSubmit, map[string]any{"formats": []string{"docx"}, "template_id": 2, "expected_outline_version": version, "request_key": "agent-tpl"}), "SCOPE_VIOLATION")
+	wantCode(call(tools, tplScope, ToolProposalExportSubmit, map[string]any{"formats": []string{"docx"}, "template_id": 2, "bidder_name": "示例科技有限公司", "expected_outline_version": version, "request_key": "agent-tpl"}), "SCOPE_VIOLATION")
 
 	out := call(tools, bound, ToolProposalExportSubmit, submit)
 	jobs, _ := out["jobs"].([]any)
@@ -154,7 +156,7 @@ func TestProposalExportTools(t *testing.T) {
 
 	// 门禁未通过：PRECONDITION_FAILED 附 blockers，不插入作业。
 	p.Save(t, "1", "## 总体技术方案\n\n本项目采用云边协同总体架构，我方承诺总工期 90 天。")
-	blocked := call(tools, bound, ToolProposalExportSubmit, map[string]any{"formats": []string{"docx"}, "expected_outline_version": version, "request_key": "agent-blocked"})
+	blocked := call(tools, bound, ToolProposalExportSubmit, map[string]any{"formats": []string{"docx"}, "bidder_name": "示例科技有限公司", "expected_outline_version": version, "request_key": "agent-blocked"})
 	wantCode(blocked, "PRECONDITION_FAILED")
 	if !strings.Contains(fmt.Sprint(blocked["blockers"]), db.BlockSectionUnapproved) {
 		t.Fatalf("blocked submission = %v", blocked)

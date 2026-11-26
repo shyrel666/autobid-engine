@@ -1,14 +1,14 @@
 {
-  "version": "public-2026-10-29",
-  "collected_at": "2026-10-29",
-  "method": "中国政府采购网（search.ccgp.gov.cn）标题检索与公告页阅读；重庆市政府采购网数据接口返回 HTTP 514 Frequency Capped，按限频要求未重试",
+  "version": "public-dev-2026-11-22",
+  "collected_at": "2026-11-22",
+  "method": "政府采购网及采购人官网的公开附件、招标公告、更正与结果公告。原件逐份校验 SHA-256。",
   "policy": {
     "storage": "招标文件原件留在被 Git 忽略的 ccgp_2026-10-06/；本清单只保存来源、哈希与公开公告中的结构化结果",
     "excluded": [
       "评审专家与评审小组成员名单（不入库，见 ROADMAP 第五节）",
       "采购人、代理机构经办人姓名与电话"
     ],
-    "splits": "每个项目自成一个项目族；调参集与保留集按项目族划分，由 PROTOCOL.md 冻结"
+    "splits": "清单内全部为开发集。同一采购人的跨年度系列及同一项目的修订和重招归入同一项目族；独立保留集由标注员另行选取、保管。"
   },
   "projects": [
     {
@@ -21,13 +21,19 @@
       "sha256": "bf999504bf6ac14977491b01fe7131caca325cc6ae16f40cf477299a8f423cdf",
       "lots": ["1", "2"],
       "bid_deadline": "2025-03-25T10:00:00+08:00",
+      "has_review_table": true,
+      "category": "软件运维服务",
+      "regression_profile": "baseline",
+      "collected_at": "2026-10-06",
+      "source": {"url": "https://www.ccgp-chongqing.gov.cn/gwebsite/files?filePath=group1%2FM00%2F14%2FB0%2FrBE5yGfG02CAdMPLABKQgREe-ZU00.docx&fileName=%EF%BC%88%E4%B8%8A%E7%BD%91%E7%A8%BF%EF%BC%89%E9%87%8D%E5%BA%86%E5%B8%82%E4%B8%80%E4%BD%93%E5%8C%96%E6%99%BA%E8%83%BD%E5%8C%96%E5%85%AC%E5%85%B1%E6%95%B0%E6%8D%AE%E5%B9%B3%E5%8F%B02025%E5%B9%B4%E5%BA%A6%E8%BF%90%E7%BB%B4%E6%8B%9B%E6%A0%87%E6%96%87%E4%BB%B6.docx", "type": "official_attachment", "announcement_url": "https://www.ccgp.gov.cn/cggg/dfgg/gkzb/202504/t20250402_24390468.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"},
       "announcements": [
         {"type": "tender", "published": "2025-04-02", "url": "https://www.ccgp.gov.cn/cggg/dfgg/gkzb/202504/t20250402_24390468.htm",
          "note": "公告正文发布日期 2025-03-04（重庆市政府采购网），中国政府采购网转载于 2025-04-02"}
       ],
       "outcome": null,
+      "result_discovery_url": "https://yzb.caigou2003.com/detail/1904513901681442817",
       "gaps": [
-        "结果公告未取得：中国政府采购网检索未收录 2025 年公告，重庆市政府采购网接口限频",
+        "未核实官方结果公告原页。已找到转载线索，结果字段继续留空。",
         "后续年度项目 CQS26C00441（2026 年度运维服务）的招标与结果公告在中国政府采购网可查，可作为扩充语料（不同项目）"
       ]
     },
@@ -41,6 +47,11 @@
       "sha256": "9780e03e87d8374f803a16e1b28993ad76c51f1ed64372e454d33e45f87eafcb",
       "lots": ["1"],
       "bid_deadline": "2026-08-26T10:00:00+08:00",
+      "has_review_table": true,
+      "category": "行业应用软件开发服务",
+      "regression_profile": "baseline",
+      "collected_at": "2026-10-06",
+      "source": {"url": "https://www.ccgp-chongqing.gov.cn/gwebsite/files?filePath=group1%2FM00%2F3A%2F9F%2FrBE5yGpy0emAYKOiABByxyJQiGI77.docx&fileName=%EF%BC%88%E4%B8%8A%E7%BD%91%E7%A8%BF%EF%BC%89%E2%80%9C%E6%94%BF%E5%8A%A1%C2%B7%E6%95%B0%E5%AD%97%E5%AE%A1%E8%AE%A1%E2%80%9D%E5%8D%87%E7%BA%A7%E4%BC%98%E5%8C%96%E5%8F%8AAI%E5%9C%BA%E6%99%AF%E6%9E%84%E5%BB%BA%E6%8A%80%E6%9C%AF%E6%9C%8D%E5%8A%A1%E9%87%87%E8%B4%AD%E6%8B%9B%E6%A0%87%E6%96%87%E4%BB%B6.docx", "type": "official_attachment", "announcement_url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202608/t20260805_27075153.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"},
       "announcements": [
         {"type": "tender", "published": "2026-08-05", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202608/t20260805_27075153.htm"},
         {"type": "award", "published": "2026-08-28", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202608/t20260828_27222733.htm"}
@@ -67,6 +78,11 @@
       "sha256": "25b65c284d4ac31ba6e8c49b06df2c43761e8c8c2034e12b213ab3988d950539",
       "lots": ["1"],
       "bid_deadline": "2026-05-20T10:00:00+08:00",
+      "has_review_table": true,
+      "category": "软件运维服务",
+      "regression_profile": "baseline",
+      "collected_at": "2026-10-06",
+      "source": {"url": "https://www.ccgp-chongqing.gov.cn/gwebsite/files?filePath=group1%2FM00%2F30%2FF2%2FrBE5yGnxrk2AJWEUAAU32rslMAE40.docx&fileName=%E6%8B%9B%E6%A0%87%E6%96%87%E4%BB%B6%EF%BC%88%E5%AE%9A%E7%A8%BF%EF%BC%89%E2%80%94%E9%87%8D%E5%BA%86%E5%B8%82%E5%8F%91%E5%B1%95%E5%92%8C%E6%94%B9%E9%9D%A9%E5%A7%94%E5%91%98%E4%BC%9A2026%E5%B9%B4%E5%BA%A6%E6%94%BF%E5%8A%A1%E6%95%B0%E5%AD%97%E5%8C%96%E5%BA%94%E7%94%A8%E5%B8%B8%E8%A7%84%E8%BF%90%E7%BB%B4.docx", "type": "official_attachment", "announcement_url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202604/t20260429_26482331.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"},
       "announcements": [
         {"type": "tender", "published": "2026-04-29", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202604/t20260429_26482331.htm"},
         {"type": "award", "published": "2026-05-21", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202605/t20260521_26607452.htm"}
@@ -93,6 +109,11 @@
       "sha256": "f953868d457de49883d26ccffb588a75c950ff44a80efec45c22842f6448be2f",
       "lots": ["1", "2"],
       "bid_deadline": "2026-08-03T10:00:00+08:00",
+      "has_review_table": true,
+      "category": "网络安全服务",
+      "regression_profile": "baseline",
+      "collected_at": "2026-10-06",
+      "source": {"url": "https://www.ccgp-chongqing.gov.cn/gwebsite/files?filePath=group1%2FM00%2F37%2F8C%2FrBE5yGpPRhmABRGAAAI7MpZJtQA89.docx&fileName=%E5%85%AC%E5%BC%80%E6%8B%9B%E6%A0%87-2026%E5%B9%B4%E7%BD%91%E7%BB%9C%E5%AE%89%E5%85%A8%E6%9C%8D%E5%8A%A1CQS26C01245%EF%BC%88%E7%BB%88%E5%AE%A1%E7%A8%BF%EF%BC%89.docx", "type": "official_attachment", "announcement_url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202607/t20260709_26905508.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"},
       "announcements": [
         {"type": "tender", "published": "2026-07-09", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202607/t20260709_26905508.htm"},
         {"type": "award", "published": "2026-08-05", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202608/t20260805_27079273.htm"}
@@ -125,6 +146,11 @@
       "sha256": "fc700b2977682b349e46ffd6a938222c6f60a18cba464ce53ea0773018c8fc31",
       "lots": ["1"],
       "bid_deadline": "2026-07-13T10:00:00+08:00",
+      "has_review_table": true,
+      "category": "数据治理服务",
+      "regression_profile": "baseline",
+      "collected_at": "2026-10-06",
+      "source": {"url": "https://www.ccgp-chongqing.gov.cn/gwebsite/files?filePath=group1%2FM00%2F35%2F6C%2FrBE5yGozsZqAEE9rAAYo2NMIqlE87.docx&fileName=%E6%95%B0%E6%8D%AE%E6%B2%BB%E7%90%86%E9%A1%B9%E7%9B%AE%EF%BC%88%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0%EF%BC%89%EF%BC%88%E5%AE%9A%E7%A8%BF%EF%BC%89.docx", "type": "official_attachment", "announcement_url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202606/t20260618_26779817.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"},
       "announcements": [
         {"type": "tender", "published": "2026-06-18", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202606/t20260618_26779817.htm"},
         {"type": "award", "published": "2026-07-15", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202607/t20260715_26936713.htm"}
@@ -151,6 +177,11 @@
       "sha256": "2ef11a75afbe514c36b74621d3f39bb9c0e55e50ec8cf49a07ec96e1fb235dab",
       "lots": ["1", "2"],
       "bid_deadline": "2026-05-29T09:00:00+08:00",
+      "has_review_table": false,
+      "category": "网站运维服务",
+      "regression_profile": "baseline",
+      "collected_at": null,
+      "source": {"url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202606/t20260601_26665304.htm", "type": "official_attachment_listing", "announcement_url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202606/t20260601_26665304.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。", "note": "首批留存原件；来源登记到官方公告的附件入口，直链未记录。"},
       "announcements": [
         {"type": "tender", "published": "2026-05-08", "url": "http://www.ccgp.gov.cn/cggg/zygg/gkzb/202605/t20260508_26525868.htm"},
         {"type": "award", "published": "2026-06-01", "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202606/t20260601_26665304.htm"}
@@ -174,6 +205,11 @@
       "sha256": "16b6749ee71e9c50c8154a41ce880f37326b8edd85d0044bdfe117449d4674fa",
       "lots": [],
       "bid_deadline": "2026-08-20T09:30:00+08:00",
+      "has_review_table": true,
+      "category": "数据平台建设",
+      "regression_profile": "baseline",
+      "collected_at": null,
+      "source": {"url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202608/t20260827_27213812.htm", "type": "official_attachment_listing", "announcement_url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202608/t20260827_27213812.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。", "note": "首批留存原件；来源登记到官方公告的附件入口，直链未记录。"},
       "announcements": [
         {"type": "tender", "published": "2026-07-06", "url": "http://www.ccgp.gov.cn/cggg/zygg/gkzb/202607/t20260706_26875687.htm", "note": "第一次招标"},
         {"type": "failed", "published": "2026-07-30", "url": "http://www.ccgp.gov.cn/cggg/zygg/fblbgg/202607/t20260730_27038133.htm",
@@ -196,8 +232,13 @@
       "sha256": "5b81d1368898ff18380d6d44d8460a9a7323431b6b2a86e15fc3384968d02847",
       "lots": [],
       "bid_deadline": "2026-01-26T09:30:00+08:00",
+      "has_review_table": true,
+      "category": "软件运维与升级服务",
+      "regression_profile": "baseline",
+      "collected_at": null,
+      "source": {"url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202601/t20260129_26131836.htm", "type": "official_attachment_listing", "announcement_url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202601/t20260129_26131836.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。", "note": "首批留存原件；来源登记到官方公告的附件入口，直链未记录。"},
       "announcements": [
-        {"type": "tender", "published": "2025-11-20", "url": null, "note": "首次公告日期取自更正公告；中国政府采购网检索未收录"},
+        {"type": "tender", "published": "2025-11-20", "url": "https://www.ccgp.gov.cn/cggg/zygg/gkzb/202511/t20251120_25734773.htm", "bid_deadline": "2025-12-11T09:30:00+08:00"},
         {"type": "correction", "published": "2026-01-08", "url": "http://www.ccgp.gov.cn/cggg/zygg/gzgg/202601/t20260108_26054883.htm",
          "changes": ["投标截止与开标时间改为 2026-01-26 09:30", "第四章评标标准修改，修改后的招标文件由代理机构发送给潜在投标人，未公开发布"]},
         {"type": "award", "published": "2026-01-29", "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202601/t20260129_26131836.htm"}
@@ -217,9 +258,14 @@
       "sha256": "37294398627270a6b16f01dc7048302ad26e8acb6b9b04c2879d1172ec21d552",
       "lots": ["A", "B"],
       "bid_deadline": "2026-09-01T08:30:00+08:00",
+      "has_review_table": true,
+      "category": "信息化运维与网络安全",
+      "regression_profile": "baseline",
+      "collected_at": "2026-11-22",
+      "source": {"url": "https://zfcg.henan.gov.cn/cmsweb35rc67w/xuchang/rootfiles/2026/08/11/0dc724249ae944498b7494c8ca1ecc76.pdf", "type": "official_attachment", "announcement_url": "https://zfcg.henan.gov.cn/xuchang/content?infoId=2000492", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。", "matching_downloads": ["https://zfcg.henan.gov.cn/cmsweb35rc67w/xuchang/rootfiles/2026/09/03/80382f2f8f8842cf8b0ad981882063fe.pdf"], "note": "2026-11-22 重新下载两处官网附件，均与首批留存文件 SHA-256 一致。"},
       "announcements": [
-        {"type": "tender", "published": "2026-08-11", "url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202608/t20260811_27110908.htm"},
-        {"type": "award", "published": "2026-09-03", "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202609/t20260903_27256839.htm"}
+        {"type": "tender", "published": "2026-08-11", "url": "https://zfcg.henan.gov.cn/xuchang/content?infoId=2000492", "reprint_url": "http://www.ccgp.gov.cn/cggg/dfgg/gkzb/202608/t20260811_27110908.htm"},
+        {"type": "award", "published": "2026-09-03", "url": "https://zfcg.henan.gov.cn/xuchang/content?infoId=2011368", "reprint_url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202609/t20260903_27256839.htm"}
       ],
       "outcome": {
         "lots": [
@@ -238,6 +284,11 @@
       "sha256": "2699303f562b2037da66ef8144172ee650ef841c91913e0eb7c7fd05aa3fdec7",
       "lots": ["A", "B", "C"],
       "bid_deadline": "2026-07-08T09:00:00+08:00",
+      "has_review_table": false,
+      "category": "应用软件运维服务",
+      "regression_profile": "baseline",
+      "collected_at": null,
+      "source": {"url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202607/t20260716_26943491.htm", "type": "official_attachment_listing", "announcement_url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202607/t20260716_26943491.htm", "confidentiality": "公开", "license": "公开原件仅用于本地开发回归，未见开放再分发许可。", "note": "首批留存原件；来源登记到官方公告的附件入口，直链未记录。"},
       "announcements": [
         {"type": "tender", "published": "2026-06-17", "url": "http://www.ccgp.gov.cn/cggg/zygg/gkzb/202606/t20260617_26766664.htm"},
         {"type": "award", "published": "2026-07-16", "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202607/t20260716_26943491.htm"}
@@ -248,6 +299,1465 @@
           {"lot": "B", "winner": "北京网景盛世技术开发中心", "amount_cny": 475200, "winner_total": 92.2},
           {"lot": "C", "winner": "仪电双杨智能科技（上海）有限公司", "amount_cny": 151800, "winner_total": 93.58}
         ]
+      }
+    },
+    {
+      "key": "P11",
+      "family": "sat-meijiang-property",
+      "project_no": "GDSD26MJFG04033",
+      "name": "国家税务总局梅州市梅江区税务局2026年7月至2028年6月物业管理服务项目",
+      "region": "广东省梅州市",
+      "category": "物业管理服务",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/GD1.pdf",
+      "sha256": "7eeb72bcf27d9c649363582e2beec5513caaf5a36f71c634db837ed6859b9524",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": null,
+      "deadline_in_original": false,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2026-05-20",
+          "url": "https://guangdong.chinatax.gov.cn/mzgkml/mzmjgkml_qttzgg/2026-05/20/content_25efd6910a494ea1986567bc86a4c0b3.shtml"
+        },
+        {
+          "type": "award",
+          "published": "2026-06-12",
+          "url": "https://guangdong.chinatax.gov.cn/mzgkml/mzmjgkml_qttzgg/2026-06/12/content_27c29e75b90a4c6888d2ac93412cffd4.shtml"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "广东公诚设备资产服务有限公司",
+            "amount_cny": 2144880
+          }
+        ]
+      },
+      "gaps": [
+        "公开采购人页面及招标原件均留有截止时间空白占位，尚未取得带具体时间的招标公告。"
+      ],
+      "source": {
+        "url": "https://guangdong.chinatax.gov.cn/mzgkml/mzmjgkml_qttzgg/2026-05/20/25efd6910a494ea1986567bc86a4c0b3/files/2d6969a0e1c043a7893773cb0c47d64f.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://guangdong.chinatax.gov.cn/mzgkml/mzmjgkml_qttzgg/2026-05/20/content_25efd6910a494ea1986567bc86a4c0b3.shtml",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 578872
+      }
+    },
+    {
+      "key": "P12",
+      "family": "sat-xinfeng-property",
+      "project_no": "GPCGD25C500FG015F",
+      "name": "国家税务总局新丰县税务局物业管理服务",
+      "region": "广东省韶关市",
+      "category": "物业管理服务",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/GD2.pdf",
+      "sha256": "1b0bc7d87a2e0b4de56f957c3a856cfb529c63ca0ff035a9db87f66408666d4a",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2025-03-19T09:30:00+08:00",
+      "deadline_in_original": false,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-02-25",
+          "url": "https://guangdong.chinatax.gov.cn/sggkml/sgxfgkml_zfcg/2025-02/25/content_88383e8b997d4491a3d45bd052f8d38e.shtml"
+        },
+        {
+          "type": "award",
+          "published": "2025-03-20",
+          "url": "https://guangdong.chinatax.gov.cn/sggkml/sgxfgkml_zfcg/2025-03/20/content_5b4d79af224743e9af7a901bed026170.shtml"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "广东晨峰环境服务有限公司",
+            "amount_cny": 2432680,
+            "note": "结果公告列出逐家资格及符合性审查、技术、商务、价格得分。"
+          }
+        ]
+      },
+      "gaps": [
+        "原件要求查阅招标及变更公告，截止时间取自官方招标公告。"
+      ],
+      "source": {
+        "url": "https://guangdong.chinatax.gov.cn/sggkml/sgxfgkml_zfcg/2025-02/25/88383e8b997d4491a3d45bd052f8d38e/files/6fad1886e33b4e8ca5cdf40b149c4f5c.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://guangdong.chinatax.gov.cn/sggkml/sgxfgkml_zfcg/2025-02/25/content_88383e8b997d4491a3d45bd052f8d38e.shtml",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 674999
+      }
+    },
+    {
+      "key": "P13",
+      "family": "sat-longchuan-property",
+      "project_no": "0877-25GZTP5ZC0823",
+      "name": "国家税务总局龙川县税务局2026-2027年物业管理服务项目",
+      "region": "广东省河源市",
+      "category": "物业管理服务",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/GD3.pdf",
+      "sha256": "018cedc043f20e8b400e9a689a173863ea6361f6b5c681f68df2cb835e0775f8",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2025-12-10T14:30:00+08:00",
+      "deadline_in_original": true,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-11-17",
+          "url": "https://guangdong.chinatax.gov.cn/hygkml/hylcgkml_zfcg/2025-11/26/content_94a579afd28d459ea3f70eccc2001913.shtml"
+        },
+        {
+          "type": "award",
+          "published": "2025-12-11",
+          "url": "https://guangdong.chinatax.gov.cn/hygkml/hylcgkml_zfcg/2025-12/11/content_b7ad2945c5d740c1aecbaaa3e52bd9d4.shtml",
+          "attachment_url": "https://guangdong.chinatax.gov.cn/hygkml/hylcgkml_zfcg/2025-12/11/b7ad2945c5d740c1aecbaaa3e52bd9d4/files/d1c22463a8d0411cba21056e6d23384a.pdf"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "河源市源涛物业管理有限公司",
+            "amount_cny": 6981600
+          }
+        ]
+      },
+      "gaps": [],
+      "source": {
+        "url": "https://guangdong.chinatax.gov.cn/hygkml/hylcgkml_zfcg/2025-11/26/94a579afd28d459ea3f70eccc2001913/files/6e614d78940642fba023a6c2141d5005.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://guangdong.chinatax.gov.cn/hygkml/hylcgkml_zfcg/2025-11/26/content_94a579afd28d459ea3f70eccc2001913.shtml",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 1261329
+      }
+    },
+    {
+      "key": "P14",
+      "family": "sat-boluo-property",
+      "project_no": "M4400000707530000001",
+      "name": "国家税务总局博罗县税务局2025-2027年物业管理服务项目",
+      "region": "广东省惠州市",
+      "category": "物业管理服务",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/GD4.pdf",
+      "sha256": "9b7a470a82ca81c2c5e2d63099bfb992831de8e6a63c902582a8aec7ea0e1bb5",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2025-05-20T10:00:00+08:00",
+      "deadline_in_original": true,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-04-30",
+          "url": "https://guangdong.chinatax.gov.cn/hzgkml/hzblgkml_zbgga/2025-05/12/content_f6506ebeef804c4aa8e03f48ac343b04.shtml"
+        },
+        {
+          "type": "award",
+          "published": "2025-05-22",
+          "url": "https://guangdong.chinatax.gov.cn/hzgkml/hzblgkml_zbggb/2025-05/30/content_862b7e00f9fb4e169fd4eddc2ebdd5fa.shtml"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "广东业安物业集团有限公司",
+            "amount_cny": 9330000
+          }
+        ]
+      },
+      "gaps": [],
+      "source": {
+        "url": "https://guangdong.chinatax.gov.cn/hzgkml/hzblgkml_zbgga/2025-05/12/f6506ebeef804c4aa8e03f48ac343b04/files/b0b72608516a49cbbc889e75a06c9556.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://guangdong.chinatax.gov.cn/hzgkml/hzblgkml_zbgga/2025-05/12/content_f6506ebeef804c4aa8e03f48ac343b04.shtml",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 732897
+      }
+    },
+    {
+      "key": "P15",
+      "family": "sat-tianjin-municipal-bureau",
+      "project_no": "TGPC-2025-D-1313",
+      "name": "国家税务总局天津市税务局全国统一规范电子税务局等系统运行维护项目",
+      "region": "天津市",
+      "category": "软件运维服务",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P15-tender.docx",
+      "sha256": "39f5534245bc9bdbbbe12225c3ebb0eafb87e49ff2c353a810170af4e029230b",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2025-12-29T08:30:00+08:00",
+      "deadline_in_original": true,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-12-09",
+          "url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251209154216425.shtml",
+          "note": "更正公告记载首次公告日期为 2025-12-08。"
+        },
+        {
+          "type": "correction",
+          "published": "2025-12-09",
+          "url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251209153758821.shtml",
+          "note": "采购公告的项目基本情况由不接受联合体投标更正为接受组成联合体投标；更正公告记载更正日期为 2025-12-08，未变更截止时间。"
+        },
+        {
+          "type": "award",
+          "published": "2026-01-04",
+          "url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20260104152509878.shtml"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "浙江税友信创科技有限公司",
+            "amount_cny": 3420000
+          }
+        ]
+      },
+      "gaps": [],
+      "award_tender_attachment": {
+        "attachment_url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20260104/20260104152449_478.zip",
+        "attachment_source_url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20260104152509878.shtml",
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ1.docx",
+        "sha256": "262c2fe6949ce99c09a30e35321cd4640b76b7ddd3b76c2e0e972067e2a232d6",
+        "archive": {
+          "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ1.zip",
+          "sha256": "7f567f4ce3c6bc58aa29b00e249eb31a8f7f28b6502430ee39c951b2779ad552",
+          "member": "国家税务总局天津市税务局全国统一规范电子税务局等系统运行维护项目（项目编号：TGPC-2025-D-1313）公开招标文件.docx",
+          "member_ordinal": 1
+        },
+        "note": "与招标公告附件的 DOCX 字节不同，核对 word/document.xml 的各段正文相同。"
+      },
+      "archive": {
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P15-tender.zip",
+        "sha256": "8f4b6e1c4b05f003253bdabec9b2eb216360768f27d21754e3c0061531b33f1f",
+        "member": "国家税务总局天津市税务局全国统一规范电子税务局等系统运行维护项目（项目编号：TGPC-2025-D-1313）公开招标文件.docx",
+        "member_ordinal": 1
+      },
+      "source": {
+        "url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20251209/20251209154208_909.zip",
+        "type": "official_attachment",
+        "announcement_url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251209154216425.shtml",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 134891
+      }
+    },
+    {
+      "key": "P16",
+      "family": "sat-tianjin-municipal-bureau",
+      "project_no": "TGPC-2025-D-1195",
+      "name": "国家税务总局天津市税务局空港流霞路50号办公区后勤保障服务项目",
+      "region": "天津市",
+      "category": "后勤保障服务",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P16-tender.docx",
+      "sha256": "bcfaf3db48ba5dd418c98d0379f984bf7d53dd02c7a69a81b3d95e04ae39356d",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2025-12-29T08:30:00+08:00",
+      "deadline_in_original": true,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-12-09",
+          "url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251209153415086.shtml?fjdm=11200000000"
+        },
+        {
+          "type": "award",
+          "published": "2026-01-04",
+          "url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20260104152209589.shtml"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "天津诚瑞达物业集团有限公司",
+            "amount_cny": 3369677.14
+          }
+        ]
+      },
+      "gaps": [],
+      "award_tender_attachment": {
+        "attachment_url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20260104/20260104152154_958.zip",
+        "attachment_source_url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20260104152209589.shtml",
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ2.docx",
+        "sha256": "63659348dfb8cf847b2f1dcc2d5d0d7233f35cee9c86761b74aa595120227eb3",
+        "archive": {
+          "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ2.zip",
+          "sha256": "1a0b0a248df5f94ad2d5a101a559fa3e0ade2a60b931a570abfa7c1dd4af208f",
+          "member": "国家税务总局天津市税务局空港流霞路50号办公区后勤保障服务项目（项目编号：TGPC-2025-D-1195）公开招标文件.docx",
+          "member_ordinal": 1
+        },
+        "note": "与招标公告附件的 DOCX 字节不同，核对 word/document.xml 的各段正文相同。"
+      },
+      "archive": {
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P16-tender.zip",
+        "sha256": "a5785b2bff9d8f94d9cf4c6f7f4d1520717e25f5837499d3287e2d0b7cca075d",
+        "member": "国家税务总局天津市税务局空港流霞路50号办公区后勤保障服务项目（项目编号：TGPC-2025-D-1195）公开招标文件.docx",
+        "member_ordinal": 1
+      },
+      "source": {
+        "url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20251209/20251209153406_235.zip",
+        "type": "official_attachment",
+        "announcement_url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251209153415086.shtml?fjdm=11200000000",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 141651
+      }
+    },
+    {
+      "key": "P17",
+      "family": "sat-hexiqu-12366-remote",
+      "project_no": "TGPC-2026-D-0055",
+      "name": "国家税务总局天津市河西区税务局12366纳税缴费服务热线远程座席咨询服务项目",
+      "region": "天津市",
+      "category": "热线咨询服务",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P17-tender.docx",
+      "sha256": "97fd1157f3a1628c41752f9e6edaede20deb34ba20aa1528c6d0ed4b53a326ac",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2026-03-27T08:30:00+08:00",
+      "deadline_in_original": true,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2026-03-06",
+          "url": "https://tianjin.chinatax.gov.cn/11243000000/0100/010010/01001001/20260306171837024.shtml"
+        },
+        {
+          "type": "award",
+          "published": "2026-03-27",
+          "url": "https://tianjin.chinatax.gov.cn/11243000000/0100/010010/01001001/20260327162135089.shtml"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "天津神州智信科技有限公司",
+            "amount_cny": 2650000
+          }
+        ]
+      },
+      "gaps": [
+        "原件的投标截止时间位于办理步骤表中「网上应答（上传电子投标文件）」一行。"
+      ],
+      "award_tender_attachment": {
+        "attachment_url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20260327/20260327162128_652.zip",
+        "attachment_source_url": "https://tianjin.chinatax.gov.cn/11243000000/0100/010010/01001001/20260327162135089.shtml",
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ3.docx",
+        "sha256": "2d7a0a694602f2c33d07fcf76ccff24f4030c18dc0fe9a0a96bd52d8b75a5100",
+        "archive": {
+          "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ3.zip",
+          "sha256": "a3edf719f2b588fca533003fa38bc76d66981716f8e4c94e4732941bf50a6477",
+          "member": "20260327152450_462.docx",
+          "member_ordinal": 1
+        },
+        "note": "与招标公告附件的 DOCX 字节不同，核对 word/document.xml 的各段正文相同。"
+      },
+      "source": {
+        "url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20260306/20260306171431_323.docx",
+        "type": "official_attachment",
+        "announcement_url": "https://tianjin.chinatax.gov.cn/11243000000/0100/010010/01001001/20260306171837024.shtml",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 101188
+      }
+    },
+    {
+      "key": "P18",
+      "family": "sat-beichen-canteen-food",
+      "project_no": "TGPC-2025-A-0310",
+      "name": "国家税务总局天津市北辰区税务局食堂食材项目",
+      "region": "天津市",
+      "category": "食堂食材供应",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P18-tender.docx",
+      "sha256": "b96fec59e658e047d9dd437d9f9901fc743a0cc106c87f8e4811715e5e2a51dd",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2025-10-15T08:30:00+08:00",
+      "deadline_in_original": true,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-09-23",
+          "url": "https://tianjin.chinatax.gov.cn/11253000000/0100/010010/01001001/20250923165848592.shtml"
+        },
+        {
+          "type": "award",
+          "published": "2025-10-15",
+          "url": "https://tianjin.chinatax.gov.cn/11253000000/0100/010010/01001001/20251015161742933.shtml"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "天津乐乐果鲜供应链服务有限公司",
+            "discount_rate_pct": 57
+          }
+        ]
+      },
+      "gaps": [],
+      "award_tender_attachment": {
+        "attachment_url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20251015/20251015161611_416.zip",
+        "attachment_source_url": "https://tianjin.chinatax.gov.cn/11253000000/0100/010010/01001001/20251015161742933.shtml",
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ4.docx",
+        "sha256": "cbb4894ad25666ad0adcf946b31131b65651386b0f7dba99231a5bed12fe9bba",
+        "archive": {
+          "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ4.zip",
+          "sha256": "1aa7f4117e24343502a015bfdb4dd1cc7316c6ba2d03b0c43ea6da50c3bcf6cd",
+          "member": "20251015155321_301.docx",
+          "member_ordinal": 1
+        },
+        "note": "与招标公告附件的 DOCX 字节不同，核对 word/document.xml 的各段正文相同。"
+      },
+      "archive": {
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P18-tender.zip",
+        "sha256": "c47f2a02d5707b9122ee3587636857c46fbc65c608d69474f5650899845375aa",
+        "member": "20250923165317_387.docx",
+        "member_ordinal": 1
+      },
+      "source": {
+        "url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20250923/20250923165840_978.zip",
+        "type": "official_attachment",
+        "announcement_url": "https://tianjin.chinatax.gov.cn/11253000000/0100/010010/01001001/20250923165848592.shtml",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 174370
+      }
+    },
+    {
+      "key": "P19",
+      "family": "sat-tianjin-municipal-bureau",
+      "project_no": "TGPC-2025-D-1233",
+      "name": "国家税务总局天津市税务局纳税人缴费人诉求分析服务项目",
+      "region": "天津市",
+      "category": "税费诉求分析服务",
+      "regression_profile": "expanded",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P19-tender.docx",
+      "sha256": "94342480b00ab1efe1908935bd21120e0081bb44f515fb8b71795d9088c436b5",
+      "collected_at": "2026-11-22",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2025-12-19T08:30:00+08:00",
+      "deadline_in_original": true,
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-12-01",
+          "url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251201110738043.shtml"
+        },
+        {
+          "type": "award",
+          "published": "2025-12-23",
+          "url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251223084943540.shtml"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "杭州中软安人网络通信股份有限公司",
+            "amount_cny": 208000
+          }
+        ]
+      },
+      "gaps": [],
+      "award_tender_attachment": {
+        "attachment_url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20251223/20251223084712_642.zip",
+        "attachment_source_url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251223084943540.shtml",
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ5.docx",
+        "sha256": "5c15d9f038f2868def4b1293fbeb79fc96275ea93b8e5d8f49f9328cbeacd4c7",
+        "archive": {
+          "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/TJ5.zip",
+          "sha256": "26c424e6ac953552cd4ae9b3df4ea2497a5266a20d933b70b208b9b515ad1053",
+          "member": "国家税务总局天津市税务局纳税人缴费人诉求分析服务项目（项目编号：TGPC-2025-D-1233）公开招标文件.docx",
+          "member_ordinal": 1
+        },
+        "note": "与招标公告附件的 DOCX 字节不同，核对 word/document.xml 的各段正文相同。"
+      },
+      "archive": {
+        "local_file": "ccgp_2026-10-06/d0-2026-11-22/central/P19-tender.zip",
+        "sha256": "9d56dc328cacdb03f8be5ea74f7801f6682e699e84eb84f1b694b5a99d11cfea",
+        "member": "附件：国家税务总局天津市税务局纳税人缴费人诉求分析服务项目（项目编号：TGPC-2025-D-1233）公开招标文件.docx",
+        "member_ordinal": 1
+      },
+      "source": {
+        "url": "https://tianjin.chinatax.gov.cn/uploadFiles/file/20251201/20251201110717_815.zip",
+        "type": "official_attachment",
+        "announcement_url": "https://tianjin.chinatax.gov.cn/11200000000/0100/010005/01000501/20251201110738043.shtml",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。",
+        "byte_size": 97510
+      }
+    },
+    {
+      "key": "P21",
+      "family": "shaanxi-qianxian-county-hospital-medical-equipment",
+      "project_no": "ZC2025-HW-155",
+      "name": "乾县人民医院医疗设备（ZB2025-02）采购项目",
+      "region": "陕西",
+      "category": "急救和生命支持设备",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P21-tender.pdf",
+      "bid_deadline": "2025-09-28T14:30:00+08:00",
+      "lots": [
+        "1"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "陕西省政府采购网",
+        "type": "official_tender_pdf",
+        "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c1f198b38f57019992d42be32202.pdf?accessCode=43932d3286a02aa9d4985746f6a0deb3",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 3 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 72,
+        "byte_size": 484468
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": null,
+          "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c1f198b38f57019992d42be32202.pdf?accessCode=43932d3286a02aa9d4985746f6a0deb3#page=3",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。独立网页及公告确切发布日期未取得。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的官方结果或废标公告。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "b0f7fe2af98afa2bde60442ede416a55bbff9a3d904d216ea681e20d4fd86e02"
+    },
+    {
+      "key": "P22",
+      "family": "shaanxi-shangnan-tcm-hospital-medical-equipment",
+      "project_no": "WDZB2025-1215",
+      "name": "商南县中医医院医疗设备采购项目",
+      "region": "陕西",
+      "category": "医疗设备",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P22-tender.pdf",
+      "bid_deadline": "2026-01-07T09:30:00+08:00",
+      "lots": [
+        "2"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "陕西省政府采购网",
+        "type": "official_tender_pdf",
+        "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c7659a636e49019ba1743a6e5468.pdf?accessCode=985449585bb4f2a10fe567012c37ccea",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 3 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 85,
+        "byte_size": 661317
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-12-17",
+          "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c7659a636e49019ba1743a6e5468.pdf?accessCode=985449585bb4f2a10fe567012c37ccea#page=3",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。日期取公告落款。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "招标文件封面为合同包02，公告章节列出项目全部7包。仅收集到包02原件，其余包原件待补。",
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的官方结果或废标公告。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "1ddcb7038c648fc28c27726ff6dd4d72db244bef1e15094bc669795a0faeb263"
+    },
+    {
+      "key": "P23",
+      "family": "shaanxi-baoji-central-hospital-medical-equipment",
+      "project_no": "LDZB-250044",
+      "name": "宝鸡市中心医院医疗设备采购项目（一）",
+      "region": "陕西",
+      "category": "医用监护、口腔设备",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P23-tender.pdf",
+      "bid_deadline": "2025-03-12T14:00:00+08:00",
+      "lots": [
+        "1",
+        "2",
+        "3"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "陕西省政府采购网",
+        "type": "official_tender_pdf",
+        "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c97a9583219101958edff9a24169.pdf?accessCode=c8a663714f7967679b0159e56116fd66",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 3 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 66,
+        "byte_size": 368515
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": null,
+          "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c97a9583219101958edff9a24169.pdf?accessCode=c8a663714f7967679b0159e56116fd66#page=3",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。独立网页及公告确切发布日期未取得。"
+        },
+        {
+          "type": "award",
+          "published": "2025-03-13",
+          "url": "https://www.ccgp-shaanxi.gov.cn/freecms/site/shaanxi/ggxx/info/2025/8a69c7979566ce1301958ed9a31370f3.html",
+          "note": "招标文件是结果公告的相关附件定稿。公告公开各包中标人评审总得分。"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "中仪医疗器械（陕西）有限公司",
+            "amount_cny": 1565000,
+            "scores": [
+              {
+                "supplier": "中仪医疗器械（陕西）有限公司",
+                "total": 90.88,
+                "rank": 1
+              }
+            ]
+          },
+          {
+            "lot": "2",
+            "winner": "陕西锋壹鼎诚科技发展有限公司",
+            "amount_cny": 76800,
+            "scores": [
+              {
+                "supplier": "陕西锋壹鼎诚科技发展有限公司",
+                "total": 90,
+                "rank": 1
+              }
+            ]
+          },
+          {
+            "lot": "3",
+            "winner": "宝鸡市华祥医疗器械有限公司",
+            "amount_cny": 493000,
+            "scores": [
+              {
+                "supplier": "宝鸡市华祥医疗器械有限公司",
+                "total": 88.93,
+                "rank": 1
+              }
+            ]
+          }
+        ],
+        "note": "招标文件是结果公告的相关附件定稿。公告公开各包中标人评审总得分。"
+      },
+      "gaps": [
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "a179c15c0713cb1326c02b76fc288aad6249ead17545b49fc0d66a23668ddbc6"
+    },
+    {
+      "key": "P24",
+      "family": "shaanxi-weicheng-district-office-property",
+      "project_no": "XWCG-2025-02",
+      "name": "2025年渭城区行政中心及二级单位等办公区域物业服务项目",
+      "region": "陕西",
+      "category": "物业管理与安保服务",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P24-tender.pdf",
+      "bid_deadline": "2025-06-10T09:00:00+08:00",
+      "lots": [
+        "1",
+        "2",
+        "3"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "陕西省政府采购网",
+        "type": "official_tender_pdf",
+        "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c0a6973efbf901975d15e4865ce5.pdf?accessCode=2dd93045bd7a3d220d5ab3482f11faee",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 4 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 97,
+        "byte_size": 837608
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": null,
+          "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c0a6973efbf901975d15e4865ce5.pdf?accessCode=2dd93045bd7a3d220d5ab3482f11faee#page=4",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。独立网页及公告确切发布日期未取得。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "项目编号以封面为准。正文公告部分使用 XWCG-2025--02。",
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的官方结果或废标公告。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "232c46ce6452659c7b0a3b32c296469fe13a2147e6b33b85e59a2803ec61913c"
+    },
+    {
+      "key": "P25",
+      "family": "shaanxi-dawang-town-street-cleaning",
+      "project_no": "JXD2025-ZCXX-1231",
+      "name": "2026年大王街道城乡保洁服务项目",
+      "region": "陕西",
+      "category": "城乡清扫保洁服务",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P25-tender.pdf",
+      "bid_deadline": "2026-02-11T14:00:00+08:00",
+      "lots": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "陕西省政府采购网",
+        "type": "official_tender_pdf",
+        "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c82c9a637a1c019c4fddd4ba7017.pdf?accessCode=4911d0d5b6ec6ecff9bdbea4cff43401",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 3 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 78,
+        "byte_size": 813173
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": null,
+          "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/zone/2025/1/12/project/gpx-template/8a69c82c9a637a1c019c4fddd4ba7017.pdf?accessCode=4911d0d5b6ec6ecff9bdbea4cff43401#page=3",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。独立网页及公告确切发布日期未取得。"
+        },
+        {
+          "type": "award_detail",
+          "published": null,
+          "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/616901/2026/2/12/8a69c9569bd8be83019bd9877df9225e/gpe-evaluation/8a69c7659a636e49019c4fd69b861b47.pdf?accessCode=c3601cdbfe6513052a6c4ab8bd74bfa0",
+          "note": "已核验陕西省政府采购网的中标（成交）明细附件。独立结果公告网页未取得，明细未列得分。"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "西咸新区金祥万佳保洁服务有限公司",
+            "amount_cny": 817520
+          },
+          {
+            "lot": "2",
+            "winner": "陕西木易程晨建筑工程有限公司",
+            "amount_cny": 675580
+          },
+          {
+            "lot": "3",
+            "winner": "陕西畅雅元保洁有限公司",
+            "amount_cny": 639350
+          },
+          {
+            "lot": "4",
+            "winner": "陕西元驰欧康保洁服务有限公司",
+            "amount_cny": 482760
+          },
+          {
+            "lot": "5",
+            "winner": "西安鄠邑区康王明顺保洁有限公司",
+            "amount_cny": 680400
+          },
+          {
+            "lot": "6",
+            "winner": "陕西大秦峰年物业管理服务有限公司",
+            "amount_cny": 543920
+          }
+        ],
+        "note": "已核验陕西省政府采购网的中标（成交）明细附件。独立结果公告网页未取得，明细未列得分。"
+      },
+      "gaps": [
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "dcf8cbbf9097005d56dcf92dd778d4e0ee282df98d518f513ccac354583a7688",
+      "outcome_attachments": [
+        {
+          "title": "中标（成交）明细",
+          "url": "https://www.ccgp-shaanxi.gov.cn/gpx-bid-file/ZF_JGBM_000003/616901/2026/2/12/8a69c9569bd8be83019bd9877df9225e/gpe-evaluation/8a69c7659a636e49019c4fd69b861b47.pdf?accessCode=c3601cdbfe6513052a6c4ab8bd74bfa0",
+          "local_file": "ccgp_2026-10-06/d0-2026-11-22/P25-outcome-detail.pdf",
+          "sha256": "949d83e81b80b9671ac950516c21679c9fcf503d6d8335d92a5b5e90ebedffd0"
+        }
+      ]
+    },
+    {
+      "key": "P26",
+      "family": "guangxi-guiping-hospital-first-batch-medical-equipment",
+      "project_no": "GGZC2025-G1-810252-JDZB",
+      "name": "桂平市人民医院医学装备采购2025年度第一批次设备（二）",
+      "region": "广西",
+      "category": "医疗设备",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P26-tender.pdf",
+      "bid_deadline": "2026-01-14T09:00:00+08:00",
+      "lots": [
+        "1",
+        "2",
+        "3"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "广西政府采购云平台",
+        "type": "official_tender_pdf",
+        "url": "https://obs.gcy.zfcg.gxzf.gov.cn/guangxi-gov-open-doc/1023FP/450103/10008212013/202512/02a90b01-baca-45e6-a39b-160c97a49180.pdf",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 3 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 111,
+        "byte_size": 1469331
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": null,
+          "url": "https://obs.gcy.zfcg.gxzf.gov.cn/guangxi-gov-open-doc/1023FP/450103/10008212013/202512/02a90b01-baca-45e6-a39b-160c97a49180.pdf#page=3",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。独立网页及公告确切发布日期未取得。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的官方结果或废标公告。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "29c76a8d76b159c2216efbc186edda7a74142b53a9cbe031a5bfcd78a57bea13"
+    },
+    {
+      "key": "P27",
+      "family": "guangxi-yizhou-third-hospital-canteen-food",
+      "project_no": "HCZC2026-G3-810003-GXHY",
+      "name": "河池市宜州区第三人民医院食堂食材采购项目",
+      "region": "广西",
+      "category": "食材供应与配送",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P27-tender.pdf",
+      "bid_deadline": "2026-02-10T10:00:00+08:00",
+      "lots": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "广西政府采购云平台",
+        "type": "official_tender_pdf",
+        "url": "https://obs.gcy.zfcg.gxzf.gov.cn/guangxi-gov-open-doc/1023FP/451281/10012638128/20261/cc3bdbbb-9c1b-4960-90ee-95aeb860dd6f.pdf",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 4 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 100,
+        "byte_size": 1183408
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2026-01-19",
+          "url": "https://obs.gcy.zfcg.gxzf.gov.cn/guangxi-gov-open-doc/1023FP/451281/10012638128/20261/cc3bdbbb-9c1b-4960-90ee-95aeb860dd6f.pdf#page=4",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。日期取公告落款。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的官方结果或废标公告。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "18c711ce60ffac972a1d712763d5f019353c723ca886490dfec5853a91177568"
+    },
+    {
+      "key": "P28",
+      "family": "guangxi-hezhou-drainage-support-equipment",
+      "project_no": "HZZC2025-G1-990320-GXHY",
+      "name": "贺州市排水处理能力提升-排水配套设备设施二标段",
+      "region": "广西",
+      "category": "排水配套设施设备",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P28-tender.pdf",
+      "bid_deadline": "2026-02-05T09:00:00+08:00",
+      "lots": [
+        "1"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "广西政府采购云平台",
+        "type": "official_tender_pdf",
+        "url": "https://obs.gcy.zfcg.gxzf.gov.cn/guangxi-gov-open-doc/1023FP/450405/10008125885/20261/272ab86b-b894-47d2-b4fc-9ba10759ff49.pdf",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 5 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 101,
+        "byte_size": 6026859
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2026-01-13",
+          "url": "https://obs.gcy.zfcg.gxzf.gov.cn/guangxi-gov-open-doc/1023FP/450405/10008125885/20261/272ab86b-b894-47d2-b4fc-9ba10759ff49.pdf#page=5",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。日期取公告落款。"
+        },
+        {
+          "type": "award",
+          "published": "2026-02-09",
+          "url": "https://www.ccgp.gov.cn/cggg/dfgg/zbgg/202602/t20260209_26163556.htm",
+          "note": "采购范围是排水项目二标段，内部单包为1分标。结果来源公开中标供应商评审总得分。"
+        }
+      ],
+      "outcome": {
+        "lots": [
+          {
+            "lot": "1",
+            "winner": "广西城建建设集团有限公司",
+            "amount_cny": 14796600,
+            "scores": [
+              {
+                "supplier": "广西城建建设集团有限公司",
+                "total": 82.46,
+                "rank": 1
+              }
+            ]
+          }
+        ],
+        "note": "采购范围是排水项目二标段，内部单包为1分标。结果来源公开中标供应商评审总得分。"
+      },
+      "gaps": [
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "bfe7931a874c145f5045648ec5fc590338ba3df29c0fd40d19e3a71741cecb45"
+    },
+    {
+      "key": "P29",
+      "family": "guangxi-guigang-relocation-wastewater-install",
+      "project_no": "GGZC2025-G1-990320-GXSJ",
+      "name": "整体搬迁项目污水处理站设备及安装服务采购项目",
+      "region": "广西",
+      "category": "污水处理设备及安装",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P29-tender.pdf",
+      "bid_deadline": "2026-01-19T09:00:00+08:00",
+      "lots": [
+        "1"
+      ],
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "source": {
+        "provider": "广西政府采购云平台",
+        "type": "official_tender_pdf",
+        "url": "https://obs.gcy.zfcg.gxzf.gov.cn/guangxi-gov-open-doc/1023FP/459900/10010162172/202512/a2bd3684-9360-487c-818b-146c3d89292f.pdf",
+        "access": "官方公开附件，采集时无需登录",
+        "license": "未见开放再分发授权，原件仅留本地用于开发评测",
+        "confidentiality": "公开",
+        "notice_locator": "PDF 第 3 页，招标公告中的投标截止时间（文件物理页码）",
+        "pages": 80,
+        "byte_size": 1001383
+      },
+      "announcements": [
+        {
+          "type": "tender",
+          "published": "2025-12-29",
+          "url": "https://obs.gcy.zfcg.gxzf.gov.cn/guangxi-gov-open-doc/1023FP/459900/10010162172/202512/a2bd3684-9360-487c-818b-146c3d89292f.pdf#page=3",
+          "note": "原件首章收录公开招标公告，投标截止时间来自该章。日期取公告落款。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "独立招标公告网页未取得，已用官方招标原件所载招标公告确认公告信息。",
+        "未取得可核验的官方结果或废标公告。",
+        "未取得可核验的独立更正或澄清公告。"
+      ],
+      "sha256": "b50e0ae13f775b08e054332c00e40a4d3f0e106e86dce1493a962b970fa9e84b"
+    },
+    {
+      "key": "P31",
+      "family": "henan-tv-studio-renovation",
+      "project_no": "豫财招标采购-2026-168",
+      "name": "河南广播电视台专业演播厅设备更新项目",
+      "region": "河南",
+      "category": "演播设备、声学改造与监理",
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P31-tender.pdf",
+      "sha256": "74e2be7017397978b05e3180a7d2f2cbee89ffcd5f137cfc89e56aef90e28ce1",
+      "lots": [
+        "1",
+        "2",
+        "3"
+      ],
+      "bid_deadline": "2026-03-31T09:00:00+08:00",
+      "original_bid_deadline": "2026-03-31T09:00:00+08:00",
+      "effective_bid_deadline": "2026-03-31T09:00:00+08:00",
+      "announcements": [
+        {
+          "type": "tender",
+          "url": "https://zhumadian.zfcg.henan.gov.cn/henan/content?infoId=1929166",
+          "published": "2026-03-09"
+        },
+        {
+          "type": "correction",
+          "url": "https://zhumadian.zfcg.henan.gov.cn/henan/content?infoId=1929654",
+          "published": "2026-03-10",
+          "note": "调整各包异常低价评审规则并更新包一工程量清单；开标时间维持 2026-03-31 09:00。"
+        },
+        {
+          "type": "award",
+          "url": "https://zhumadian.zfcg.henan.gov.cn/henan/content?channelCode=H600102&infoId=1938932",
+          "published": "2026-04-02"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "工程量清单更新由更正正文载明，未取得独立清单附件。"
+      ],
+      "source": {
+        "url": "https://zfcg.henan.gov.cn/cmsweb35rc67w/henan/rootfiles/2026/04/02/28cfabd5bc8d498aa1e8c1b735f1dc1d.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://zhumadian.zfcg.henan.gov.cn/henan/content?channelCode=H600102&infoId=1938932",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"
+      }
+    },
+    {
+      "key": "P32",
+      "family": "henan-pingyuan-food-and-supplies",
+      "project_no": "豫财招标采购-2026-407",
+      "name": "河南省平原监狱2026年罪犯食堂大宗生活物资和罪犯日用品供应站（食品）采购项目",
+      "region": "河南",
+      "category": "食品与日用品供应",
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P32-tender.pdf",
+      "sha256": "c48f50e4e5eb3c5befa9cf12282d75a84f26683d166ee8ed247f5fe3a0304b4d",
+      "lots": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6"
+      ],
+      "bid_deadline": "2026-05-21T09:00:00+08:00",
+      "original_bid_deadline": "2026-05-21T09:00:00+08:00",
+      "effective_bid_deadline": "2026-05-26T09:00:00+08:00",
+      "announcements": [
+        {
+          "type": "tender",
+          "url": "https://zfcg.henan.gov.cn/henan/content?channelCode=H600101&infoId=1950930",
+          "published": "2026-04-29"
+        },
+        {
+          "type": "correction",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1952828&channelCode=H600103",
+          "published": "2026-05-07",
+          "note": "修改食品供货要求并将当轮投标截止时间从 2026-05-21 09:00 顺延至 2026-05-26 09:00。"
+        },
+        {
+          "type": "award",
+          "url": "https://pdswgs.zfcg.henan.gov.cn/henan/content?channelCode=H600102&infoId=1962778",
+          "published": "2026-05-29",
+          "note": "首轮结果公告覆盖包1、2、3、5、6。"
+        },
+        {
+          "type": "failure",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1963085&channelCode=H600105",
+          "published": "2026-05-29",
+          "note": "首轮包4有效投标人不足法定人数。"
+        },
+        {
+          "type": "tender",
+          "url": "https://pdswgs.zfcg.henan.gov.cn/henan/content?infoId=1964656",
+          "published": "2026-06-02",
+          "note": "同项目包4后续采购。"
+        },
+        {
+          "type": "failure",
+          "url": "https://pdswgs.zfcg.henan.gov.cn/henan/content?infoId=1974362",
+          "published": "2026-06-24",
+          "note": "同项目包4后续采购废标。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "结果公告列出多份分包/采购文件，当前留存一份官方招标正文。",
+        "包4后续采购原件与公告所列其他分包正文未完整归档。"
+      ],
+      "source": {
+        "url": "https://pdswgs.zfcg.henan.gov.cn/cmsweb35rc67w/henan/rootfiles/2026/05/29/685814465ba8438a93a1fa87e0315a48.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://pdswgs.zfcg.henan.gov.cn/henan/content?channelCode=H600102&infoId=1962778",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"
+      }
+    },
+    {
+      "key": "P33",
+      "family": "henan-xuchang-traffic-maintenance",
+      "project_no": "东城招标采购-2026-1",
+      "name": "许昌市东城区市政管理中心东城区交通设施养护项目",
+      "region": "河南·许昌",
+      "category": "市政交通设施养护",
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P33-tender.pdf",
+      "sha256": "ee9266b0a15fd6d3a1b384753a2b04b31c8ff086a93403b841a4ffc03da3b688",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2026-02-27T08:30:00+08:00",
+      "original_bid_deadline": "2026-02-27T08:30:00+08:00",
+      "effective_bid_deadline": null,
+      "announcements": [
+        {
+          "type": "tender",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1918446&channelCode=H710201",
+          "published": "2026-01-29"
+        },
+        {
+          "type": "award",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1926644&channelCode=H710202",
+          "published": "2026-02-28"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "未取得更正或澄清；原件为中标公告附列的招标文件正文。"
+      ],
+      "procurement_execution_no": "JZFCG-G2026004",
+      "source": {
+        "url": "https://zhengzhou.zfcg.henan.gov.cn/cmsweb81e27e/xuchang/rootfiles/2026/02/28/36ea0a86ed124bf8b9fa8168d702a97b.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://zfcg.henan.gov.cn/henan/content?infoId=1926644&channelCode=H710202",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"
+      }
+    },
+    {
+      "key": "P34",
+      "family": "henan-12345-hotline-2026-autumn",
+      "project_no": "豫财招标采购-2026-1126",
+      "name": "河南省政务大数据中心河南省省级12345政务服务便民热线运营中心服务采购（2026年9月—12月）项目（二次）",
+      "region": "河南",
+      "category": "政务服务与通信运营",
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P34-tender.pdf",
+      "sha256": "fc7f6ad465aff5255dc75bbac5a4dc4b20e773a27838d1269b513eb4a789ff2b",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2026-10-28T09:00:00+08:00",
+      "original_bid_deadline": "2026-10-28T09:00:00+08:00",
+      "effective_bid_deadline": null,
+      "announcements": [
+        {
+          "type": "tender",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=2013627&channelCode=H600101",
+          "published": "2026-09-08",
+          "note": "首轮招标，截止 2026-09-29 09:00。"
+        },
+        {
+          "type": "failure",
+          "url": "https://pysjkq.zfcg.henan.gov.cn/henan/content?bz=1&channelCode=H600105&infoId=2024335",
+          "published": "2026-09-30",
+          "note": "首轮递交投标文件的供应商不足三家。"
+        },
+        {
+          "type": "tender",
+          "url": "https://hebi.zfcg.henan.gov.cn/henan/content?infoId=2024506",
+          "published": "2026-09-30",
+          "note": "二次招标；当前原件对应本轮。"
+        },
+        {
+          "type": "award",
+          "url": "https://pyssfq.zfcg.henan.gov.cn/henan/content?bz=1&channelCode=H600102&infoId=2036597",
+          "published": "2026-10-29"
+        },
+        {
+          "type": "result_correction",
+          "url": "https://pyssfq.zfcg.henan.gov.cn/henan/content?bz=1&channelCode=H600103&infoId=2047101",
+          "published": "2026-11-19",
+          "note": "结果公告文字更正，采购结果及招标要求维持原公告。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "首轮招标原件在结果公告中另列，当前仅本地留存二次招标原件。"
+      ],
+      "source": {
+        "url": "https://zfcg.henan.gov.cn/cmsweb35rc67w/henan/rootfiles/2026/10/29/ff630fc3918f4954b9a806788c23b4e2.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://pyssfq.zfcg.henan.gov.cn/henan/content?bz=1&channelCode=H600102&infoId=2036597",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"
+      }
+    },
+    {
+      "key": "P35",
+      "family": "henan-prosecution-hotline",
+      "project_no": "豫财招标采购-2026-87",
+      "name": "河南省人民检察院河南检察机关12309服务热线平台服务项目（二次）",
+      "region": "河南",
+      "category": "热线运营服务",
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P35-tender.pdf",
+      "sha256": "b0856e50fc54699066e086def74fdb47faeedf163106f3bd4ac9757f56f3a6e0",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2026-03-19T09:00:00+08:00",
+      "original_bid_deadline": "2026-03-19T09:00:00+08:00",
+      "effective_bid_deadline": null,
+      "announcements": [
+        {
+          "type": "tender",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1919847&channelCode=H600101",
+          "published": "2026-02-03",
+          "note": "首轮招标。"
+        },
+        {
+          "type": "failure",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1925925&channelCode=H600105",
+          "published": "2026-02-26",
+          "note": "首轮废标。"
+        },
+        {
+          "type": "tender",
+          "url": "https://hnsggzyjy.henan.gov.cn/jyxx/002002/002002001/20260226/ee5befb0-8dac-4bcb-bd95-46fda3f8b442.html",
+          "published": "2026-02-26",
+          "note": "二次招标；当前原件对应本轮。"
+        },
+        {
+          "type": "award",
+          "url": "https://hnsggzyjy.henan.gov.cn/jyxx/002002/002002003/20260323/deb1947e-34ea-40b8-970e-ccafb247e865.html",
+          "published": "2026-03-23"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "首轮采购原件未归档；当前原件对应二次招标。"
+      ],
+      "source": {
+        "url": "https://gongyi.zfcg.henan.gov.cn/cmsweb35rc67w/henan/rootfiles/2026/03/23/f4e246bb0693490987e238fd709f7548.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://xingyang.zfcg.henan.gov.cn/henan/content?channelCode=H600102&infoId=1934610",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"
+      }
+    },
+    {
+      "key": "P36",
+      "family": "henan-zhumadian-hospital-consumables",
+      "project_no": "驻政公开采购-2026-1",
+      "name": "驻马店市中心医院医用耗材(含诊断试剂)院外集中配送服务项目",
+      "region": "河南·驻马店",
+      "category": "医用耗材配送服务",
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P36-tender.pdf",
+      "sha256": "8a1e505ba576faa4c61bb7142a8af0d6f7cb4ddb84732f218dc3d4873ecfc091",
+      "lots": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ],
+      "bid_deadline": "2026-03-12T09:00:00+08:00",
+      "original_bid_deadline": "2026-03-12T09:00:00+08:00",
+      "effective_bid_deadline": null,
+      "announcements": [
+        {
+          "type": "tender",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1924004&channelCode=H780601",
+          "published": "2026-02-12"
+        },
+        {
+          "type": "award",
+          "url": "https://zhumadian.zfcg.henan.gov.cn/zhumadian/content?infoId=1938191",
+          "published": "2026-03-31",
+          "note": "结果公告所载评审日在原采购文件截止时间之后；尚无可核验的截止时间变更公告。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "截止时间按归档原件的招标公告章记载；评审日不是更正的投标截止时间。",
+        "已归档未中标得分排名及废标原因附件，其余采购文件待核对。"
+      ],
+      "source": {
+        "url": "https://zhumadian.zfcg.henan.gov.cn/cmsweb35rc67w/zhumadian/rootfiles/2026/03/31/08e9fb1552284a5baa35a11645af1c2e.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://zhumadian.zfcg.henan.gov.cn/zhumadian/content?infoId=1938191",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"
+      },
+      "outcome_attachments": [
+        {
+          "title": "非中标单位得分与排名、废标单位废标原因",
+          "url": "https://zhumadian.zfcg.henan.gov.cn/cmsweb35rc67w/zhumadian/rootfiles/2026/03/31/afcbd4b7f0c34c67a5a78902d8a9ee5a.docx",
+          "local_file": "ccgp_2026-10-06/d0-2026-11-22/P36-outcome-scores.docx",
+          "sha256": "667bed81167521a5111f3e71d87774de35cade4d9e01618e3642ca353131325a"
+        }
+      ]
+    },
+    {
+      "key": "P37",
+      "family": "henan-dancheng-drinking-water-protection",
+      "project_no": "周财招标采购-2025-123",
+      "name": "郸城县县级和“千吨万人”饮用水水源保护区规范化建设项目",
+      "region": "河南·周口",
+      "category": "生态环境保护设备及设施",
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P37-tender.pdf",
+      "sha256": "784fa7f05cfbad31e70ee5d2875881d2754291d3a964caf3e5dfbf63ac2cfc99",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2026-01-08T10:00:00+08:00",
+      "original_bid_deadline": "2026-01-08T10:00:00+08:00",
+      "effective_bid_deadline": null,
+      "announcements": [
+        {
+          "type": "tender",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1895209&channelCode=H770601",
+          "published": "2025-12-12"
+        },
+        {
+          "type": "award",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1909375&channelCode=H770602",
+          "published": "2026-01-08"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "未取得更正或澄清；原件为中标公告附列的招标文件正文。"
+      ],
+      "source": {
+        "url": "https://zfcg.henan.gov.cn/cmsweb81e27e/nas/webfile2024/zhoukou/rootfiles/2026/01/08/2b6138f827774f06b48d8d532f3afcd7.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://zfcg.henan.gov.cn/henan/content?infoId=1909375&channelCode=H770602",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"
+      }
+    },
+    {
+      "key": "P38",
+      "family": "henan-art-centre-stage-audio",
+      "project_no": "豫财招标采购-2025-346",
+      "name": "河南艺术中心设备更新项目音响设备采购项目（二次）",
+      "region": "河南",
+      "category": "舞台音响及配套设备",
+      "regression_profile": "expanded",
+      "collected_at": "2026-11-22",
+      "local_file": "ccgp_2026-10-06/d0-2026-11-22/P38-tender.pdf",
+      "sha256": "73c73d73ec03a5c5762daf5ad89d7c0710b70df4fadf54833bf3625c7e880974",
+      "lots": [
+        "1"
+      ],
+      "bid_deadline": "2025-07-15T09:00:00+08:00",
+      "original_bid_deadline": "2025-07-15T09:00:00+08:00",
+      "effective_bid_deadline": null,
+      "announcements": [
+        {
+          "type": "tender",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1798587&channelCode=H600101",
+          "published": "2025-06-24",
+          "note": "二次招标，当前原件对应本轮。"
+        },
+        {
+          "type": "failure",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1814935&channelCode=H600105",
+          "published": "2025-07-22",
+          "note": "二次采购中，提供不同品牌核心产品的供应商不足三家。"
+        },
+        {
+          "type": "tender",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1836925&channelCode=H600101",
+          "published": "2025-08-26",
+          "note": "三次招标。"
+        },
+        {
+          "type": "correction",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1837307&channelCode=H600103",
+          "note": "三次招标的更正，不适用于当前本地二次原件。"
+        },
+        {
+          "type": "award",
+          "url": "https://zfcg.henan.gov.cn/henan/content?infoId=1850029&channelCode=H600102",
+          "published": "2025-09-18",
+          "note": "三次采购中标结果，两轮采购正文均为公告附件。"
+        }
+      ],
+      "outcome": null,
+      "gaps": [
+        "当前本地仅留存二次招标原件；三次采购材料仍归同一项目族。"
+      ],
+      "source": {
+        "url": "https://pdsyx.zfcg.henan.gov.cn/cmsweb81e27e/nas/webfile2024/henan/rootfiles/2025/09/18/f85601bf0fa6427896b39be75a621861.pdf",
+        "type": "official_attachment",
+        "announcement_url": "https://zfcg.henan.gov.cn/henan/content?infoId=1850029&channelCode=H600102",
+        "confidentiality": "公开",
+        "license": "公开原件仅用于本地开发回归，未见开放再分发许可。"
       }
     }
   ],

@@ -1,0 +1,897 @@
+{
+  "P21": [
+    {
+      "name": "环保节能",
+      "lot": "",
+      "points": 2,
+      "score_group": "",
+      "source": {
+        "page": 19,
+        "seq": 22,
+        "quote": "处于有效期内的节能产品、环境标志产品认证证书",
+        "table": 0,
+        "row": 2
+      },
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ],
+        "valid_on_bid_deadline": true
+      },
+      "finding": "score_missing",
+      "note": "原件以评标因素、权值%、评价要素三列表列出各评分因素，现有清单没有评分项。"
+    },
+    {
+      "name": "企业业绩",
+      "lot": "",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 20,
+        "seq": 22,
+        "quote": "供货合同复印件并加盖投标人公章",
+        "table": 0,
+        "row": 10
+      },
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2023-01-01"
+      },
+      "finding": "score_missing",
+      "note": "三类所投设备分别计分，每类最多 2 分。合同签订时间要求为 2023 年 1 月 1 日以后。",
+      "missing_proof": [
+        "所投三类设备各自的业绩和独立满分",
+        "合同复印件盖投标人公章"
+      ]
+    }
+  ],
+  "P22": [
+    {
+      "name": "业绩",
+      "lot": "2",
+      "points": 3,
+      "score_group": "commercial",
+      "source": {
+        "page": 69,
+        "seq": 49,
+        "quote": "签订合同的首页、签字盖章页及采购标的明细页",
+        "table": 0,
+        "row": 8
+      },
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "since_date": "2022-12-01",
+        "contract_pages": [
+          "首页",
+          "签字盖章页",
+          "标的明细页"
+        ]
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "采购标的明细页",
+        "投标人自己实施或投标产品业绩二选一"
+      ]
+    },
+    {
+      "name": "节能、环保",
+      "lot": "2",
+      "points": 2,
+      "score_group": "technical",
+      "source": {
+        "page": 69,
+        "seq": 49,
+        "quote": "处于有效期之内的节能产品、环境标志产品认证证书",
+        "table": 0,
+        "row": 9
+      },
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ],
+        "valid_on_bid_deadline": true
+      }
+    }
+  ],
+  "P23": [
+    {
+      "name": "产品业绩",
+      "lot": "",
+      "points": 5,
+      "score_group": "commercial",
+      "source": {
+        "page": 25,
+        "seq": 35,
+        "quote": "合同至少需包含合同首页、产品页、签章页",
+        "table": 0,
+        "row": 7
+      },
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2022-01-01",
+        "contract_pages": [
+          "首页",
+          "产品页",
+          "签章页"
+        ]
+      },
+      "finding": "group_mismatch",
+      "note": "同一评审表的 5 分产品业绩被归到价格类，导致证明规则为空。原件列明三个采购包，共用这张评审表。",
+      "missing_proof": [
+        "所投品牌同类产品",
+        "产品页",
+        "合同复印件加盖公章且原件备查"
+      ]
+    }
+  ],
+  "P24": [
+    {
+      "name": "业绩",
+      "lot": "1",
+      "points": 10,
+      "score_group": "commercial",
+      "source": {
+        "page": 39,
+        "seq": 203,
+        "quote": "类似项目业绩指： 保洁服务",
+        "table": 0,
+        "row": 13
+      },
+      "source_group": "业绩",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2022-01-01"
+      },
+      "finding": "proof_incomplete",
+      "note": "一、二标段共用 10 分评分规则。",
+      "missing_proof": [
+        "同类业绩限保洁服务",
+        "合同扫描件加盖公章"
+      ]
+    },
+    {
+      "name": "业绩",
+      "lot": "2",
+      "points": 10,
+      "score_group": "commercial",
+      "source": {
+        "page": 39,
+        "seq": 203,
+        "quote": "类似项目业绩指： 保洁服务",
+        "table": 0,
+        "row": 13
+      },
+      "source_group": "业绩",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2022-01-01"
+      },
+      "finding": "proof_incomplete",
+      "note": "一、二标段共用 10 分评分规则。",
+      "missing_proof": [
+        "同类业绩限保洁服务",
+        "合同扫描件加盖公章"
+      ]
+    },
+    {
+      "name": "业绩",
+      "lot": "3",
+      "points": 12,
+      "score_group": "commercial",
+      "source": {
+        "page": 41,
+        "seq": 204,
+        "quote": "须提供完整合同业绩",
+        "table": 1,
+        "row": 3
+      },
+      "source_group": "业绩",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2022-01-01"
+      },
+      "finding": "proof_incomplete",
+      "note": "第三标段独立 12 分规则，原件备注称两种证明材料须同时提交。",
+      "missing_proof": [
+        "完整合同及盖章",
+        "同时提供的两种证明材料需复核原件措辞"
+      ]
+    }
+  ],
+  "P25": [
+    {
+      "name": "业绩",
+      "lot": "1",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 34,
+        "seq": 150,
+        "quote": "投标文件中提供完整合同扫描件",
+        "table": 0,
+        "row": 12
+      },
+      "source_group": "业绩",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2023-01-01"
+      },
+      "finding": "proof_incomplete",
+      "note": "该表适用原件列明的六包，此处核对首末包。",
+      "missing_proof": [
+        "完整合同电子件或扫描件加盖单位公章"
+      ]
+    },
+    {
+      "name": "业绩",
+      "lot": "6",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 34,
+        "seq": 150,
+        "quote": "投标文件中提供完整合同扫描件",
+        "table": 0,
+        "row": 12
+      },
+      "source_group": "业绩",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2023-01-01"
+      },
+      "finding": "proof_incomplete",
+      "note": "该表适用原件列明的六包，此处核对首末包。",
+      "missing_proof": [
+        "完整合同电子件或扫描件加盖单位公章"
+      ]
+    }
+  ],
+  "P26": [
+    {
+      "name": "业绩",
+      "lot": "1",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 54,
+        "seq": 293,
+        "quote": "必须提供中标（成交）通知书或合同复印件为证明材料",
+        "table": 0,
+        "row": 1
+      },
+      "source_group": "商务资信分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "since_date": "2022-01-01"
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "中标或成交通知书与合同复印件可替代",
+        "同类产品限定医疗设备"
+      ]
+    },
+    {
+      "name": "信誉分",
+      "lot": "3",
+      "points": 3,
+      "score_group": "commercial",
+      "source": {
+        "page": 54,
+        "seq": 293,
+        "quote": "供应商或核心产品生产厂商通过质量管理体系认证",
+        "table": 0,
+        "row": 1
+      },
+      "source_group": "商务资信分",
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ],
+        "valid_on_bid_deadline": true
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "供应商或核心产品生产厂商均可",
+        "同类认证不得重复计分",
+        "境外生产厂家证据需中文文件"
+      ]
+    }
+  ],
+  "P27": [
+    {
+      "name": "履约能力分",
+      "lot": "1",
+      "points": 18,
+      "score_group": "commercial",
+      "source": {
+        "page": 50,
+        "seq": 187,
+        "quote": "必须提供人员的驾驶证或健康证、劳动合同，否则不得分",
+        "table": 0,
+        "row": 13
+      },
+      "source_group": "商务分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ]
+      },
+      "finding": "proof_incomplete",
+      "note": "满分含车辆 6 分和拟投入人员 12 分，同一评分表用于五分标。",
+      "missing_proof": [
+        "车辆行驶证或机动车登记证或租赁合同，另须彩色照片",
+        "驾驶证与健康证按人员角色适用，均须劳动合同"
+      ]
+    },
+    {
+      "name": "履约能力分",
+      "lot": "5",
+      "points": 18,
+      "score_group": "commercial",
+      "source": {
+        "page": 50,
+        "seq": 187,
+        "quote": "必须提供人员的驾驶证或健康证、劳动合同，否则不得分",
+        "table": 0,
+        "row": 13
+      },
+      "source_group": "商务分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ]
+      },
+      "finding": "proof_incomplete",
+      "note": "满分含车辆 6 分和拟投入人员 12 分，同一评分表用于五分标。",
+      "missing_proof": [
+        "车辆行驶证或机动车登记证或租赁合同，另须彩色照片",
+        "驾驶证与健康证按人员角色适用，均须劳动合同"
+      ]
+    }
+  ],
+  "P28": [
+    {
+      "name": "技术性能分",
+      "lot": "",
+      "points": 15,
+      "score_group": "technical",
+      "source": {
+        "page": 96,
+        "seq": 322,
+        "quote": "国家工信部页面截图或有资质的第三方检测机构出具的检测报告复印件或产品投标产品的彩页材料",
+        "table": 0,
+        "row": 3
+      },
+      "source_group": "技术分",
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "工信部截图、第三方检测报告或产品彩页任选其一",
+        "佐证须体现相应的带★技术参数"
+      ]
+    },
+    {
+      "name": "人员配备与管理方案",
+      "lot": "",
+      "points": 10,
+      "score_group": "technical",
+      "source": {
+        "page": 98,
+        "seq": 322,
+        "quote": "备与管理方案(满分10分)",
+        "table": 0,
+        "row": 6
+      },
+      "source_group": "技术分",
+      "finding": "score_missing",
+      "note": "评分表同一 10 分因素在物理第 97、98 页断行，系统抽为“人员配”零分和“备与管理方案”10 分两条。"
+    },
+    {
+      "name": "节能、环境标志产品",
+      "lot": "",
+      "points": 1,
+      "score_group": "",
+      "source": {
+        "page": 101,
+        "seq": 322,
+        "quote": "投标文件中提供有效的认证证书原件扫描件并加盖投标人公章",
+        "table": 0,
+        "row": 13
+      },
+      "source_group": "政策分",
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ],
+        "valid_on_bid_deadline": true
+      },
+      "finding": "group_mismatch",
+      "note": "原件另列政策分 1，提取时被归入技术分。原件技术分 64。",
+      "missing_proof": [
+        "仅适用优先采购品目清单内产品",
+        "认证证书原件扫描件加盖公章"
+      ]
+    }
+  ],
+  "P29": [
+    {
+      "name": "项目人员配备情况分",
+      "lot": "",
+      "points": 4,
+      "score_group": "commercial",
+      "source": {
+        "page": 41,
+        "seq": 60,
+        "quote": "任意1个月在投标单位缴纳社会保险的有效凭证的复印件或者劳动合同复印件"
+      },
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ]
+      },
+      "finding": "score_missing",
+      "note": "原件详评用文字条目，企业人员配置是四分小计。",
+      "missing_proof": [
+        "投标截止日前三个月任一月的社保凭证或劳动合同复印件",
+        "同一人员多证按最高证书计分"
+      ]
+    },
+    {
+      "name": "企业认证",
+      "lot": "",
+      "points": 3,
+      "score_group": "commercial",
+      "source": {
+        "page": 41,
+        "seq": 60,
+        "quote": "须同时提供以上证书扫描件及国家认证认可监督管理委员会的“全国认证认可信息公共服务"
+      },
+      "source_group": "企业认证和业绩分",
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ],
+        "valid_on_bid_deadline": true
+      },
+      "finding": "score_missing",
+      "note": "原件详评用文字条目，没有评分表。三个认证每个 1 分。",
+      "missing_proof": [
+        "全国认证认可信息公共服务平台查询截图",
+        "企业成立时间不足时适用相关认证书面说明"
+      ]
+    },
+    {
+      "name": "业绩分",
+      "lot": "",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 41,
+        "seq": 60,
+        "quote": "须提供以上项目业绩的中标（成交）通知书或合同协议书"
+      },
+      "source_group": "企业认证和业绩分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "since_date": "2022-01-01"
+      },
+      "finding": "score_missing",
+      "missing_proof": [
+        "中标或成交通知书与合同协议书二选一",
+        "合同关键页涵盖双方、项目名、内容、金额、落款盖章和日期"
+      ]
+    }
+  ],
+  "P31": [
+    {
+      "name": "成功案例",
+      "lot": "2",
+      "points": 4,
+      "score_group": "commercial",
+      "source": {
+        "page": 72,
+        "seq": 195,
+        "quote": "自2022年1月1日以来类似业绩案例（以合同签订日为准）",
+        "table": 0,
+        "row": 2
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2022-01-01"
+      },
+      "finding": "scope_mismatch",
+      "note": "原件小节标题为“12.包二：评分标准”，当前抽取的分包为空。日期锚点“合同签订日”也未结构化。"
+    }
+  ],
+  "P32": [
+    {
+      "name": "同类业绩",
+      "lot": "1",
+      "points": 8,
+      "score_group": "commercial",
+      "source": {
+        "page": 55,
+        "seq": 390,
+        "quote": "业绩证明材料包括合同扫描件、中标通知书扫描件和项目发票扫描件",
+        "table": 0,
+        "row": 3
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "contract",
+          "invoice"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2023-01-01"
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "中标通知书与合同为两份独立必交材料",
+        "相应包同类货物",
+        "同一采购人同一年度合同限计一份"
+      ]
+    },
+    {
+      "name": "拟投入资源",
+      "lot": "2",
+      "points": 8,
+      "score_group": "commercial",
+      "source": {
+        "page": 56,
+        "seq": 390,
+        "quote": "其中，包2、3、4配送车辆应为专用冷藏车辆",
+        "table": 0,
+        "row": 6
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "social_security",
+          "commitment"
+        ]
+      },
+      "finding": "proof_incomplete",
+      "note": "分包 2、3、4 的车辆证据要求与 1、5、6 不同；此处核对包 2 的特别条款。",
+      "missing_proof": [
+        "专用冷藏车辆须道路运输证，不适用 4.5 吨普通货车豁免",
+        "车辆自有或不少于三个月的租赁及相应证明",
+        "安检、运送和管理人员各至少一名，须社保、健康证和承诺函"
+      ]
+    }
+  ],
+  "P33": [
+    {
+      "name": "企业业绩",
+      "lot": "",
+      "points": 10,
+      "score_group": "commercial",
+      "source": {
+        "page": 60,
+        "seq": 322,
+        "quote": "如为非政府采购项目，需提供完整合同；如为政府采购项目，需提供完整合同、中标通知书",
+        "table": 0,
+        "row": 3
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2023-01-01"
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "政府采购业绩另需中标通知书",
+        "非政府采购业绩须完整合同"
+      ]
+    },
+    {
+      "name": "企业实力",
+      "lot": "",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 60,
+        "seq": 322,
+        "quote": "有效期内IS09001质量体系认证证书",
+        "table": 0,
+        "row": 5
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ],
+        "valid_on_bid_deadline": true
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "证书须由认可的从业机构出具",
+        "如证书注明须年度监审，则须附监审标识或年审报告"
+      ]
+    }
+  ],
+  "P34": [
+    {
+      "name": "企业业绩",
+      "lot": "",
+      "points": 8,
+      "score_group": "commercial",
+      "source": {
+        "page": 26,
+        "seq": 147,
+        "quote": "标的及金额所在页、双方签字盖章页",
+        "table": 0,
+        "row": 6
+      },
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2023-01-01",
+        "contract_pages": [
+          "首页",
+          "标的及金额所在页",
+          "签字盖章页"
+        ]
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "标的及金额所在页",
+        "同类业绩限政务热线或类似呼叫中心服务"
+      ]
+    },
+    {
+      "name": "项目负责人",
+      "lot": "",
+      "points": 4,
+      "score_group": "commercial",
+      "source": {
+        "page": 26,
+        "seq": 147,
+        "quote": "提供投标截止时间前6个月内任意1个月投标人为该项目负责人缴纳的社会保障资金缴纳凭证",
+        "table": 0,
+        "row": 7
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "contract",
+          "social_security"
+        ],
+        "social_security_months": 1,
+        "contract_pages": [
+          "关键页"
+        ]
+      },
+      "finding": "group_mismatch",
+      "note": "4 分负责人和 8 分服务承诺均属于原件的商务 20 分，当前两项被归为技术。",
+      "missing_proof": [
+        "截止日前六个月窗口内任意一个月社保",
+        "合同未体现负责人时补盖章且经负责人签字的企业证明"
+      ]
+    }
+  ],
+  "P35": [
+    {
+      "name": "报价得分",
+      "lot": "",
+      "points": 0,
+      "score_group": "price",
+      "source": {
+        "page": 31,
+        "seq": 196,
+        "quote": "报价得分（20分）",
+        "table": 0,
+        "row": 13
+      },
+      "source_group": "报价得分",
+      "finding": "source_conflict",
+      "note": "同一张表第 11 行汇总报价 30 分。明细和公式为 20 分。分值均保留，报价暂不计入合计。",
+      "score_conflict": [
+        20,
+        30
+      ]
+    },
+    {
+      "name": "体系认证",
+      "lot": "",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 34,
+        "seq": 197,
+        "quote": "同时提供全国认证认可信息公共服务平台查询截图",
+        "table": 0,
+        "row": 13
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ],
+        "valid_on_bid_deadline": true
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "证书扫描件须同时附全国认证认可信息公共服务平台查询截图"
+      ]
+    }
+  ],
+  "P36": [
+    {
+      "name": "企业业绩",
+      "lot": "A",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 73,
+        "seq": 248,
+        "quote": "提供合同原件的扫描件及中标（成交）结果公告截图",
+        "table": 0,
+        "row": 18
+      },
+      "source_group": "四、资信及其他部分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2022-01-01",
+        "contract_pages": [
+          "关键页"
+        ]
+      },
+      "finding": "proof_incomplete",
+      "note": "归档共用表列明 A–E 包。另有独立附件待取得。",
+      "missing_proof": [
+        "以签订合同日期为锚点",
+        "合同扫描件与中标或成交结果公告截图同时提供",
+        "合同较长时才可用关键页扫描件"
+      ]
+    },
+    {
+      "name": "企业业绩",
+      "lot": "E",
+      "points": 6,
+      "score_group": "commercial",
+      "source": {
+        "page": 73,
+        "seq": 248,
+        "quote": "提供合同原件的扫描件及中标（成交）结果公告截图",
+        "table": 0,
+        "row": 18
+      },
+      "source_group": "四、资信及其他部分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2022-01-01",
+        "contract_pages": [
+          "关键页"
+        ]
+      },
+      "finding": "proof_incomplete",
+      "note": "归档共用表列明 A–E 包。另有独立附件待取得。",
+      "missing_proof": [
+        "以签订合同日期为锚点",
+        "合同扫描件与中标或成交结果公告截图同时提供",
+        "合同较长时才可用关键页扫描件"
+      ]
+    }
+  ],
+  "P37": [
+    {
+      "name": "项目经理资质",
+      "lot": "",
+      "points": 5,
+      "score_group": "commercial",
+      "source": {
+        "page": 18,
+        "seq": 22,
+        "quote": "提供2025年1月1日以来近三个月缴纳社会保险证明",
+        "table": 0,
+        "row": 6
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "certificate",
+          "social_security"
+        ],
+        "since_date": "2025-01-01",
+        "social_security_months": 3
+      },
+      "finding": "proof_incomplete",
+      "note": "入库项只有分组和 5 分，原件评分标准正文未进入要求描述。",
+      "missing_proof": [
+        "高级职称、一级建造师、一级造价工程师三证齐全",
+        "2025 年 1 月 1 日以来近三个月社会保险证明",
+        "身份证复印件和公章"
+      ]
+    }
+  ],
+  "P38": [
+    {
+      "name": "投标供应商业绩",
+      "lot": "",
+      "points": 5,
+      "score_group": "commercial",
+      "source": {
+        "page": 50,
+        "seq": 211,
+        "quote": "须附清晰完整合同扫描件、中标/成交公告",
+        "table": 0,
+        "row": 3
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "contract"
+        ],
+        "date_anchor": "signing_date",
+        "since_date": "2020-01-01"
+      },
+      "finding": "proof_incomplete",
+      "missing_proof": [
+        "完整合同，另附公告网页截图及网址或中标成交通知书扫描件",
+        "舞台音响相关供货或工程"
+      ]
+    },
+    {
+      "name": "优先采购环保清单产品",
+      "lot": "",
+      "points": 0.5,
+      "score_group": "commercial",
+      "source": {
+        "page": 51,
+        "seq": 211,
+        "quote": "处于有效期之内的《中国环境标志产品认证证书》复印件或扫描件",
+        "table": 0,
+        "row": 10
+      },
+      "source_group": "商务部分",
+      "expect_proof": {
+        "required_docs": [
+          "certificate"
+        ],
+        "valid_on_bid_deadline": true
+      }
+    }
+  ]
+}

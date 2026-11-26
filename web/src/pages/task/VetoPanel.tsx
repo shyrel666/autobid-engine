@@ -109,7 +109,7 @@ export function BidScopeCard({ taskID, view, onChanged }: { taskID: number; view
               <Badge dot tone={decisionTone(curDecision)}>{bidDecisionLabel[curDecision] ?? curDecision}</Badge>
               <Badge tone={recommendationTone(ev.recommendation)}>系统评估：{bidRecommendationLabel[ev.recommendation] ?? ev.recommendation}</Badge>
               <span className="text-xs text-slate-500">
-                客观分 {ev.objective_score} · 主观分 {ev.subjective_score} · 价格分 {ev.price_score} · 证据支撑分 {ev.evidence_backed_score}/{ev.total_score} · ★ 条款证据 {ev.mandatory_with_evidence}/{ev.mandatory_count}
+                客观分已核实 {ev.objective_score_lower} · 当前材料上限 {ev.objective_score_upper} / 评分表 {ev.objective_score} · 主观分 {ev.subjective_score} · {ev.price_score_unresolved ? '报价分待复核' : `价格分 ${ev.price_score}`} · ★ 条款证据 {ev.mandatory_with_evidence}/{ev.mandatory_count}
               </span>
             </div>
             {!decisionDraft && (

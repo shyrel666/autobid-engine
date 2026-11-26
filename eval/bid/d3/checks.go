@@ -70,9 +70,10 @@ type Deferred struct {
 }
 
 type Determinism struct {
-	Enabled     bool     `json:"enabled"`
-	Consistent  bool     `json:"consistent"`
-	Differences []string `json:"differences"`
+	Enabled      bool     `json:"enabled"`
+	Consistent   bool     `json:"consistent"`
+	Differences  []string `json:"differences"`
+	SecondFailed int      `json:"second_failed"`
 }
 
 type CleanupInfo struct {

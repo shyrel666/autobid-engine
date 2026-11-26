@@ -236,7 +236,7 @@ func markdownReport(rep *Report) string {
 	fmt.Fprintf(&b, "- 检查通过 %d，失败 %d，阻断 %d。\n", rep.Summary["passed"], rep.Summary["failed"], rep.Summary["blocked"])
 	fmt.Fprintf(&b, "- 主链路 `ExportReadiness.Ready` = **%v**；DOCX 导出与回读：%s。\n", rep.MainReady, firstNonEmpty(rep.Export, "未执行"))
 	if rep.Determinism != nil {
-		fmt.Fprintf(&b, "- 两轮归一化一致：**%v**（差异 %d 条）。\n", rep.Determinism.Consistent, len(rep.Determinism.Differences))
+		fmt.Fprintf(&b, "- 两轮归一化一致：**%v**（差异 %d 条，第二轮失败 %d 项）。\n", rep.Determinism.Consistent, len(rep.Determinism.Differences), rep.Determinism.SecondFailed)
 	} else {
 		b.WriteString("- 未启用两轮确定性比较。\n")
 	}

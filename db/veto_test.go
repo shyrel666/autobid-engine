@@ -113,6 +113,45 @@ func TestParseBidDeadlineRealFormats(t *testing.T) {
 	}
 }
 
+func TestFindBidDeadlineInHeadingAndSchedule(t *testing.T) {
+	want := time.Date(2026, 3, 12, 9, 30, 0, 0, beijing)
+	check := func(cs, next *chunkSource, sourceID int64, page int) {
+		t.Helper()
+		got, ok := findChunkBidDeadline(cs, next)
+		if !ok || !got.at.Equal(want) || got.chunk.ChunkID != sourceID || got.page != page {
+			t.Fatalf("deadline = %+v, %t, want %s from chunk %d page %d", got, ok, want, sourceID, page)
+		}
+	}
+	check(&chunkSource{ChunkID: 1, Loc: map[string]any{"page_start": 4},
+		Content: "四、投标文件提交\n截止时间：2026年03月12日09时30分（北京时间）"}, nil, 1, 4)
+	heading := &chunkSource{DocID: 2, Content: "4. 售价：0元\n四、投标截止时间及地点："}
+	value := &chunkSource{DocID: 2, ChunkID: 3, Loc: map[string]any{"page_start": 6},
+		Content: "4.1 时间：2026-03-12 09:30\n地点：政务服务中心"}
+	check(heading, value, 3, 6)
+	schedule := &chunkSource{ChunkID: 4, Content: "| 步骤名称 | 开始时间 | 截止时间 |",
+		Tables: []byte(`[{"page_start":2,"cells":[{"row":2,"col":2,"page":3}],"grid":[
+			["步骤名称","开始时间","截止时间"],
+			["获取招标文件","2026年3月1日09:00","2026年3月5日09:00"],
+			["网上应答（上传电子投标文件）","2026年3月6日09:00","2026年3月12日09:30"],
+			["开标解密","2026年3月12日09:30","2026年3月12日10:30"]]}]`)}
+	check(schedule, nil, 4, 3)
+	for _, content := range []string{
+		"三、获取招标文件\n时间：2026年03月12日09:30",
+		"五、开标时间及地点\n时间：2026年03月12日09:30",
+		"四、投标截止时间及地点\n时间：详见公告\n发布时间：2026年03月12日09:30",
+		"四、投标截止时间及地点\n2026年 月 日 时 分00秒（北京时间）",
+		"四、投标截止时间及地点\n时间：2026年02月31日09:30",
+	} {
+		if got, ok := findChunkBidDeadline(&chunkSource{Content: content}, nil); ok {
+			t.Errorf("unexpected deadline %s from %q", got.at, content)
+		}
+	}
+	value.DocID = 3
+	if _, ok := findChunkBidDeadline(heading, value); ok {
+		t.Fatal("deadline heading must not borrow a value from another document")
+	}
+}
+
 func TestDocPrecedenceAndLots(t *testing.T) {
 	t1 := sql.NullTime{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, beijing), Valid: true}
 	t2 := sql.NullTime{Time: time.Date(2026, 1, 8, 0, 0, 0, 0, beijing), Valid: true}

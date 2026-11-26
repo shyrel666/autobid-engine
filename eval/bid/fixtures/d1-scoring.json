@@ -1,0 +1,283 @@
+{
+  "P11": [
+    {"lots": [""], "items": [
+      {"name": "总体服务方案", "points": 9, "group": "技术评价表", "score_group": "technical"},
+      {"name": "服务质量保证方案", "points": 8, "group": "技术评价表", "score_group": "technical"},
+      {"name": "管理方案", "points": 8, "group": "技术评价表", "score_group": "technical"},
+      {"name": "项目团队人员", "points": 35, "group": "技术评价表", "score_group": "technical"},
+      {"name": "类似项目业绩", "points": 5, "group": "商务评价表", "score_group": "commercial"},
+      {"name": "投标人认证体系情况", "points": 10, "group": "商务评价表", "score_group": "commercial"},
+      {"name": "服务人员培训方案", "points": 5, "group": "商务评价表", "score_group": "commercial"},
+      {"name": "应急突发事件预案", "points": 5, "group": "商务评价表", "score_group": "commercial"},
+      {"name": "保密工作方案", "points": 5, "group": "商务评价表", "score_group": "commercial"},
+      {"name": "价格评分", "points": 10, "group": "价格评分", "score_group": "price"}
+    ]}
+  ],
+  "P12": [
+    {"lots": [""], "items": [
+      {"name": "安全保卫管理服务方案", "points": 8, "group": "技术评审", "score_group": "technical"},
+      {"name": "保洁、会务服务方案", "points": 8, "group": "技术评审", "score_group": "technical"},
+      {"name": "其他服务方案", "points": 6, "group": "技术评审", "score_group": "technical"},
+      {"name": "公用设施设备维护服务方案", "points": 6, "group": "技术评审", "score_group": "technical"},
+      {"name": "人员培训方案", "points": 6, "group": "技术评审", "score_group": "technical"},
+      {"name": "突发事件应急管理预案", "points": 6, "group": "技术评审", "score_group": "technical"},
+      {"name": "经理的资质和经验", "points": 5, "group": "技术评审", "score_group": "technical"},
+      {"name": "拟派保安服务人员的经验", "points": 14, "group": "技术评审", "score_group": "technical"},
+      {"name": "拟派保洁服务人员的经验", "points": 12, "group": "技术评审", "score_group": "technical"},
+      {"name": "拟派会务服务人员的经验", "points": 4, "group": "技术评审", "score_group": "technical"},
+      {"name": "项目业绩", "points": 5, "group": "商务评审", "score_group": "commercial"},
+      {"name": "管理体系认证", "points": 5, "group": "商务评审", "score_group": "commercial"},
+      {"name": "投标价格得分", "points": 15, "group": "价格分", "score_group": "price"}
+    ]}
+  ],
+  "P13": [
+    {"lots": [""], "items": [
+      {"name": "体系认证", "points": 10, "group": "商务评分表", "score_group": "commercial"},
+      {"name": "项目业绩", "points": 2, "group": "商务评分表", "score_group": "commercial"},
+      {"name": "管理团队成员资质", "points": 28, "group": "商务评分表", "score_group": "commercial"},
+      {"name": "水电管理和维修服务方案", "points": 7, "group": "技术（服务）评分表", "score_group": "technical"},
+      {"name": "办公环境保洁服务方案", "points": 7, "group": "技术（服务）评分表", "score_group": "technical"},
+      {"name": "绿化养护服务方案", "points": 7, "group": "技术（服务）评分表", "score_group": "technical"},
+      {"name": "安保秩序维护服务方案", "points": 7, "group": "技术（服务）评分表", "score_group": "technical"},
+      {"name": "接待服务方案", "points": 7, "group": "技术（服务）评分表", "score_group": "technical"},
+      {"name": "突发情况应急响应方案", "points": 5, "group": "技术（服务）评分表", "score_group": "technical"},
+      {"name": "价格评分", "points": 20, "group": "价格评分表", "score_group": "price"}
+    ]}
+  ],
+  "P14": [
+    {"lots": [""], "items": [
+      {"name": "服务团队主要成员资质素质", "points": 34.5, "group": "商务评分细则表", "score_group": "commercial"},
+      {"name": "体系认证", "points": 3.5, "group": "商务评分细则表", "score_group": "commercial"},
+      {"name": "同类项目业绩", "points": 4, "group": "商务评分细则表", "score_group": "commercial"},
+      {"name": "物业智能化服务", "points": 3, "group": "商务评分细则表", "score_group": "commercial"},
+      {"name": "基本服务方案", "points": 10, "group": "服务评分细则表", "score_group": "technical"},
+      {"name": "公用设施设备维护服务方案", "points": 5, "group": "服务评分细则表", "score_group": "technical"},
+      {"name": "保洁服务方案", "points": 5, "group": "服务评分细则表", "score_group": "technical"},
+      {"name": "保安服务方案", "points": 5, "group": "服务评分细则表", "score_group": "technical"},
+      {"name": "节能减排管理方案", "points": 5, "group": "服务评分细则表", "score_group": "technical"},
+      {"name": "垃圾分类管理方案", "points": 5, "group": "服务评分细则表", "score_group": "technical"},
+      {"name": "突发事件应急响应方案", "points": 5, "group": "服务评分细则表", "score_group": "technical"},
+      {"name": "价格", "points": 15, "group": "价格评分细则表", "score_group": "price"}
+    ]}
+  ],
+  "P15": [
+    {"lots": [""], "items": [
+      {"name": "价格", "points": 10.0, "group": "价格", "score_group": "price", "eval_kind": "objective"},
+      {"name": "投标人业绩评价", "points": 5.0, "group": "客观分", "score_group": "commercial", "eval_kind": "objective"},
+      {"name": "投标人承诺评价", "points": 15.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "项目需求理解方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "运行维护方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "管理实施方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "保密方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "知识转移方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "风险管控方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "配合验收方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"}
+    ]}
+  ],
+  "P16": [
+    {"lots": [""], "items": [
+      {"name": "价格", "points": 10.0, "group": "价格", "score_group": "price", "eval_kind": "objective"},
+      {"name": "投标人业绩", "points": 10.0, "group": "客观分", "score_group": "commercial", "eval_kind": "objective"},
+      {"name": "投标人相关证书评价", "points": 5.0, "group": "客观分", "score_group": "commercial", "eval_kind": "objective"},
+      {"name": "派驻项目经理评价", "points": 4.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "派驻服务人员评价", "points": 30.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "人员培训方案", "points": 3.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "投标人承诺评价", "points": 8.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "人员、岗位配置方案评价", "points": 3.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "针对本项目特点的专业化管理方案评价", "points": 6.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "对项目重点、难点的理解评价", "points": 6.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "进驻和接管方案评价", "points": 3.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "应急预案评价", "points": 3.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "人员保密管理方案评价", "points": 3.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "人员稳定性方案评价", "points": 3.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "价格测算方案评价", "points": 3.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"}
+    ]}
+  ],
+  "P17": [
+    {"lots": [""], "items": [
+      {"name": "价格", "points": 20.0, "group": "价格", "score_group": "price", "eval_kind": "objective"},
+      {"name": "投标人业绩", "points": 10.0, "group": "客观分", "score_group": "commercial", "eval_kind": "objective"},
+      {"name": "投标人相关证书", "points": 3.0, "group": "客观分", "score_group": "commercial", "eval_kind": "objective"},
+      {"name": "投入人员评价", "points": 30.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "投标人承诺评价", "points": 5.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "整体运行方案评价", "points": 8.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "项目需求理解程度评价", "points": 6.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "保密管理方案评价", "points": 6.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "培训方案评价", "points": 6.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "应急处理方案评价", "points": 6.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"}
+    ]}
+  ],
+  "P18": [
+    {"lots": [""], "items": [
+      {"name": "价格", "points": 30.0, "group": "价格", "score_group": "price", "eval_kind": "objective"},
+      {"name": "投标人业绩", "points": 10.0, "group": "客观分", "score_group": "commercial", "eval_kind": "objective"},
+      {"name": "投标人相关证书", "points": 3.0, "group": "客观分", "score_group": "commercial", "eval_kind": "objective"},
+      {"name": "配送车辆评价", "points": 4.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "投入人员评价", "points": 5.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "服务能力评价", "points": 4.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "投入库房和冷库评价", "points": 1.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "投标人承诺评价", "points": 3.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "针对本项目特点的专业化服务方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "配送及时性准时性措施评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "质量安全把控方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "供应方案评价", "points": 10.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"}
+    ]}
+  ],
+  "P19": [
+    {"lots": [""], "items": [
+      {"name": "价格", "points": 20.0, "group": "价格", "score_group": "price", "eval_kind": "objective"},
+      {"name": "投标人业绩", "points": 4.0, "group": "客观分", "score_group": "commercial", "eval_kind": "objective"},
+      {"name": "投入人员评价", "points": 6.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "投标人承诺评价", "points": 10.0, "group": "客观分", "score_group": "technical", "eval_kind": "objective"},
+      {"name": "项目需求理解评价", "points": 12.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "项目管理方案评价", "points": 12.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "保密管理方案评价", "points": 12.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "应急响应方案评价", "points": 12.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"},
+      {"name": "风险管控方案评价", "points": 12.0, "group": "主观分", "score_group": "technical", "eval_kind": "subjective"}
+    ]}
+  ],
+  "P22": [
+    {"lots": ["2"], "items": [
+      {"name": "报价", "points": 30.0, "group": "报价", "score_group": "price"},
+      {"name": "技术指标", "points": 30.0, "group": "", "score_group": "technical"},
+      {"name": "项目实施方案", "points": 14.0, "group": "", "score_group": "technical"},
+      {"name": "质量保证方案", "points": 9.0, "group": "", "score_group": "technical"},
+      {"name": "售后服务方案", "points": 12.0, "group": "", "score_group": "technical"},
+      {"name": "节能、环保", "points": 2.0, "group": "", "score_group": "technical"},
+      {"name": "业绩", "points": 3.0, "group": "", "score_group": "commercial"}
+    ]}
+  ],
+  "P24": [
+    {"lots": ["1", "2"], "items": [
+      {"name": "报价部分", "points": 10.0, "group": "报价部分", "score_group": "price"},
+      {"name": "服务方案", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "设施擦洗及维护方案", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "生活垃圾收运方案", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "清理方案", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "项目实施保障措施", "points": 15.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "内部管理制度", "points": 10.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "拟投入本项目人员配备", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "拟投入本项目设备、机具", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "服务承诺", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "应急保障方案", "points": 8.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "合理化建议", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "业绩", "points": 10.0, "group": "业绩", "score_group": "commercial"}
+    ]},
+    {"lots": ["3"], "items": [
+      {"name": "报价部分", "points": 10.0, "group": "报价部分", "score_group": "price"},
+      {"name": "总体服务方案", "points": 12.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "门卫服务方案", "points": 8.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "巡逻服务方案", "points": 8.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "值守服务方案", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "管理制度", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "应急预案", "points": 10.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "装备器械", "points": 10.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "服务承诺", "points": 10.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "拟投入本项目人员配备", "points": 8.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "业绩", "points": 12.0, "group": "业绩", "score_group": "commercial"}
+    ]}
+  ],
+  "P25": [
+    {"lots": ["1", "2", "3", "4", "5", "6"], "items": [
+      {"name": "报价", "points": 10.0, "group": "报价", "score_group": "price"},
+      {"name": "对项目的总体理解及认识", "points": 6.0, "group": "技术方案", "score_group": "technical"},
+      {"name": "总体服务方案", "points": 30.0, "group": "技术方案", "score_group": "technical"},
+      {"name": "项目管理制度", "points": 9.0, "group": "技术方案", "score_group": "technical"},
+      {"name": "服务质量保证措施", "points": 9.0, "group": "技术方案", "score_group": "technical"},
+      {"name": "服务承诺", "points": 9.0, "group": "技术方案", "score_group": "technical"},
+      {"name": "人员配备", "points": 6.0, "group": "人员配备", "score_group": "technical"},
+      {"name": "设备工具配备", "points": 6.0, "group": "设备工具配备", "score_group": "technical"},
+      {"name": "应急预案", "points": 9.0, "group": "应急预案", "score_group": "technical"},
+      {"name": "业绩", "points": 6.0, "group": "业绩", "score_group": "commercial"}
+    ]}
+  ],
+  "P26": [
+    {"lots": ["1", "2", "3"], "items": [
+      {"name": "业绩", "points": 6.0, "group": "商务资信分", "score_group": "commercial"},
+      {"name": "信誉分", "points": 3.0, "group": "商务资信分", "score_group": "commercial"},
+      {"name": "产品技术分", "points": 14.0, "group": "技术/商务资信分", "score_group": "technical"},
+      {"name": "售后服务方案", "points": 15.0, "group": "技术/商务资信分", "score_group": "technical"},
+      {"name": "培训方案", "points": 16.0, "group": "技术/商务资信分", "score_group": "technical"},
+      {"name": "项目实施方案", "points": 15.0, "group": "技术/商务资信分", "score_group": "technical"},
+      {"name": "投标报价分", "points": 30.0, "group": "投标报价分", "score_group": "price"},
+      {"name": "节能产品分", "points": 0.5, "group": "政策性加分", "score_group": ""},
+      {"name": "环境标志产品分", "points": 0.5, "group": "政策性加分", "score_group": ""}
+    ]}
+  ],
+  "P27": [
+    {"lots": ["1", "2", "3", "4", "5"], "items": [
+      {"name": "价格分", "points": 10.0, "group": "价格分", "score_group": "price"},
+      {"name": "配送服务方案", "points": 16.0, "group": "技术分", "score_group": "technical"},
+      {"name": "安全措施分", "points": 16.0, "group": "技术分", "score_group": "technical"},
+      {"name": "应急预案分", "points": 16.0, "group": "技术分", "score_group": "technical"},
+      {"name": "管理制度分", "points": 12.0, "group": "技术分", "score_group": "technical"},
+      {"name": "售后服务方案分", "points": 12.0, "group": "技术分", "score_group": "technical"},
+      {"name": "履约能力分", "points": 18.0, "group": "商务分", "score_group": "commercial"}
+    ]}
+  ],
+  "P32": [
+    {"lots": ["1", "2", "3", "4", "5", "6"], "items": [
+      {"name": "投标报价分值", "points": 35.0, "group": "投标报价分值", "score_group": "price"},
+      {"name": "同类业绩", "points": 8.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "仓储能力", "points": 5.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "拟投入资源", "points": 8.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "服务承诺", "points": 9.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "供货方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "质量把控方案", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "产品安全保障措施", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "运输配送方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "供货保障及稳定措施", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "应急保障方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "卫生管理制度方案", "points": 3.0, "group": "技术部分", "score_group": "technical"}
+    ]}
+  ],
+  "P35": [
+    {"lots": [""], "items": [
+      {"name": "报价得分", "points": 0, "group": "报价得分", "score_group": "price", "conflict": [20, 30]},
+      {"name": "完成本项目所制定的服务流程和标准", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "项目运营岗位设置和考核管理方案及人员培训团队建设方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "服务质量保证措施及承诺", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "工作沟通机制", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "项目连续性保障措施", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "投诉处理工作方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "应急事件处理及安全保密方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "人员配备方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "类似项目业绩", "points": 12.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "采购人整体评价", "points": 9.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "体系认证", "points": 6.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "支撑能力", "points": 9.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "人员信息管理", "points": 4.0, "group": "商务部分", "score_group": "commercial"}
+    ]}
+  ],
+  "P36": [
+    {"lots": ["A", "B", "C", "D", "E"], "items": [
+      {"name": "投标报价", "points": 10.0, "group": "一、投标报价", "score_group": "price"},
+      {"name": "配送服务能力", "points": 45.0, "group": "二、技术部分", "score_group": "technical"},
+      {"name": "服务及配送方案", "points": 6.0, "group": "二、技术部分", "score_group": "technical"},
+      {"name": "质量保证与控制措施", "points": 6.0, "group": "二、技术部分", "score_group": "technical"},
+      {"name": "紧急响应应变方案", "points": 5.0, "group": "二、技术部分", "score_group": "technical"},
+      {"name": "针对医院现有业务的接替措施及解决方案", "points": 5.0, "group": "二、技术部分", "score_group": "technical"},
+      {"name": "本地化服务及沟通方案", "points": 6.0, "group": "二、技术部分", "score_group": "technical"},
+      {"name": "售后服务方案", "points": 5.0, "group": "三、商务部分", "score_group": "commercial"},
+      {"name": "保证承诺", "points": 6.0, "group": "三、商务部分", "score_group": "commercial"},
+      {"name": "企业业绩", "points": 6.0, "group": "四、资信及其他部分", "score_group": "commercial"}
+    ]}
+  ],
+  "P38": [
+    {"lots": [""], "items": [
+      {"name": "投标报价得分", "points": 30.0, "group": "投标报价", "score_group": "price"},
+      {"name": "投标供应商业绩", "points": 5.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "质保期及质保承诺", "points": 4.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "投标产品一致性要求", "points": 5.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "履约承诺", "points": 3.0, "group": "商务部分", "score_group": "commercial"},
+      {"name": "售后服务方案", "points": 6.5, "group": "商务部分", "score_group": "commercial"},
+      {"name": "优先采购环保清单产品", "points": 0.5, "group": "商务部分", "score_group": "commercial"},
+      {"name": "技术参数响应情况", "points": 20.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "设计方案", "points": 6.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "供货、安装、调试方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "验收方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "培训方案", "points": 5.0, "group": "技术部分", "score_group": "technical"},
+      {"name": "备品备件供给及保障措施", "points": 5.0, "group": "技术部分", "score_group": "technical"}
+    ]}
+  ]
+}

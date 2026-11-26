@@ -259,6 +259,7 @@ func (k *Kit) documentParseResultTool() tool.CoreTool {
 	return readTool(tool.Spec{Name: ToolDocumentParseResult,
 		Description: "分页读取解析候选：每段给出正文（受 max_chars 约束）与原件定位（file_id、sha256、物理页码、版面框、OCR 识别置信度；表格类文档给工作表区域且没有物理页码），" +
 			"另给缺口 gaps（扫描页未识别、OCR 失败或低置信度等）、警告与 next_cursor（为 0 表示读完）。重新解析候选另给与当前解析的差异计数。" +
+			"首段超过 max_chars 时标记 truncated，可用同一 cursor 与更大的 max_chars 重读。" +
 			"OCR 文字是机器识别结果，未经人工核验，不能当作已核验的证据；候选在人工采用前不是正式招标文档。",
 		Schema: obj(map[string]any{
 			"record_ref":     parseRecordRefSchema,

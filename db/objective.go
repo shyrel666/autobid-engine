@@ -16,20 +16,20 @@ import (
 
 // ObjectiveScoreRun 是一次客观分审计快照。
 type ObjectiveScoreRun struct {
-	ID              int64     `json:"id"`
-	TenantID        string    `json:"tenant_id"`
-	TaskID          int64     `json:"task_id"`
-	RequirementID   int64     `json:"requirement_item_id"`
-	RequirementCode string    `json:"requirement_code"`
-	RequirementTitle string   `json:"requirement_title"`
-	AdmissibilityRunID *int64 `json:"admissibility_run_id,omitempty"`
-	RuleVersion     string    `json:"rule_version"`
-	Status          string    `json:"status"`
-	Score           float64   `json:"score"`
-	MaxScore        float64   `json:"max_score"`
-	EvidenceIDs     []int64   `json:"evidence_ids"`
-	Gaps            []string  `json:"gaps"`
-	ComputedAt      time.Time `json:"computed_at"`
+	ID                 int64     `json:"id"`
+	TenantID           string    `json:"tenant_id"`
+	TaskID             int64     `json:"task_id"`
+	RequirementID      int64     `json:"requirement_item_id"`
+	RequirementCode    string    `json:"requirement_code"`
+	RequirementTitle   string    `json:"requirement_title"`
+	AdmissibilityRunID *int64    `json:"admissibility_run_id,omitempty"`
+	RuleVersion        string    `json:"rule_version"`
+	Status             string    `json:"status"`
+	Score              float64   `json:"score"`
+	MaxScore           float64   `json:"max_score"`
+	EvidenceIDs        []int64   `json:"evidence_ids"`
+	Gaps               []string  `json:"gaps"`
+	ComputedAt         time.Time `json:"computed_at"`
 }
 
 const objectiveCols = `o.id, o.tenant_id, o.task_id, o.requirement_id, req.code, req.title, o.admissibility_run_id, o.rule_version,
@@ -80,6 +80,7 @@ func (d *DB) ComputeObjectiveScores(ctx context.Context, tenant string, taskID, 
 	rows, err := d.QueryContext(ctx, `SELECT `+reqCols+` FROM requirement_items
 		WHERE tenant_id=$1 AND task_id=$2 AND category='scoring_item' AND parent_id IS NULL AND eval_kind='objective'
 		  AND score_group <> 'price' AND NOT out_of_bid AND superseded_by_id IS NULL AND review_status <> 'stale'
+		  AND NOT (review_status='needs_revision' AND COALESCE(source_loc->>'scoring_orphan','')='true')
 		  AND ($3::bigint=0 OR id=$3::bigint) ORDER BY code`, tenant, taskID, requirementID)
 	if err != nil {
 		return nil, err
@@ -104,13 +105,13 @@ func (d *DB) ComputeObjectiveScores(ctx context.Context, tenant string, taskID, 
 			return nil, err
 		}
 		var (
-			runID       any
-			admissible  int
-			evidenceIDs []int64
-			gaps        []string
-			status      = "computed"
+			runID        any
+			admissible   int
+			evidenceIDs  []int64
+			gaps         []string
+			status       = "computed"
 			score, maxim float64
-			ruleVersion = compliance.AdmissibilityRuleVersion
+			ruleVersion  = compliance.AdmissibilityRuleVersion
 		)
 		maxim = req.ScoreWeight
 		if run == nil {
@@ -151,6 +152,62 @@ func (d *DB) ComputeObjectiveScores(ctx context.Context, tenant string, taskID, 
 		out = append(out, scoreRun)
 	}
 	return out, nil
+}
+
+type bidEvidenceResult struct {
+	verdict    string
+	admissible int
+	pending    int
+	score      sql.NullFloat64
+}
+
+// Read the score paired with the current admissibility run. Historical scores
+// remain available for audit even after an evidence or deadline change.
+func currentBidEvidence(ctx context.Context, q queryer, tenant string, taskID int64) (map[int64]bidEvidenceResult, error) {
+	rows, err := q.QueryContext(ctx, `SELECT r.requirement_id, r.verdict, counts.admissible, counts.pending, score.score::float8
+		FROM admissibility_runs r
+		LEFT JOIN LATERAL (
+			SELECT count(*) FILTER (WHERE verdict='admissible') AS admissible,
+			       count(*) FILTER (WHERE verdict='manual') AS pending
+			FROM admissibility_items WHERE tenant_id=r.tenant_id AND run_id=r.id
+		) counts ON true
+		LEFT JOIN LATERAL (
+			SELECT o.score FROM objective_score_runs o
+			WHERE o.tenant_id=r.tenant_id AND o.task_id=r.task_id AND o.requirement_id=r.requirement_id
+			  AND o.admissibility_run_id=r.id AND o.rule_version=$3 ORDER BY o.id DESC LIMIT 1
+		) score ON true
+		WHERE r.tenant_id=$1 AND r.task_id=$2 AND r.status='current' AND r.rule_version=$3`,
+		tenant, taskID, compliance.AdmissibilityRuleVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]bidEvidenceResult{}
+	for rows.Next() {
+		var id int64
+		var evidence bidEvidenceResult
+		if err := rows.Scan(&id, &evidence.verdict, &evidence.admissible, &evidence.pending, &evidence.score); err != nil {
+			return nil, err
+		}
+		out[id] = evidence
+	}
+	return out, rows.Err()
+}
+
+// Only current evidence contributes to the range. Pending evidence represents
+// possible points. Absent and rejected evidence contribute zero to both bounds.
+func (e bidEvidenceResult) objectiveBounds(req *RequirementItem) (lower, upper float64) {
+	if e.admissible+e.pending == 0 {
+		return 0, 0
+	}
+	if e.score.Valid {
+		lower = min(req.ScoreWeight, e.score.Float64)
+	}
+	possible := compliance.ComputeObjective(objectiveCriteria(req), req.ScoreWeight, req.ProofRules.MinCount, e.admissible+e.pending)
+	if possible.Status == "manual" {
+		return lower, req.ScoreWeight
+	}
+	return lower, max(lower, possible.Score)
 }
 
 // LatestObjectiveScores 返回每个客观评分项最新一次计算快照。

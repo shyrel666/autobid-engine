@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/autobid/autobid-engine/db"
 	"github.com/autobid/autobid-engine/db/dbtest"
@@ -94,6 +95,7 @@ type versionedOCR struct {
 	version string
 	down    bool
 	calls   int
+	lines   []ingest.OCRLine
 }
 
 func (o *versionedOCR) set(version string, down bool) {
@@ -117,10 +119,14 @@ func (o *versionedOCR) Recognize(context.Context, []byte, string) (*ingest.OCRPa
 	if o.down {
 		return nil, fmt.Errorf("%w: connection refused", ingest.ErrOCRTransient)
 	}
-	return &ingest.OCRPage{Width: 800, Height: 1100, Version: o.version, Lines: []ingest.OCRLine{
-		{Text: "第三章 技术要求", BBox: [4]float64{80, 60, 400, 100}, Confidence: 0.99},
-		{Text: "3.1 服务器数量不少于12台。", BBox: [4]float64{80, 140, 700, 180}, Confidence: 0.95},
-	}}, nil
+	lines := o.lines
+	if lines == nil {
+		lines = []ingest.OCRLine{
+			{Text: "第三章 技术要求", BBox: [4]float64{80, 60, 400, 100}, Confidence: 0.99},
+			{Text: "3.1 服务器数量不少于12台。", BBox: [4]float64{80, 140, 700, 180}, Confidence: 0.95},
+		}
+	}
+	return &ingest.OCRPage{Width: 800, Height: 1100, Version: o.version, Lines: lines}, nil
 }
 
 var fakePNG = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR s5a")
@@ -508,6 +514,97 @@ func TestAgentParseSubmissionScopeAndCompletion(t *testing.T) {
 }
 
 func intp(v int) *int { return &v }
+
+func TestCandidateOCRPageBudgetAndSourceLocation(t *testing.T) {
+	d := dbtest.Open(t)
+	ctx := context.Background()
+	task, err := d.CreateTask(ctx, db.CreateTaskInput{Name: "候选分页与扫描来源", Goal: "file"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(d, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, err := os.ReadFile("../ingest/testdata/scan_tender_page.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := ingesttest.Page{}
+	for i := range 9 {
+		native.Texts = append(native.Texts, ingesttest.Text{X: 72, Y: 730 - float64(i)*20, Size: 10,
+			S: strings.Repeat("按采购需求提供原件。", 5)})
+	}
+	pdf := ingesttest.BuildPDF("候选分页样本", native, ingesttest.Page{JPEG: scan, JPEGWidth: 900, JPEGHeight: 1270})
+	file := putFile(t, store, task.ID, "mixed.pdf", ingest.FormatPDF, pdf)
+	ocr := &versionedOCR{version: "fixture-1"}
+	ocr.lines = append(ocr.lines, ingest.OCRLine{Text: "第二章 技术要求", BBox: [4]float64{80, 60, 400, 100}, Confidence: 0.99})
+	for i := range 7 {
+		y := 140 + float64(i)*55
+		ocr.lines = append(ocr.lines, ingest.OCRLine{Text: strings.Repeat("需提供设备检查记录。", 3),
+			BBox: [4]float64{80, y, 700, y + 40}, Confidence: 0.95})
+	}
+	ocr.lines[len(ocr.lines)-1].Confidence = 0.4
+	ocr.lines[len(ocr.lines)-1].Text += "末行保留设备编号。"
+	proc := &Processor{DB: d, Store: store, OCR: ocr}
+	initial, err := proc.Process(ctx, task.ID, ProcessInput{FileID: file.ID, TenderNo: "T-FIXTURE", RequestKey: "mixed-candidate", CandidateOnly: true}, "tester")
+	if err != nil || initial.Status != db.RecordReady {
+		t.Fatalf("process: record=%+v err=%v", initial, err)
+	}
+	record, err := d.GetFileProcessingRecord(ctx, db.DefaultTenant, task.ID, initial.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const maxChars = 500 // document_parse_result 的最小合法字数上限
+	first, err := Candidate(record, 0, 5, maxChars, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.TotalSections != 2 || len(first.Sections) != 1 || first.NextCursor != 1 {
+		t.Fatalf("first candidate page: total=%d sections=%d next=%d", first.TotalSections, len(first.Sections), first.NextCursor)
+	}
+	s := first.Sections[0]
+	if n := utf8.RuneCountInString(s.Content); n > maxChars || s.Truncated || n != s.Chars {
+		t.Fatalf("native section: reported=%d returned=%d truncated=%v", s.Chars, n, s.Truncated)
+	}
+	if loc := s.Locator; loc.FileID != file.ID || loc.SHA256 != file.SHA256 || !loc.PageIsPhysical || loc.PageStart != 1 || loc.PageEnd != 1 || loc.OCR {
+		t.Fatalf("native locator: %+v", loc)
+	}
+	second, err := Candidate(record, first.NextCursor, 5, maxChars, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Sections) != 1 || second.NextCursor != 0 || len(second.OCRPages) != 1 || second.OCRPages[0] != 2 ||
+		len(second.Gaps) != 1 || second.Gaps[0].Kind != ingest.GapOCRLowConfidence || second.Gaps[0].Page != 2 {
+		t.Fatalf("OCR candidate page: sections=%d next=%d ocrPages=%v gaps=%+v", len(second.Sections), second.NextCursor, second.OCRPages, second.Gaps)
+	}
+	s = second.Sections[0]
+	if s.Truncated || !strings.Contains(s.Content, "末行保留设备编号。") {
+		t.Fatalf("incomplete OCR section: %+v", s)
+	}
+	loc := s.Locator
+	if loc.FileID != file.ID || loc.SHA256 != file.SHA256 || !loc.PageIsPhysical || loc.PageStart != 2 || loc.PageEnd != 2 ||
+		!loc.OCR || loc.OCRLines != len(ocr.lines) || loc.MinConfidence != 0.4 || len(loc.Boxes) != maxBoxesPerSection {
+		t.Fatalf("OCR locator: %+v", loc)
+	}
+	for i, b := range loc.Boxes {
+		line := ocr.lines[i]
+		if b.Page != 2 || b.Coord != ingest.CoordOCRPixels || b.ImgW != 800 || b.ImgH != 1100 || b.Conf != line.Confidence ||
+			[4]float64{b.X0, b.Y0, b.X1, b.Y1} != line.BBox {
+			t.Fatalf("OCR line box %d: %+v", i, b)
+		}
+	}
+
+	const shortBudget = 25
+	preview, err := Candidate(record, 0, 5, shortBudget, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Sections) != 1 || preview.NextCursor != 1 || !preview.Sections[0].Truncated || utf8.RuneCountInString(preview.Sections[0].Content) != shortBudget {
+		t.Fatalf("short candidate preview: %+v", preview)
+	}
+}
 
 // 真实 PaddleOCR 端到端：扫描件按 auto 路由生成候选（执行版本锁定 PaddleOCR 与模型），候选逐行保留 OCR 识别框与置信度，
 // 人工采用后正式入库并推进来源 epoch。

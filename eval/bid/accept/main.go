@@ -28,9 +28,12 @@ func run() int {
 		verifyDet      = flag.Bool("verify-determinism", false, "同一进程内完整执行两轮并比较归一化结果")
 		keep           = flag.Bool("keep", false, "保留本次创建的任务与数据（默认清理）")
 		goldenPath     = flag.String("golden", filepath.Join("eval", "bid", "fixtures", "golden.json"), "黄金期望文件")
-		companyDir     = flag.String("company-fixtures", filepath.Join("eval", "bid", "fixtures", "company"), "虚构企业资料目录（M1 只生成不消费）")
+		companyDir     = flag.String("company-fixtures", "", "虚构企业资料输出目录（默认 <artifacts-dir>/fixtures/company）")
 	)
 	flag.Parse()
+	if *companyDir == "" {
+		*companyDir = filepath.Join(*artifactsDir, "fixtures", "company")
+	}
 
 	dsn := strings.TrimSpace(os.Getenv("AUTOBID_TEST_DATABASE_URL"))
 	if dsn == "" {
@@ -90,8 +93,10 @@ func run() int {
 	tasks := append([]int64{}, first.tasks...)
 	if *verifyDet {
 		second := a.runRound(ctx, 2)
+		a.addFixtureArtifacts(second, *companyDir)
 		det = &Determinism{Enabled: true, Differences: compareRounds(first.normalized(), second.normalized())}
 		det.Consistent = len(det.Differences) == 0
+		_, det.SecondFailed = second.summary()
 		tasks = append(tasks, second.tasks...)
 	}
 
@@ -106,6 +111,14 @@ func run() int {
 	fmt.Printf("E 级端到端验收：通过 %d，失败 %d，延后 %d；主链 ready=%v，DOCX=%s；报告 %s\n",
 		passed, failed, len(rep.Deferred), mainReady(rep), exportSummary(rep),
 		filepath.Join(*reportDir, "E2E_ACCEPTANCE_REPORT.md"))
+	if cleanup.Status != "removed" && cleanup.Status != "kept" {
+		fmt.Printf("清理未完成：%s\n", cleanup.Detail)
+		return 1
+	}
+	if det != nil && (!det.Consistent || det.SecondFailed > 0) {
+		fmt.Printf("第二轮失败 %d 项，两轮归一化差异 %d 条。\n", det.SecondFailed, len(det.Differences))
+		return 1
+	}
 	if failed > 0 {
 		return 1
 	}

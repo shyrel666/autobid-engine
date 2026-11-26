@@ -1,6 +1,6 @@
-# D2 验收夹具（E 级，全部虚构）
+# D2 工程验收夹具
 
-本目录只服务 `eval/bid/d2` 的工程实现验收（E 级），用固定、可重复生成的虚构数据证明代码、PostgreSQL 状态机、规则与门禁按设计工作。它不是 V 级业务验证，也不代表真实企业、真实项目或准确率。
+`eval/bid/d2` 使用可重复生成的虚构数据验证代码、PostgreSQL 状态机、规则与门禁。公开开发集的原件摘录和抽查期望由 `ingest` 集成测试读取。 [公开开发集核对](../../README.md#d2-评分与证明材料原件核对)
 
 ## 数据边界
 
@@ -19,6 +19,7 @@
 | `company/performance.json` | 虚构业绩（投标人自身、子公司、窗口外、缺验收）。 |
 | `company/originals.json` | 原件构造参数与页角色。 |
 | `company/hashes.json` | 确定性原件 SHA-256（与 golden.originals 一致）。 |
+| `public-proof-a.json`、`public-proof-b.json` | 36 个公开开发集项目的 69 条原件抽查，记录来源页或章节、评分项、原件证明要求和已知差异。分块、表和行索引从 0 开始。 |
 
 ## 运行
 
@@ -29,6 +30,7 @@ go run ./eval/bid/d2 -report-dir . -artifacts-dir ./d2-artifacts -verify-determi
 
 - 主链与每个门禁使用独立租户 `d2-<runid>-r<round>-<scenario>` 与任务；默认精确清理本次任务与租户证据。
 - 原件写入 `d2-artifacts/evidence/`（可用 `AUTOBID_EVIDENCE_DIR` 覆盖），数据库只保存相对路径与 SHA-256。
+- 虚构企业 JSON 默认生成到 `d2-artifacts/fixtures/company/`，可用 `-company-fixtures` 指定其他输出目录。
 - `D2_ACCEPTANCE_REPORT.md`、`d2-acceptance-report.json`、`d2-artifacts/` 只保留在本地，不提交 Git。
 
 ## 冻结规则

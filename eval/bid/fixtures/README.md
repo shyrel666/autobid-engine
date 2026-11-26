@@ -1,7 +1,6 @@
-# E 级端到端验收夹具（虚构数据）
+# E 级工程验收夹具
 
-本目录与 `../accept/` 中的执行器配套，只用于 **E 级工程验收**：证明代码、PostgreSQL 状态机与门禁按设计工作。
-它不是 V 级业务效果验证，也不是 P 级生产启用。全部项目、企业、证书与业绩均为虚构，不与 `ccgp_2026-10-06/` 或任何真实项目、企业关联。
+本目录用于 **E 级工程验收**。`../accept/` 中的执行器使用虚构项目、企业、证书和业绩验证代码、PostgreSQL 状态机与门禁。 [D1 评分期望](d1-scoring.json) 来自 18 个公开开发集项目的原件，由 `ingest` 集成测试读取。独立保留集按 [评测协议](../PROTOCOL.md) 由标注员保管。
 
 ## 目录
 
@@ -14,6 +13,7 @@
 
 招标 DOCX、更正公告 DOCX 与 G09 专用 DOCX 由 `eval/bid/accept/dataset.go` 在每次运行时确定性生成到 `e2e-artifacts/fixtures/`。
 生成过程不读取当前时间、不访问网络；同一 `fixture_version` 重复生成字节一致。
+M1、D2 与 D3 也将虚构企业 JSON 生成到 `<artifacts-dir>/fixtures/company/`，这里各级的 `company/` 供查阅。
 
 ## 主链招标文件（`tender.docx`）
 

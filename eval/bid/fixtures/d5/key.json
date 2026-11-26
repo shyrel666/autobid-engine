@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "exercise_id": "DEMO-D5-001",
+  "pairs": [
+    {"project_id": "P01", "assisted_draft_id": "U7F", "manual_draft_id": "T2C", "reference_technical_pct": 82},
+    {"project_id": "P02", "assisted_draft_id": "K9Q", "manual_draft_id": "A4M", "reference_technical_pct": 80},
+    {"project_id": "P03", "assisted_draft_id": "R8J", "manual_draft_id": "M3N", "reference_technical_pct": 78},
+    {"project_id": "P04", "assisted_draft_id": "J5L", "manual_draft_id": "C6W"}
+  ]
+}

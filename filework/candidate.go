@@ -80,7 +80,7 @@ var ErrNoCandidate = fmt.Errorf("filework: the record has no parse candidate")
 const maxBoxesPerSection = 6
 
 // Candidate 读取记录候选的一页：从 cursor（段序号，0 起）开始最多 limit 段，正文总长不超过 maxChars，
-// 单段不超过 perSection（<=0 表示只受 maxChars 限制）。至少返回一段（可能截断）。
+// 单段不超过 perSection（非正值关闭对应上限）。只有首段可以因总字数上限截断，后续装不下的段留到下一页。
 func Candidate(r *db.FileProcessingRecord, cursor, limit, maxChars, perSection int) (*CandidatePage, error) {
 	if r.Status == db.RecordFailed {
 		return nil, ErrNoCandidate
@@ -109,7 +109,7 @@ func Candidate(r *db.FileProcessingRecord, cursor, limit, maxChars, perSection i
 	}
 	budget := maxChars
 	for i := cursor; i < len(prepared.Chunks) && len(out.Sections) < limit; i++ {
-		if maxChars > 0 && budget <= 0 && len(out.Sections) > 0 {
+		if maxChars > 0 && budget == 0 {
 			break
 		}
 		c := prepared.Chunks[i]
@@ -118,8 +118,11 @@ func Candidate(r *db.FileProcessingRecord, cursor, limit, maxChars, perSection i
 		if perSection > 0 {
 			take = min(take, perSection)
 		}
-		if maxChars > 0 {
-			take = min(take, max(budget, 200))
+		if maxChars > 0 && take > budget {
+			if i > cursor {
+				break
+			}
+			take = budget
 		}
 		s := CandidateSection{Seq: c.Seq, SectionCode: c.SectionCode, SectionTitle: c.SectionTitle, Mandatory: c.IsMandatory,
 			Tables: tableCount(c.Tables), Chars: len(text), Content: string(text[:take]), Truncated: take < len(text), Locator: locate(r, c)}

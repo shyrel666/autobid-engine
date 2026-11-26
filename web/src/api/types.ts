@@ -983,6 +983,8 @@ export interface BidEvaluation {
   decision: BidDecision; decision_note: string; decided_by: string; decided_at?: string
   veto_gate: 'passed' | 'pending' | 'blocked'
   total_score: number; price_score: number; objective_score: number; subjective_score: number
+  objective_score_lower: number; objective_score_upper: number
+  price_score_unresolved?: boolean
   evidence_backed_score: number; mandatory_count: number; mandatory_with_evidence: number
   superseded_count: number; recommendation: 'bid' | 'caution' | 'no_bid'
   gaps: string[]

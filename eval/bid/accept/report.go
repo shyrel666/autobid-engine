@@ -290,9 +290,9 @@ func determinismText(d *Determinism) string {
 		return "未启用（未传 -verify-determinism）"
 	}
 	if d.Consistent {
-		return "一致"
+		return fmt.Sprintf("一致（第二轮失败 %d 项）", d.SecondFailed)
 	}
-	return "不一致：" + strings.Join(d.Differences, "；")
+	return fmt.Sprintf("不一致（第二轮失败 %d 项）｜%s", d.SecondFailed, strings.Join(d.Differences, "；"))
 }
 
 func artifactPath(rep *reportJSON, kind string) string {

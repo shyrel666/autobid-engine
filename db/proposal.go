@@ -1711,19 +1711,31 @@ type SectionDetail struct {
 
 // GetSection 返回章节详情、前置依赖就绪状态、全部修订历史与当前修订证据的实时状态（单一快照读取）。
 func (d *DB) GetSection(ctx context.Context, tenant string, taskID, sectionID int64) (*SectionDetail, error) {
+	return d.getSection(ctx, tenant, taskID, sectionID, true)
+}
+
+// GetSectionForWriting 返回写作所需的章节详情和当前主修订。调用者按自身上下文读取证据状态。
+func (d *DB) GetSectionForWriting(ctx context.Context, tenant string, taskID, sectionID int64) (*SectionDetail, error) {
+	if d.tx != nil {
+		return nil, errors.New("cannot read section writing snapshot inside a transaction")
+	}
+	return d.getSection(ctx, tenant, taskID, sectionID, false)
+}
+
+func (d *DB) getSection(ctx context.Context, tenant string, taskID, sectionID int64, includeHistory bool) (*SectionDetail, error) {
 	if err := CheckSectionScope(ctx, sectionID); err != nil {
 		return nil, err
 	}
 	var det *SectionDetail
 	err := d.readSnapshot(ctx, func(tx *sql.Tx) error {
 		var err error
-		det, err = getSectionTx(ctx, tx, tenantOr(tenant), taskID, sectionID)
+		det, err = getSectionTx(ctx, tx, tenantOr(tenant), taskID, sectionID, includeHistory)
 		return err
 	})
 	return det, err
 }
 
-func getSectionTx(ctx context.Context, q queryer, tenant string, taskID, sectionID int64) (*SectionDetail, error) {
+func getSectionTx(ctx context.Context, q queryer, tenant string, taskID, sectionID int64, includeHistory bool) (*SectionDetail, error) {
 	s, err := scanSection(q.QueryRowContext(ctx, `SELECT `+sectionCols+` FROM proposal_sections s WHERE s.tenant_id = $1 AND s.task_id = $2 AND s.id = $3`,
 		tenant, taskID, sectionID))
 	if err != nil {
@@ -1777,24 +1789,32 @@ func getSectionTx(ctx context.Context, q queryer, tenant string, taskID, section
 		drows.Close()
 	}
 	s.DepsReady = len(s.UnmetDeps) == 0
-	rrows, err := q.QueryContext(ctx, `SELECT `+revisionCols+` FROM section_revisions WHERE tenant_id = $1 AND section_id = $2 ORDER BY rev_no DESC`, tenant, s.ID)
-	if err != nil {
-		return nil, err
-	}
-	for rrows.Next() {
-		rev, err := scanRevision(rrows)
+	const revisionQuery = `SELECT ` + revisionCols + ` FROM section_revisions WHERE tenant_id = $1 AND section_id = $2`
+	if includeHistory {
+		rrows, err := q.QueryContext(ctx, revisionQuery+` ORDER BY rev_no DESC`, tenant, s.ID)
 		if err != nil {
-			rrows.Close()
 			return nil, err
 		}
-		det.Revisions = append(det.Revisions, rev)
-		if rev.RevNo == s.CurrentRevNo {
-			det.Current = rev
+		for rrows.Next() {
+			rev, err := scanRevision(rrows)
+			if err != nil {
+				rrows.Close()
+				return nil, err
+			}
+			det.Revisions = append(det.Revisions, rev)
+			if rev.RevNo == s.CurrentRevNo {
+				det.Current = rev
+			}
 		}
-	}
-	rrows.Close()
-	if err := rrows.Err(); err != nil {
-		return nil, err
+		rrows.Close()
+		if err := rrows.Err(); err != nil {
+			return nil, err
+		}
+	} else if s.CurrentRevNo > 0 {
+		det.Current, err = scanRevision(q.QueryRowContext(ctx, revisionQuery+` AND rev_no = $3`, tenant, s.ID, s.CurrentRevNo))
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
 	}
 	switch {
 	case o.Status == OutlineDraft || o.Status == OutlinePending:
@@ -1805,7 +1825,7 @@ func getSectionTx(ctx context.Context, q queryer, tenant string, taskID, section
 		det.BlockedReason = "前置章节尚无有效稿：" + strings.Join(s.UnmetDeps, ", ")
 	}
 	det.Writable = o.Status == OutlineApproved
-	if det.Current != nil {
+	if includeHistory && det.Current != nil {
 		det.Evidence, err = evidenceStateListTx(ctx, q, tenant, taskID, det.Current.EvidenceIDs)
 		if err != nil {
 			return nil, err
@@ -1820,6 +1840,8 @@ func getSectionTx(ctx context.Context, q queryer, tenant string, taskID, section
 				det.Warnings = append(det.Warnings, fmt.Sprintf("证据 %d 未核验（%s/%s），不得写成已证实承诺", e.ID, e.Status, e.Relation))
 			}
 		}
+	}
+	if det.Current != nil {
 		if wv, err := scanWritingVerification(q.QueryRowContext(ctx, `SELECT `+writingVerifCols+writingVerifJoin+
 			`WHERE wv.tenant_id = $1 AND wv.section_rev_id = $2`, tenant, det.Current.ID)); err == nil {
 			det.WritingVerification = wv

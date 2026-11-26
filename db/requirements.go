@@ -256,12 +256,21 @@ type queryer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+func initRequirementManifest(ctx context.Context, q queryer, tenant string, taskID int64) error {
+	_, err := q.ExecContext(ctx, `INSERT INTO requirement_manifests(tenant_id, task_id) SELECT $1, $2
+		WHERE EXISTS (SELECT 1 FROM tasks WHERE id = $2) ON CONFLICT DO NOTHING`, tenant, taskID)
+	return err
+}
+
 // ensureManifestTx 保证任务存在清单行，并返回当前状态（FOR UPDATE 时加行锁）。
 func ensureManifestTx(ctx context.Context, q queryer, tenant string, taskID int64, lock bool) (*RequirementManifest, error) {
-	if _, err := q.ExecContext(ctx, `INSERT INTO requirement_manifests(tenant_id, task_id) SELECT $1, $2
-		WHERE EXISTS (SELECT 1 FROM tasks WHERE id = $2) ON CONFLICT DO NOTHING`, tenant, taskID); err != nil {
+	if err := initRequirementManifest(ctx, q, tenant, taskID); err != nil {
 		return nil, err
 	}
+	return readRequirementManifest(ctx, q, tenant, taskID, lock)
+}
+
+func readRequirementManifest(ctx context.Context, q queryer, tenant string, taskID int64, lock bool) (*RequirementManifest, error) {
 	query := `SELECT tenant_id, task_id, epoch, status, source_epoch, extracted_source_epoch, confirmed_at, approved_by, updated_by, updated_at,
 		bid_deadline, bid_deadline_source, to_jsonb(bid_lots), bid_decision, bid_decision_note, bid_decided_by, bid_decided_at
 		FROM requirement_manifests WHERE tenant_id = $1 AND task_id = $2`
@@ -294,24 +303,40 @@ func (d *DB) RequirementManifest(ctx context.Context, tenant string, taskID int6
 // ListRequirements 返回清单、确认状态与覆盖统计；映射统计依据任务最新版本的大纲。
 func (d *DB) ListRequirements(ctx context.Context, tenant string, taskID int64) (*RequirementsView, error) {
 	tenant = tenantOr(tenant)
-	m, err := d.RequirementManifest(ctx, tenant, taskID)
+	if err := initRequirementManifest(ctx, d, tenant, taskID); err != nil {
+		return nil, err
+	}
+	if d.tx != nil {
+		return requirementsView(ctx, d, tenant, taskID)
+	}
+	var out *RequirementsView
+	err := d.readSnapshot(ctx, func(tx *sql.Tx) error {
+		var err error
+		out, err = requirementsView(ctx, tx, tenant, taskID)
+		return err
+	})
+	return out, err
+}
+
+func requirementsView(ctx context.Context, q queryer, tenant string, taskID int64) (*RequirementsView, error) {
+	m, err := readRequirementManifest(ctx, q, tenant, taskID, false)
 	if err != nil {
 		return nil, err
 	}
-	items, err := listRequirementsTx(ctx, d, tenant, taskID)
+	items, err := listRequirementsTx(ctx, q, tenant, taskID)
 	if err != nil {
 		return nil, err
 	}
 	view := &RequirementsView{Manifest: m, Items: items, Stats: RequirementStats{ByCategory: map[string]int{}, Unmapped: []string{}, Lots: []string{}}}
 	var outlineID int64
-	err = d.QueryRowContext(ctx, `SELECT id, version FROM proposal_outlines WHERE tenant_id = $1 AND task_id = $2
+	err = q.QueryRowContext(ctx, `SELECT id, version FROM proposal_outlines WHERE tenant_id = $1 AND task_id = $2
 		ORDER BY version DESC LIMIT 1`, tenant, taskID).Scan(&outlineID, &view.Stats.OutlineVersion)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	mapped := map[int64][]string{}
 	if outlineID > 0 {
-		rows, err := d.QueryContext(ctx, `SELECT m.requirement_id, s.section_code FROM proposal_section_requirements m
+		rows, err := q.QueryContext(ctx, `SELECT m.requirement_id, s.section_code FROM proposal_section_requirements m
 			JOIN proposal_sections s ON s.tenant_id = m.tenant_id AND s.id = m.section_id
 			WHERE m.tenant_id = $1 AND s.outline_id = $2 ORDER BY s.seq`, tenant, outlineID)
 		if err != nil {
@@ -390,7 +415,11 @@ func (d *DB) ListRequirements(ctx context.Context, tenant string, taskID int64) 
 			s.Unmapped = append(s.Unmapped, it.Code)
 		}
 	}
-	view.BidEvaluation = evaluateBidReadiness(m, items, view.Scoring)
+	evidence, err := currentBidEvidence(ctx, q, tenant, taskID)
+	if err != nil {
+		return nil, err
+	}
+	view.BidEvaluation = evaluateBidReadiness(m, items, view.Scoring, evidence)
 	return view, nil
 }
 
@@ -1265,10 +1294,12 @@ func (d *DB) ExtractRequirements(ctx context.Context, tenant string, taskID int6
 			}
 			// 原文未变且规则产出相同才算未变：规则升级（如分包归属、标题修正、评分拆解）后同编码的要求也会更新并标记待复核。
 			var origin, oldHash, oldFields string
+			var oldScoringOrphan bool
 			err := tx.QueryRowContext(ctx, `SELECT origin, source_hash, concat_ws(E'\x1f', category, title, description, is_mandatory::text,
-				score_weight::text, score_group, veto_kind, lot, score_min::text, eval_kind, atom_type)
+				score_weight::text, score_group, veto_kind, lot, score_min::text, eval_kind, atom_type),
+				COALESCE(source_loc->>'scoring_orphan', '') = 'true'
 				FROM requirement_items WHERE tenant_id = $1 AND task_id = $2 AND code = $3 FOR UPDATE`,
-				tenant, taskID, c.code).Scan(&origin, &oldHash, &oldFields)
+				tenant, taskID, c.code).Scan(&origin, &oldHash, &oldFields, &oldScoringOrphan)
 			newFields := strings.Join([]string{c.category, c.title, c.description, strconv.FormatBool(c.mandatory),
 				strconv.FormatFloat(c.score, 'f', -1, 64), c.scoreGroup, c.vetoKind, lot,
 				strconv.FormatFloat(c.scoreMin, 'f', -1, 64), c.evalKind, c.atomType}, "\x1f")
@@ -1290,7 +1321,7 @@ func (d *DB) ExtractRequirements(ctx context.Context, tenant string, taskID int6
 				return err
 			case origin == "manual":
 				res.Skipped++
-			case oldHash == hash && oldFields == newFields:
+			case oldHash == hash && oldFields == newFields && !oldScoringOrphan:
 				wasUnchanged[c.code] = true
 				res.Unchanged++
 			default:
@@ -1389,7 +1420,8 @@ func (d *DB) ExtractRequirements(ctx context.Context, tenant string, taskID int6
 
 		// 本次未再产出的旧提取项（提取规则升级、原文已删改）不自动删除：标记待复核，由人工确认删除或保留。
 		rows, err := tx.QueryContext(ctx, `SELECT code FROM requirement_items WHERE tenant_id = $1 AND task_id = $2 AND origin = 'extracted'
-			AND review_status <> 'needs_revision' ORDER BY code`, tenant, taskID)
+			AND (review_status <> 'needs_revision' OR (category = 'scoring_item' AND COALESCE(source_loc->>'scoring_orphan', '') <> 'true'))
+			ORDER BY code`, tenant, taskID)
 		if err != nil {
 			return err
 		}
@@ -1410,7 +1442,9 @@ func (d *DB) ExtractRequirements(ctx context.Context, tenant string, taskID int6
 		}
 		res.OrphanCodes = []string{}
 		if len(orphans) > 0 {
-			if _, err := tx.ExecContext(ctx, `UPDATE requirement_items SET review_status = 'needs_revision', updated_by = $4
+			if _, err := tx.ExecContext(ctx, `UPDATE requirement_items SET review_status = 'needs_revision', updated_by = $4,
+				source_loc = CASE WHEN category = 'scoring_item'
+					THEN COALESCE(source_loc, '{}'::jsonb) || '{"scoring_orphan":true}'::jsonb ELSE source_loc END
 				WHERE tenant_id = $1 AND task_id = $2 AND code = ANY($3::text[])`, tenant, taskID, pgTextArray(orphans), actor); err != nil {
 				return err
 			}

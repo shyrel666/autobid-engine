@@ -8,7 +8,7 @@ package db
 //   - 投标截止时间从「投标截止时间：2026年8月26日北京时间10时00分」类语句抽取；多份文件时后发布的更正 / 澄清优先，
 //     人工指定的值不被重新提取覆盖；
 //   - 本次投标分包（requirement_manifests.bid_lots）之外的要求标为 out_of_bid，不进入技术标大纲、覆盖率与否决项门禁。
-// 规则只在 ccgp_2026-10-06 的 10 份真实招标文件与合成样本上验证；召回 / 准确率以 eval/bid/PROTOCOL.md 的金标准为准。
+// 工程回归见 eval/bid/README.md。业务召回率与准确率以 eval/bid/PROTOCOL.md 的独立金标准为准。
 
 import (
 	"context"
@@ -16,12 +16,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/autobid/autobid-engine/compliance"
 )
 
 // ReqVetoItem 是否决项类别：不在技术标中作答，由投标方逐项核对。
@@ -333,10 +336,12 @@ func statutoryCandidates(table []reqCandidate) []reqCandidate {
 // ---------------------------------------------------------------------------
 
 var (
-	reDeadlineCue  = regexp.MustCompile(`(?:投标|递交投标文件|提交投标文件|响应文件|投标文件递交|投标文件提交)[^。；;，,\n]{0,8}截止`)
-	reDeadlineSkip = regexp.MustCompile(`保证金|保函|获取|售卖|购买|质疑|澄清|答疑|踏勘`)
-	reDateTime     = regexp.MustCompile(`(\d{4})\s*[年\-/.]\s*(\d{1,2})\s*[月\-/.]\s*(\d{1,2})\s*日?\s*(?:[（(]?北京时间[）)]?)?\s*(上午|下午)?\s*(?:(\d{1,2})\s*[时点:：]\s*(\d{1,2})?)?`)
-	beijing        = time.FixedZone("CST", 8*3600)
+	reDeadlineCue        = regexp.MustCompile(`(?:投标|递交投标文件|提交投标文件|响应文件|投标文件递交|投标文件提交)[^。；;，,\n]{0,8}截止`)
+	reDeadlineSkip       = regexp.MustCompile(`保证金|保函|获取|售卖|购买|质疑|澄清|答疑|踏勘`)
+	reDeadlineSection    = regexp.MustCompile(`^(?:(?:[一二三四五六七八九十]+|\d+)[、.．])?(?:投标截止时间|(?:提交|递交)投标文件截止时间|投标文件(?:提交|递交)(?:截止时间)?)(?:(?:、|及|和|与)开标时间)?(?:(?:及|和|与)地点)?[:：]?$`)
+	reDeadlineValueLabel = regexp.MustCompile(`^(?:\d+(?:[.．]\d+)*[、.．]?\s*)?(?:截止时间|时间)\s*[:：]\s*`)
+	reDateTime           = regexp.MustCompile(`(\d{4})\s*[年\-/.]\s*(\d{1,2})\s*[月\-/.]\s*(\d{1,2})\s*日?\s*(?:[（(]?北京时间[）)]?)?\s*(上午|下午)?\s*(?:(\d{1,2})\s*[时点:：]\s*(\d{1,2})?)?`)
+	beijing              = time.FixedZone("CST", 8*3600)
 )
 
 // ParseBidDeadline 从一行文字中解析投标截止时间（北京时间）；没有截止语义或没有完整日期时 ok 为 false。
@@ -345,8 +350,13 @@ func ParseBidDeadline(line string) (time.Time, bool) {
 	if cue == nil || reDeadlineSkip.MatchString(line[:cue[1]]) {
 		return time.Time{}, false
 	}
-	m := reDateTime.FindStringSubmatch(line[cue[0]:])
-	if m == nil {
+	return parseBidDateTime(line[cue[0]:], false)
+}
+
+func parseBidDateTime(value string, leading bool) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	m := reDateTime.FindStringSubmatch(value)
+	if m == nil || leading && (m[5] == "" || !strings.HasPrefix(value, m[0])) {
 		return time.Time{}, false
 	}
 	num := func(s string) int { n, _ := strconv.Atoi(s); return n }
@@ -357,7 +367,92 @@ func ParseBidDeadline(line string) (time.Time, bool) {
 	if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 {
 		return time.Time{}, false
 	}
-	return time.Date(year, time.Month(month), day, hour, minute, 0, 0, beijing), true
+	at := time.Date(year, time.Month(month), day, hour, minute, 0, 0, beijing)
+	return at, at.Day() == day
+}
+
+type bidDeadlineMatch struct {
+	at    time.Time
+	chunk *chunkSource
+	text  string
+	page  any
+}
+
+// findChunkBidDeadline reads an explicit deadline label and its immediate value.
+// A heading may end one chunk and its first numbered field start the next.
+func findChunkBidDeadline(cs, next *chunkSource) (bidDeadlineMatch, bool) {
+	lines := strings.Split(cs.Content, "\n")
+	for i, line := range lines {
+		if at, ok := ParseBidDeadline(line); ok {
+			return bidDeadlineMatch{at, cs, line, cs.Loc["page_start"]}, true
+		}
+		if !reDeadlineSection.MatchString(normCell(line)) {
+			continue
+		}
+		valueChunk := cs
+		value := strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+		if value == "" && next != nil && next.DocID == cs.DocID {
+			valueChunk, value = next, strings.TrimSpace(next.Content)
+		}
+		value, _, _ = strings.Cut(value, "\n")
+		value = strings.TrimSpace(value)
+		label := reDeadlineValueLabel.FindString(value)
+		if valueChunk != cs && label == "" {
+			continue
+		}
+		candidate := strings.TrimPrefix(value, label)
+		if at, ok := parseBidDateTime(candidate, true); ok {
+			return bidDeadlineMatch{at, valueChunk, strings.TrimSpace(line) + " " + value, valueChunk.Loc["page_start"]}, true
+		}
+	}
+	return findScheduleBidDeadline(cs)
+}
+
+func findScheduleBidDeadline(cs *chunkSource) (bidDeadlineMatch, bool) {
+	if !strings.Contains(cs.Content, "截止时间") && !strings.Contains(cs.Content, "结束时间") {
+		return bidDeadlineMatch{}, false
+	}
+	var tables []scoreTable
+	if json.Unmarshal(cs.Tables, &tables) != nil {
+		return bidDeadlineMatch{}, false
+	}
+	for _, table := range tables {
+		stepCol, endCol := -1, -1
+		for rowIndex, row := range table.Grid {
+			if stepCol < 0 || endCol < 0 {
+				stepCol, endCol = -1, -1
+				for col, cell := range row {
+					switch normCell(cell) {
+					case "步骤名称", "步骤":
+						stepCol = col
+					case "截止时间", "结束时间":
+						endCol = col
+					}
+				}
+				continue
+			}
+			if max(stepCol, endCol) >= len(row) {
+				continue
+			}
+			switch normCell(row[stepCol]) {
+			case "网上应答（上传电子投标文件）", "网上应答(上传电子投标文件)", "上传电子投标文件", "提交电子投标文件":
+				if at, ok := parseBidDateTime(row[endCol], true); ok {
+					page := cs.Loc["page_start"]
+					if table.PageStart > 0 {
+						page = table.PageStart
+					}
+					for _, cell := range table.Cells {
+						if cell.Row == rowIndex && cell.Col == endCol && cell.Page > 0 {
+							page = cell.Page
+							break
+						}
+					}
+					return bidDeadlineMatch{at, cs, row[stepCol] + " 截止时间：" + row[endCol], page}, true
+				}
+			}
+		}
+	}
+	return bidDeadlineMatch{}, false
 }
 
 type deadlineDoc struct {
@@ -401,20 +496,19 @@ func extractBidDeadlineTx(ctx context.Context, q queryer, tenant string, taskID 
 		bestAt  time.Time
 		bestSrc map[string]any
 	)
-	for _, cs := range order {
+	for i, cs := range order {
 		d, ok := docs[cs.DocID]
 		if !ok || (best != nil && (best.id == d.id || !laterDoc(d, *best))) {
 			continue
 		}
-		for _, line := range strings.Split(cs.Content, "\n") {
-			at, ok := ParseBidDeadline(line)
-			if !ok {
-				continue
-			}
-			best, bestAt = &d, at
-			bestSrc = map[string]any{"origin": "extracted", "doc_id": cs.DocID, "chunk_id": cs.ChunkID, "doc_role": d.role,
-				"page": cs.Loc["page_start"], "text": firstLine(line, 120)}
-			break
+		var next *chunkSource
+		if i+1 < len(order) {
+			next = order[i+1]
+		}
+		if match, ok := findChunkBidDeadline(cs, next); ok {
+			best, bestAt = &d, match.at
+			bestSrc = map[string]any{"origin": "extracted", "doc_id": d.id, "chunk_id": match.chunk.ChunkID, "doc_role": d.role,
+				"page": match.page, "text": firstLine(match.text, 120)}
 		}
 	}
 	if best == nil {
@@ -639,28 +733,31 @@ func (d *DB) SetVetoStatus(ctx context.Context, tenant string, taskID, id int64,
 
 // BidEvaluation 汇总投标范围与否决项核对后的投/不投评估指标。
 type BidEvaluation struct {
-	Decision            string     `json:"decision"`
-	DecisionNote        string     `json:"decision_note"`
-	DecidedBy           string     `json:"decided_by"`
-	DecidedAt           *time.Time `json:"decided_at,omitempty"`
-	VetoGate            string     `json:"veto_gate"` // passed / pending / blocked
-	TotalScore          float64    `json:"total_score"`
-	PriceScore          float64    `json:"price_score"`
-	ObjectiveScore      float64    `json:"objective_score"`
-	SubjectiveScore     float64    `json:"subjective_score"`
-	EvidenceBackedScore float64    `json:"evidence_backed_score"`
-	MandatoryCount      int        `json:"mandatory_count"`
-	MandatoryWithEv     int        `json:"mandatory_with_evidence"`
-	SupersededCount     int        `json:"superseded_count"`
-	Recommendation      string     `json:"recommendation"` // bid / caution / no_bid
-	Gaps                []string   `json:"gaps"`
+	Decision             string     `json:"decision"`
+	DecisionNote         string     `json:"decision_note"`
+	DecidedBy            string     `json:"decided_by"`
+	DecidedAt            *time.Time `json:"decided_at,omitempty"`
+	VetoGate             string     `json:"veto_gate"` // passed / pending / blocked
+	TotalScore           float64    `json:"total_score"`
+	PriceScore           float64    `json:"price_score"`
+	PriceScoreUnresolved bool       `json:"price_score_unresolved,omitempty"`
+	ObjectiveScore       float64    `json:"objective_score"`
+	ObjectiveScoreLower  float64    `json:"objective_score_lower"`
+	ObjectiveScoreUpper  float64    `json:"objective_score_upper"`
+	SubjectiveScore      float64    `json:"subjective_score"`
+	EvidenceBackedScore  float64    `json:"evidence_backed_score"`
+	MandatoryCount       int        `json:"mandatory_count"`
+	MandatoryWithEv      int        `json:"mandatory_with_evidence"`
+	SupersededCount      int        `json:"superseded_count"`
+	Recommendation       string     `json:"recommendation"` // bid / caution / no_bid
+	Gaps                 []string   `json:"gaps"`
 }
 
-func evaluateBidReadiness(m *RequirementManifest, items []*RequirementItem, _ []ScoringSummary) BidEvaluation {
+func evaluateBidReadiness(m *RequirementManifest, items []*RequirementItem, summaries []ScoringSummary, evidence map[int64]bidEvidenceResult) BidEvaluation {
 	ev := BidEvaluation{
-		Decision:   BidDecisionPending,
-		VetoGate:   "passed",
-		Gaps:       []string{},
+		Decision: BidDecisionPending,
+		VetoGate: "passed",
+		Gaps:     []string{},
 	}
 	if m != nil {
 		if m.BidDecision != "" {
@@ -671,6 +768,7 @@ func evaluateBidReadiness(m *RequirementManifest, items []*RequirementItem, _ []
 		ev.DecidedAt = m.BidDecidedAt
 	}
 	var vetoPending, vetoFailed int
+	var scoreNeedsReview bool
 	for _, it := range items {
 		if it.IsSuperseded() {
 			ev.SupersededCount++
@@ -690,27 +788,60 @@ func evaluateBidReadiness(m *RequirementManifest, items []*RequirementItem, _ []
 			continue
 		}
 		if it.Category == ReqScoringItem {
+			loc := scoringSource(it)
+			if loc.ScoringOrphan && it.ReviewStatus == ReviewNeedsRevision {
+				continue
+			}
+			result := evidence[it.ID]
 			ev.TotalScore = round1(ev.TotalScore + it.ScoreWeight)
 			switch {
 			case it.ScoreGroup == ScoreGroupPrice:
 				ev.PriceScore = round1(ev.PriceScore + it.ScoreWeight)
+				if it.ScoreWeight == 0 && len(loc.ScoreConflict) > 1 {
+					ev.PriceScoreUnresolved = true
+					scoreNeedsReview = true
+				}
 			case it.EvalKind == EvalObjective:
 				ev.ObjectiveScore = round1(ev.ObjectiveScore + it.ScoreWeight)
+				lower, upper := result.objectiveBounds(it)
+				ev.ObjectiveScoreLower += lower
+				ev.ObjectiveScoreUpper += upper
+				if lower < it.ScoreWeight {
+					scoreNeedsReview = true
+					if len(ev.Gaps) < 6 {
+						ev.Gaps = append(ev.Gaps, fmt.Sprintf("评分项 %s 已核实 %.4g 分，当前材料可支持上限 %.4g 分，原件满分 %.4g 分", it.Code, lower, upper, it.ScoreWeight))
+					}
+				}
 			default:
 				ev.SubjectiveScore = round1(ev.SubjectiveScore + it.ScoreWeight)
-			}
-			if len(it.EvidenceIDs) > 0 {
-				ev.EvidenceBackedScore = round1(ev.EvidenceBackedScore + it.ScoreWeight)
-			} else if (len(it.ProofRules.RequiredDocs) > 0 || it.ProofRules.MinCount > 0 || it.ProofRules.ValidOnBidDeadline) && len(ev.Gaps) < 6 {
-				ev.Gaps = append(ev.Gaps, fmt.Sprintf("评分项 %s（%.1f分）要求证明材料但尚未绑定核验证据", it.Code, it.ScoreWeight))
+				if !it.ProofRules.IsZero() && result.verdict != compliance.Admissible {
+					scoreNeedsReview = true
+					if len(ev.Gaps) < 6 {
+						ev.Gaps = append(ev.Gaps, fmt.Sprintf("评分项 %s（%.1f分）的证明材料待核对", it.Code, it.ScoreWeight))
+					}
+				}
 			}
 		}
 		if it.IsMandatory {
 			ev.MandatoryCount++
-			if len(it.EvidenceIDs) > 0 {
+			if evidence[it.ID].verdict == compliance.Admissible || it.ProofRules.IsZero() && len(it.EvidenceIDs) > 0 {
 				ev.MandatoryWithEv++
 			}
 		}
+	}
+	ev.ObjectiveScoreLower = round4(ev.ObjectiveScoreLower)
+	ev.ObjectiveScoreUpper = round4(ev.ObjectiveScoreUpper)
+	ev.EvidenceBackedScore = ev.ObjectiveScoreLower
+	for _, summary := range summaries {
+		if m != nil && len(m.BidLots) > 0 && summary.Lot != "" && !containsString(m.BidLots, summary.Lot) {
+			continue
+		}
+		for _, group := range summary.Groups {
+			if group.Declared > 0 && math.Abs(group.Declared-group.Extracted) > 0.05 {
+				scoreNeedsReview = true
+			}
+		}
+		ev.Gaps = append(ev.Gaps, summary.Warnings...)
 	}
 	switch {
 	case vetoFailed > 0:
@@ -726,7 +857,7 @@ func evaluateBidReadiness(m *RequirementManifest, items []*RequirementItem, _ []
 	switch {
 	case ev.VetoGate == "blocked":
 		ev.Recommendation = "no_bid"
-	case ev.VetoGate == "pending" || ev.MandatoryWithEv < ev.MandatoryCount:
+	case ev.VetoGate == "pending" || ev.MandatoryWithEv < ev.MandatoryCount || scoreNeedsReview:
 		ev.Recommendation = "caution"
 	default:
 		ev.Recommendation = "bid"
@@ -739,10 +870,10 @@ func evaluateBidReadiness(m *RequirementManifest, items []*RequirementItem, _ []
 // ---------------------------------------------------------------------------
 
 var (
-	reAmendmentSplit = regexp.MustCompile(`(?:现(?:更正|修改|变更|调整|澄清|补充)为|更正后[：:为]?|修改后[：:为]?|变更后[：:为]?|调整后[：:为]?|(?:更正|修改|变更|调整|澄清)为)[：:\s]*`)
-	reTitleTagPrefix = regexp.MustCompile(`^(?:【[^】]+】|[★▲※*]+|\d+(?:\.\d+)*\s*)+`)
+	reAmendmentSplit  = regexp.MustCompile(`(?:现(?:更正|修改|变更|调整|澄清|补充)为|更正后[：:为]?|修改后[：:为]?|变更后[：:为]?|调整后[：:为]?|(?:更正|修改|变更|调整|澄清)为)[：:\s]*`)
+	reTitleTagPrefix  = regexp.MustCompile(`^(?:【[^】]+】|[★▲※*]+|\d+(?:\.\d+)*\s*)+`)
 	reSectionRefToken = regexp.MustCompile(`(?:第\s*)?(\d+(?:\.\d+){1,4})\s*(?:条|款|项|节|章)?`)
-	reDomainKeyword  = regexp.MustCompile(`架构|安全|运维|性能|响应|培训|售后|接口|数据库|部署|测试|方案|实施|进度|质量|应急|信创|备份|迁移|监控|加密|高可用|容灾|功能|进度|验收|保修|巡检`)
+	reDomainKeyword   = regexp.MustCompile(`架构|安全|运维|性能|响应|培训|售后|接口|数据库|部署|测试|方案|实施|进度|质量|应急|信创|备份|迁移|监控|加密|高可用|容灾|功能|进度|验收|保修|巡检`)
 )
 
 // splitAmendmentText 拆分「原……现更正为……」语句，返回被更正的原文线索与更正后的新要求正文。

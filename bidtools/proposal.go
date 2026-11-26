@@ -190,7 +190,7 @@ func contextRevision(r *db.SectionRevision) *ContextRevision {
 
 // BuildSectionContext 汇总章节写作上下文（只读）。
 func BuildSectionContext(ctx context.Context, pg *db.DB, tenant string, taskID, sectionID int64) (*SectionContext, error) {
-	det, err := pg.GetSection(ctx, tenant, taskID, sectionID)
+	det, err := pg.GetSectionForWriting(ctx, tenant, taskID, sectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +318,7 @@ func BuildSectionContext(ctx context.Context, pg *db.DB, tenant string, taskID, 
 		}
 	}
 	if s.DerivedFromSectionID != nil && det.Current == nil {
-		if prev, err := pg.GetSection(ctx, tenant, taskID, *s.DerivedFromSectionID); err == nil && prev.Current != nil {
+		if prev, err := pg.GetSectionForWriting(ctx, tenant, taskID, *s.DerivedFromSectionID); err == nil && prev.Current != nil {
 			sc.PreviousVersion = contextRevision(prev.Current)
 		}
 	}

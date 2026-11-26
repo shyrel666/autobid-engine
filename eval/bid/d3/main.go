@@ -32,9 +32,12 @@ func run() int {
 		keep           = flag.Bool("keep", false, "保留本次创建的任务与企业证据（默认清理）")
 		goldenPath     = flag.String("golden", filepath.Join("eval", "bid", "fixtures", "d3", "golden.json"), "黄金期望文件")
 		defectsPath    = flag.String("defects", filepath.Join("eval", "bid", "fixtures", "d3", "defects.json"), "缺陷库")
-		companyDirFlag = flag.String("company-fixtures", filepath.Join("eval", "bid", "fixtures", "d3", "company"), "虚构企业资料目录")
+		companyDirFlag = flag.String("company-fixtures", "", "虚构企业资料输出目录（默认 <artifacts-dir>/fixtures/company）")
 	)
 	flag.Parse()
+	if *companyDirFlag == "" {
+		*companyDirFlag = filepath.Join(*artifactsDir, "fixtures", "company")
+	}
 
 	dsn := strings.TrimSpace(os.Getenv("AUTOBID_TEST_DATABASE_URL"))
 	if dsn == "" {
@@ -101,8 +104,10 @@ func run() int {
 	tenants := append([]string{}, first.tenants...)
 	if *verifyDet {
 		second := a.runRound(ctx, 2)
+		a.addFixtureArtifacts(second, *companyDirFlag)
 		det = &Determinism{Enabled: true, Differences: compareRounds(first.normalized(), second.normalized())}
 		det.Consistent = len(det.Differences) == 0
+		_, det.SecondFailed = second.summary()
 		tasks = append(tasks, second.tasks...)
 		tenants = append(tenants, second.tenants...)
 	}
@@ -118,6 +123,10 @@ func run() int {
 		passed, failed, len(rep.Deferred), rep.MainReady, exportSummary(rep), filepath.Join(*reportDir, "D3_ACCEPTANCE_REPORT.md"))
 	if !cleanupOK(cleanup) {
 		fmt.Printf("清理未完成：%s\n", cleanup.Detail)
+		return 1
+	}
+	if det != nil && (!det.Consistent || det.SecondFailed > 0) {
+		fmt.Printf("第二轮失败 %d 项，两轮归一化差异 %d 条。\n", det.SecondFailed, len(det.Differences))
 		return 1
 	}
 	if failed > 0 {

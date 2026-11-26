@@ -1,0 +1,75 @@
+{
+  "P01": [
+    {"name": "企业资质", "lot": "1", "points": 2, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 256, "table": 0, "row": 4, "quote": "提供相关证书复印件，并加盖投标人单位公章。", "section": "包一评审因素（续1）"}, "expect_proof": {"required_docs": ["certificate"]}},
+    {"name": "企业业绩", "lot": "1", "points": 4, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 256, "table": 0, "row": 5, "quote": "提供项目中标通知书或合同关键页（须包含项目名称及签署页）复印件并加盖投标人公章。", "section": "包一评审因素（续1）"}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2022-01-01", "contract_pages": ["关键页", "签署页"]}, "missing_proof": ["中标通知书或合同二选一", "项目名称", "公章"], "finding": "proof_incomplete", "note": "投标人提交中标通知书即可满足材料类型要求。只有提交合同时才看项目名称及签署页。"},
+    {"name": "业绩", "lot": "2", "points": 20, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 259, "table": 0, "row": 7, "quote": "提供相关合同或委托函复印件。", "section": "包二评审因素（续1）"}, "expect_proof": {"required_docs": ["contract"], "since_date": "2022-01-01"}, "missing_proof": ["合同或委托函二选一", "跟踪审计或验收结算范围"], "finding": "proof_incomplete", "note": "包 2 规则单独适用。合同不能作为唯一可接受的材料类型。"}
+  ],
+  "P02": [
+    {"name": "业绩", "lot": "", "points": 12, "score_group": "commercial", "source_group": "商务评分", "source": {"seq": 116, "table": 0, "row": 8, "quote": "说明：一个合同只计分一次，不重复计分。", "section": "评标标准（续1）"}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2023-01-01"}, "missing_proof": ["同一合同去重", "项目种类排除"], "finding": "proof_incomplete", "note": "审计或 AI 相关信息化项目适用，咨询和监理排除。合同同一性应独立于附件版本。"}
+  ],
+  "P03": [
+    {"name": "具有ISO27001信息安全管理体系认证证书", "lot": "", "points": 6, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 142, "table": 0, "row": 7, "quote": "提供有效证书复印件并加盖投标人公章。", "section": "评标标准（续1）"}, "expect_proof": {"required_docs": ["certificate"], "valid_on_bid_deadline": true}, "missing_proof": ["证书类型逐项分值", "证书范围"], "finding": "proof_incomplete", "note": "ISO27001 和 ISO20000 各 2 分；六种资质认证各 1 分、最多 2 分。"},
+    {"name": "拟派1名项目负责人", "lot": "", "points": 4.5, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 142, "table": 0, "row": 8, "quote": "在2026年1月至2026年3月缴纳社保的证明材料复印件", "section": "评标标准（续1）"}, "expect_proof": {"required_docs": ["certificate", "social_security"]}, "missing_proof": ["身份证", "固定社保月份范围", "新设公司劳动合同替代"], "finding": "proof_incomplete", "note": "社保固定为 2026 年 1 至 3 月，对成立不足三个月的新公司可使用劳动合同。"}
+  ],
+  "P04": [
+    {"name": "项目经验", "lot": "1", "points": 8, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 157, "table": 0, "row": 6, "quote": "合同关键页内容至少包含合同首页、服务内容页、签字盖章页", "section": "评标标准（续1）"}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2023-01-01", "contract_pages": ["关键页", "首页", "内容页", "签字盖章页"]}, "missing_proof": ["排除转包与分包业绩", "合同去重", "包 1 服务种类"], "finding": "proof_incomplete", "note": "包 1 是信息化安全或网络技术服务，得分步长 2 分，单合同仅计一次。"},
+    {"name": "项目经验", "lot": "2", "points": 4, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 159, "table": 0, "row": 8, "quote": "投标人承担过商用密码应用安全性评估服务实施案例", "section": "评标标准（续3）"}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2023-01-01", "contract_pages": ["首页", "内容页", "签字盖章页"]}, "missing_proof": ["排除转包与分包业绩", "合同去重", "包 2 两类业绩各自上限", "剔除误识别的证书要求"], "finding": "proof_incomplete", "note": "包 2 是等级保护测评和商用密码应用安全性评估，每类最多 2 分。等级保护描述业绩类型，不要求附证书。"}
+  ],
+  "P05": [
+    {"name": "投标人业绩情况", "lot": "", "points": 2, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 116, "table": 0, "row": 5, "quote": "合同首页、合同签订时间、合同服务内容页、合同签字或盖章页等。", "section": "评标标准（续1）"}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2023-01-01", "contract_pages": ["首页", "内容页", "关键页"]}, "missing_proof": ["签字或盖章页", "同类项目关键词"], "finding": "proof_incomplete", "note": "同类须包含数据治理、数据中台或数据资产之一。签字或盖章页是必要合同内容。"},
+    {"name": "投标人交付能力", "lot": "", "points": 9, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 116, "table": 0, "row": 6, "quote": "投标文件中须提供投标人软件服务商交付能力证书扫描件并加盖投标人公章得1分。", "section": "评标标准（续1）"}, "expect_proof": {"required_docs": ["certificate"]}, "missing_proof": ["两类证书单独计分"], "finding": "proof_incomplete", "note": "客观证书最多 2 分，项目交付方案另有主观档次最多 7 分。"}
+  ],
+  "P06": [
+    {"name": "投标人可提供的其他商务材料", "lot": "1", "points": 3, "score_group": "commercial", "source_group": "客观分（商务、技术及服务部分）", "source": {"seq": 156, "table": 0, "row": 2, "quote": "提供有效的证书复印件并加盖投标人公章", "page": 28}, "expect_proof": {"required_docs": ["certificate"], "valid_on_bid_deadline": true}, "missing_proof": ["三种体系各计 1 分"], "finding": "proof_incomplete", "note": "包 1 的质量、信息技术服务、信息安全三种体系分别评分，分档表为 0、1、2、3。"},
+    {"name": "人员资质2", "lot": "2", "points": 3, "score_group": "commercial", "source_group": "客观分（商务、技术及服务部分）", "source": {"seq": 158, "table": 0, "row": 31, "quote": "提供承诺并加盖投标人公章得3分，否则不得分。", "page": 37}, "expect_proof": {}, "missing_proof": ["盖章人员承诺", "剔除误识别的证书要求"], "finding": "proof_incomplete", "note": "本项得分材料是盖章承诺，资质在评分项名称出现，原件未要求证书。"}
+  ],
+  "P07": [
+    {"name": "类似业绩", "lot": "", "points": 10, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 221, "table": 0, "row": 2, "quote": "合同首页、合同服务内容页、合同签字盖章页等关键页", "page": 36}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2023-01-01", "contract_pages": ["首页", "内容页", "签字盖章页", "关键页"]}, "missing_proof": ["仅限境内", "类似项目范围"], "finding": "proof_incomplete", "note": "须在中国境内承担。数据治理、数据运营、数据安全、数据资产至少符合一类。"},
+    {"name": "投标人实力及相关资质评价", "lot": "", "points": 3, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 221, "table": 0, "row": 3, "quote": "投标人须提供有效证书复印件并加盖公章，否则不予认可。", "page": 36}, "expect_proof": {"required_docs": ["certificate"], "valid_on_bid_deadline": true}, "missing_proof": ["三种体系各计 1 分"], "finding": "proof_incomplete", "note": "ISO20000、ISO27001、ISO9001 各 1 分。"}
+  ],
+  "P08": [
+    {"name": "投标人项目经验", "lot": "", "points": 10, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 185, "table": 0, "row": 1, "quote": "项目合同的首页、建设内容页、金额页、签字盖章页", "page": 29}, "expect_proof": {"required_docs": ["contract"], "contract_pages": ["首页", "内容页", "金额页", "签字盖章页"], "since_date": "2020-01-01"}, "missing_proof": ["原件及附件备查", "两类条件分别评分", "排除运维项目", "最多五个不能充当最小计数"], "finding": "proof_incomplete", "note": "同一原件可以在两类条件中分别计分；最多提供五个是上限，现规则从提供 5 个误提为下限。"}
+  ],
+  "P09": [
+    {"name": "业绩", "lot": "A", "points": 10, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 312, "table": 0, "row": 7, "quote": "需提供完整合同及验收报告，如为政府采购项目需提供完整合同、中标通知书及验收报告", "page": 56}, "expect_proof": {"required_docs": ["contract", "acceptance_report"], "date_anchor": "signing_date", "since_date": "2023-01-01", "need_acceptance": true}, "missing_proof": ["政府采购项目另附中标通知书", "完整合同", "包 A 类似项目范围"], "finding": "proof_incomplete", "note": "网络服务或网络安全运维，或网络工程师驻场运维，每个 2 分。"},
+    {"name": "业绩", "lot": "B", "points": 9, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 313, "table": 0, "row": 7, "quote": "需提供完整合同及验收报告，如为政府采购项目需提供完整合同、中标通知书及验收报告", "page": 57}, "expect_proof": {"required_docs": ["contract", "acceptance_report"], "date_anchor": "signing_date", "since_date": "2023-01-01", "need_acceptance": true}, "missing_proof": ["政府采购项目另附中标通知书", "完整合同", "包 B 类似项目范围"], "finding": "proof_incomplete", "note": "杀毒软件服务或正版操作系统、正版办公软件服务，每个 3 分。包 A 与包 B 不能共用资格判定。"}
+  ],
+  "P10": [
+    {"name": "资质", "lot": "C", "points": 6, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 328, "table": 2, "row": 1, "quote": "证书获取时间在递交响应文件截止时间前且在有效期内", "page": 108}, "expect_proof": {"required_docs": ["certificate"], "valid_on_bid_deadline": true}, "missing_proof": ["证书获取时间早于截止", "六种证书单独计分"], "finding": "proof_incomplete", "note": "递交截止前获取和截止时有效是两个条件，每类 1 分。"},
+    {"name": "业绩案例", "lot": "C", "points": 14, "score_group": "commercial", "source_group": "商务部分", "source": {"seq": 328, "table": 2, "row": 2, "quote": "并提供验收/交付确认单作为证明材料。", "page": 108}, "expect_proof": {"required_docs": ["contract"], "contract_pages": ["首页", "金额页", "内容页"], "years_window": 5}, "missing_proof": ["验收或交付确认单", "签字页与项目名称", "同一合同去重"], "finding": "proof_incomplete", "note": "合同重要页和验收或交付确认单需同时提交。"},
+    {"name": "需求理解", "lot": "C", "points": 5, "score_group": "technical", "source_group": "技术部分", "source": {"seq": 329, "table": 0, "row": 2, "quote": "技术部分（60分） 需求理解", "page": 109}, "expect_proof": {}, "finding": "source_conflict", "note": "包 C 第 107 页汇总技术分 50；第 109 页明细分类栏声明 60，六项明细合计 50。评分项本身为 5 分。"}
+  ],
+  "P11": [
+    {"name": "类似项目业绩", "lot": "", "points": 5, "score_group": "commercial", "source_group": "商务评价表", "source": {"seq": 204, "table": 0, "row": 1, "quote": "投标人自2022年1月1日（以合同签订日期为准）以来具有类似项目业绩的", "page": 47}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2022-01-01"}},
+    {"name": "投标人认证体系情况", "lot": "", "points": 10, "score_group": "commercial", "source_group": "商务评价表", "source": {"seq": 204, "table": 0, "row": 2, "quote": "查询结果为有效的截图作为评审依据，无提供不得分。", "page": 47}, "expect_proof": {"required_docs": ["certificate"], "valid_on_bid_deadline": true}, "missing_proof": ["官方认证查询结果截图"], "finding": "proof_incomplete", "note": "须同时提交证书复印件与官方平台查询有效截图。"}
+  ],
+  "P12": [
+    {"name": "拟派保安服务人员的经验", "lot": "", "points": 14, "score_group": "technical", "source_group": "技术评审", "source": {"seq": 201, "table": 0, "row": 11, "quote": "投标人满足以下条件之一： ①须同时提供投标人加盖公章的个人工作履历", "page": 45}, "expect_proof": {"required_docs": ["social_security", "commitment"]}, "missing_proof": ["工作履历与社保或承诺二选一", "任意一月并体现养老保险", "承诺指定人员数量与到位时间"], "finding": "proof_incomplete", "note": "证据选项一和选项二各自可满足要求。签订合同后三个工作日是承诺履行时间，不能推出另需合同证明。"},
+    {"name": "管理体系认证", "lot": "", "points": 5, "score_group": "commercial", "source_group": "商务评审", "source": {"seq": 201, "table": 0, "row": 16, "quote": "已失效、暂停或撤销或不提供的不得分。", "page": 46}, "expect_proof": {"required_docs": ["certificate"], "valid_on_bid_deadline": true}, "missing_proof": ["物业管理认证范围", "官方认证查询结果截图", "新设企业例外"], "finding": "proof_incomplete", "note": "认证必须与物业管理相关，企业成立不足三个月有例外。"}
+  ],
+  "P13": [
+    {"name": "项目业绩", "lot": "", "points": 2, "score_group": "commercial", "source_group": "商务评分表", "source": {"seq": 229, "table": 1, "row": 2, "quote": "需提供合同关键页（关键页：首页、内容页、合同期限页、双方盖章页）复印件。", "page": 64}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2022-01-01", "contract_pages": ["首页", "内容页", "关键页"]}, "missing_proof": ["合同期限页", "双方盖章页", "同一业主续签去重", "非住宅物业管理"], "finding": "proof_incomplete", "note": "已完成或在管均可。同一项目不同年份按一份计。"},
+    {"name": "体系认证", "lot": "", "points": 10, "score_group": "commercial", "source_group": "商务评分表", "source": {"seq": 229, "table": 1, "row": 1, "quote": "已失效或撤销或暂停的不得分。", "page": 64}, "expect_proof": {"required_docs": ["certificate"], "valid_on_bid_deadline": true}, "missing_proof": ["官方认证查询结果截图", "新设企业承诺替代", "两种认证各有分值"], "finding": "proof_incomplete", "note": "成立不足三个月无法获得证书时，提交承诺函可得对应分。"}
+  ],
+  "P14": [
+    {"name": "服务团队主要成员资质素质", "lot": "", "points": 34.5, "score_group": "commercial", "source_group": "商务评分细则表", "source": {"seq": 248, "table": 0, "row": 1, "quote": "2025年以来任意三个月投标人为上述人员缴纳社保的证明材料复印件", "page": 64}, "expect_proof": {"required_docs": ["contract", "social_security", "commitment"]}, "missing_proof": ["履历及劳动合同与三个月社保是一条证据路径", "到位承诺是独立替代路径", "任意三个月", "剔除误识别的证书要求"], "finding": "proof_incomplete", "note": "社保月份无需连续。仅选择实际人员路径时需提交履历、劳动合同和社保，评分项未要求证书。"},
+    {"name": "同类项目业绩", "lot": "", "points": 4, "score_group": "commercial", "source_group": "商务评分细则表", "source": {"seq": 248, "table": 0, "row": 3, "quote": "须体现项目名称、项目内容（或清单）及双方签字盖章页", "page": 64}, "expect_proof": {"required_docs": ["contract"], "date_anchor": "signing_date", "since_date": "2022-01-01", "contract_pages": ["签字盖章页", "关键页"]}, "missing_proof": ["项目名称", "项目内容或清单", "同一业主续签去重"], "finding": "proof_incomplete", "note": "物业管理服务合同每个 1 分。同一项目不同年份按一份计。"}
+  ],
+  "P15": [
+    {"name": "投标人业绩评价", "lot": "", "points": 5, "score_group": "commercial", "source_group": "客观分", "source": {"seq": 36, "table": 0, "row": 3, "quote": "上述合同履行良好的相关证明材料原件扫描件", "section": "如若为联合体投标（续1）"}, "expect_proof": {"required_docs": ["contract"], "since_date": "2022-01-01"}, "missing_proof": ["甲方盖章的履行良好证明", "合同独立签订日期锚点", "原件扫描件不得遮挡"], "finding": "proof_incomplete", "note": "软件运行维护服务每个 1 分。合同和履行良好证明均需提交原件扫描件。"}
+  ],
+  "P16": [
+    {"name": "投标人业绩", "lot": "", "points": 10, "score_group": "commercial", "source_group": "客观分", "source": {"seq": 37, "table": 0, "row": 3, "quote": "提供上述合同服务期限内至少一个月的服务方开具的物业费发票凭证原件扫描件。", "section": "评分因素及评标标准（续1）"}, "expect_proof": {"required_docs": ["contract", "invoice"], "since_date": "2023-01-01"}, "missing_proof": ["合同服务起始日期锚点", "至少履行一年", "服务期限内物业费发票", "原件不得遮挡"], "finding": "proof_incomplete", "note": "非住宅物业服务，起始日和签订日是两种不同时间口径。"},
+    {"name": "派驻项目经理评价", "lot": "", "points": 4, "score_group": "technical", "source_group": "客观分", "source": {"seq": 37, "table": 0, "row": 5, "quote": "连续三个月的由投标单位或其分公司为该项目经理缴纳社会保险证明扫描件", "section": "评分因素及评标标准（续1）"}, "expect_proof": {"required_docs": ["certificate", "social_security"]}, "missing_proof": ["近四个月内连续三个月", "投标单位或其分公司缴纳", "学历与用户证明分别计分"], "finding": "proof_incomplete", "note": "本项允许由分公司缴纳。毕业证和加盖公章的用户服务证明各是一项评分依据。"}
+  ],
+  "P17": [
+    {"name": "投标人业绩", "lot": "", "points": 10, "score_group": "commercial", "source_group": "客观分", "source": {"seq": 38, "table": 0, "row": 3, "quote": "投标人曾独立承担的电话热线咨询服务业绩", "section": "评分因素及评标标准"}, "expect_proof": {"required_docs": ["contract"], "since_date": "2022-01-01"}, "missing_proof": ["甲方盖章的履行良好证明", "投标人独立承担", "合同签订日期锚点"], "finding": "proof_incomplete", "note": "独立承担为明确限制。合同原件扫描件之外需有甲方盖章的履行良好证明。"}
+  ],
+  "P18": [
+    {"name": "投标人业绩", "lot": "", "points": 10, "score_group": "commercial", "source_group": "客观分", "source": {"seq": 36, "table": 0, "row": 3, "quote": "上述合同履行良好的相关证明材料原件扫描件", "section": "评分因素及评标标准（续1）"}, "expect_proof": {"required_docs": ["contract"], "since_date": "2021-01-01"}, "missing_proof": ["甲方盖章的履行良好证明", "食材配送范围", "合同签订日期锚点"], "finding": "proof_incomplete", "note": "食材配送为原件明确的类似业绩口径。合同和履行良好证明均需提交。"},
+    {"name": "投入人员评价", "lot": "", "points": 5, "score_group": "technical", "source_group": "客观分", "source": {"seq": 36, "table": 0, "row": 6, "quote": "开标日前三个月中任意一个月的由投标单位为以上人员缴纳社会保险证明扫描件", "section": "评分因素及评标标准（续1）"}, "expect_proof": {"required_docs": ["certificate", "social_security"]}, "missing_proof": ["健康证指定签发来源", "近三月任一月", "由投标单位缴纳"], "finding": "proof_incomplete", "note": "健康证由卫生防疫部门或医疗机构颁发。三个月是可选月份窗口，仅需其中一月。"}
+  ],
+  "P19": [
+    {"name": "投标人业绩", "lot": "", "points": 4, "score_group": "commercial", "source_group": "客观分", "source": {"seq": 35, "table": 0, "row": 3, "quote": "上述合同履行良好的相关证明材料原件扫描件", "section": "评分因素及评标标准（续1）"}, "expect_proof": {"required_docs": ["contract"], "since_date": "2023-01-01"}, "missing_proof": ["甲方盖章的履行良好证明", "诉求分析服务范围", "合同签订日期锚点"], "finding": "proof_incomplete", "note": "诉求分析服务每项 2 分，最高 4 分。合同和履行良好证明均需提交。"}
+  ]
+}

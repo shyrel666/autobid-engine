@@ -106,13 +106,20 @@ func TestScoringTableExtractionScopesAndOutline(t *testing.T) {
 	}
 
 	// 旧规则产出、本次不再产出的提取项：标记待复核，确认清单前须人工处理。
-	if _, err := f.d.ExecContext(ctx, `INSERT INTO requirement_items(tenant_id, task_id, code, category, title, origin, review_status)
-		VALUES ($1, $2, 'SC-OLD-T1R1', 'scoring_item', '务材料', 'extracted', 'confirmed')`, DefaultTenant, f.task.ID); err != nil {
+	if _, err := f.d.ExecContext(ctx, `INSERT INTO requirement_items(tenant_id, task_id, code, category, title, score_weight, origin, review_status)
+		VALUES ($1, $2, 'SC-OLD-T1R1', 'scoring_item', '务材料', 20, 'extracted', 'confirmed')`, DefaultTenant, f.task.ID); err != nil {
 		t.Fatal(err)
 	}
 	again, err := f.d.ExtractRequirements(ctx, DefaultTenant, f.task.ID, "reviewer")
 	if err != nil || again.Orphaned != 1 || len(again.OrphanCodes) != 1 || again.OrphanCodes[0] != "SC-OLD-T1R1" || again.Created != 0 {
 		t.Fatalf("re-extract orphans = %+v %v", again, err)
+	}
+	current, err := f.d.ListRequirements(ctx, DefaultTenant, f.task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.Scoring) != 2 || current.Scoring[0].Total != 100 || current.Scoring[1].Total != 100 {
+		t.Fatalf("orphan score counted in current results: %+v", current.Scoring)
 	}
 	m, _ := f.d.RequirementManifest(ctx, DefaultTenant, f.task.ID)
 	if _, err := f.d.ConfirmRequirements(ctx, DefaultTenant, f.task.ID, "reviewer", m.Epoch); !errors.Is(err, ErrRequirementReview) {

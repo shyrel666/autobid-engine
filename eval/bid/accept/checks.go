@@ -65,9 +65,10 @@ type Deferred struct {
 
 // Determinism 是同一执行器两轮完整运行的归一化比较结果。
 type Determinism struct {
-	Enabled     bool     `json:"enabled"`
-	Consistent  bool     `json:"consistent"`
-	Differences []string `json:"differences"`
+	Enabled      bool     `json:"enabled"`
+	Consistent   bool     `json:"consistent"`
+	Differences  []string `json:"differences"`
+	SecondFailed int      `json:"second_failed"`
 }
 
 // CleanupInfo 记录任务清理结果。

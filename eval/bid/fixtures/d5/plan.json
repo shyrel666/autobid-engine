@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "exercise_id": "DEMO-D5-001",
+  "noninferiority_margin_pp": 5,
+  "reviewers": ["R01", "R02", "R03"],
+  "projects": [
+    {
+      "id": "P01",
+      "family": "demo-campus-network",
+      "draft_ids": ["T2C", "U7F"],
+      "rubric": [
+        {"id": "S1", "label": "切换方案与回退步骤", "max_points": 60},
+        {"id": "S2", "label": "故障监测与处置", "max_points": 40}
+      ]
+    },
+    {
+      "id": "P02",
+      "family": "demo-archive-digitization",
+      "draft_ids": ["A4M", "K9Q"],
+      "rubric": [
+        {"id": "S1", "label": "扫描处理与交接溯源", "max_points": 30},
+        {"id": "S2", "label": "抽检与返工", "max_points": 30}
+      ]
+    },
+    {
+      "id": "P03",
+      "family": "demo-energy-monitoring",
+      "draft_ids": ["R8J", "M3N"],
+      "rubric": [
+        {"id": "S1", "label": "设备接入与告警", "max_points": 50},
+        {"id": "S2", "label": "时序数据与缺失处理", "max_points": 30}
+      ]
+    },
+    {
+      "id": "P04",
+      "family": "demo-library-stocktake",
+      "draft_ids": ["J5L", "C6W"],
+      "rubric": [
+        {"id": "S1", "label": "盘点流程与库位核对", "max_points": 25},
+        {"id": "S2", "label": "异常处理与交接", "max_points": 25}
+      ]
+    }
+  ]
+}

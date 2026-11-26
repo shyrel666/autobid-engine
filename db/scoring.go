@@ -87,21 +87,23 @@ type scoreSchema struct {
 	header                                    int
 	cols                                      int
 	seq, group, factor, score, criteria, note int
+	groupAsFactor                             bool
 }
 
 // ScoredItem 是从评分表解析出的一个评分因素。
 type ScoredItem struct {
-	Lot         string  `json:"lot,omitempty"`
-	Group       string  `json:"group,omitempty"`        // 评分类别原文（去掉声明分值），如「技术部分」
-	GroupWeight float64 `json:"group_weight,omitempty"` // 类别声明分值 / 权重（百分比按 100 分制折算）
-	ScoreGroup  string  `json:"score_group"`
-	Name        string  `json:"name"`
-	Score       float64 `json:"score"`
-	Criteria    string  `json:"criteria"`
-	Note        string  `json:"note,omitempty"`
-	Mandatory   bool    `json:"mandatory,omitempty"`
-	Rows        []int   `json:"rows"`
-	Page        int     `json:"page,omitempty"`
+	Lot           string    `json:"lot,omitempty"`
+	Group         string    `json:"group,omitempty"`        // 评分类别原文（去掉声明分值），如「技术部分」
+	GroupWeight   float64   `json:"group_weight,omitempty"` // 类别声明分值 / 权重（百分比按 100 分制折算）
+	ScoreGroup    string    `json:"score_group"`
+	Name          string    `json:"name"`
+	Score         float64   `json:"score"`
+	ScoreConflict []float64 `json:"score_conflict,omitempty"`
+	Criteria      string    `json:"criteria"`
+	Note          string    `json:"note,omitempty"`
+	Mandatory     bool      `json:"mandatory,omitempty"`
+	Rows          []int     `json:"rows"`
+	Page          int       `json:"page,omitempty"`
 }
 
 var (
@@ -164,6 +166,9 @@ func headerRole(h string) string {
 // detectScoreSchema 在前 4 行中查找评分表表头。履约考核表与无分值的审查表返回 ok=false。
 // 横向合并的表头（如两列都是「评审因素」）按两列处理：前一列为评分类别，后一列为评分因素。
 func detectScoreSchema(t *scoreTable) (scoreSchema, bool) {
+	if scoreHeader(firstRow(t.Grid), "评审分项", "分项分值", "评审因素") {
+		return scoreSchema{header: 0, cols: 3, seq: -1, group: 0, factor: -1, score: 1, criteria: 2, note: -1, groupAsFactor: true}, true
+	}
 	for r := 0; r < len(t.Grid) && r < 4; r++ {
 		row := t.Grid[r]
 		joined := normCell(strings.Join(row, "|"))
@@ -465,9 +470,21 @@ func parseScoringTable(t *scoreTable, prev *scoreCarry) (items []*ScoredItem, ca
 			}
 		}
 		if !cont {
+			if s.groupAsFactor && cell(r, s.group) == "" && label != "" &&
+				reBizName.MatchString(label) && groupWeight > 0 {
+				var groupedPoints float64
+				for _, item := range items {
+					if item.Group == group {
+						groupedPoints += item.Score
+					}
+				}
+				if groupedPoints >= groupWeight {
+					group, groupWeight = cleanName(label), 0
+				}
+			}
 			switch {
 			case name != "":
-			case rePriceGroup.MatchString(group):
+			case rePriceGroup.MatchString(group), s.groupAsFactor && group != "":
 				name = group
 			default:
 				name = nameFromCriteria(crit)
@@ -614,22 +631,35 @@ type ScoringSummary struct {
 
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
+type scoringSourceLocation struct {
+	Lot           string    `json:"lot"`
+	Group         string    `json:"group"`
+	GroupWeight   float64   `json:"group_weight"`
+	ScoreConflict []float64 `json:"score_conflict"`
+	ScoringOrphan bool      `json:"scoring_orphan"`
+}
+
+func scoringSource(r *RequirementItem) scoringSourceLocation {
+	var loc scoringSourceLocation
+	_ = json.Unmarshal(r.SourceLoc, &loc)
+	return loc
+}
+
 // summarizeScoring 按分包汇总评分类要求的分值，并与类别声明分值及 100 分制对照。
 func summarizeScoring(items []*RequirementItem) []ScoringSummary {
 	byLot := map[string]*ScoringSummary{}
 	groups := map[string]map[string]*ScoringGroupSummary{}
+	unresolved := map[string]bool{}
 	var lots []string
 	for _, r := range items {
 		if r.Category != ReqScoringItem || r.IsSuperseded() || r.ParentID != nil {
 			continue
 		}
-		var loc struct {
-			Lot         string  `json:"lot"`
-			Group       string  `json:"group"`
-			GroupWeight float64 `json:"group_weight"`
+		loc := scoringSource(r)
+		if loc.ScoringOrphan && r.ReviewStatus == ReviewNeedsRevision {
+			continue
 		}
-		_ = json.Unmarshal(r.SourceLoc, &loc)
-		if loc.Lot == "" && r.Lot != "" {
+		if r.Lot != "" {
 			loc.Lot = r.Lot
 		}
 		s := byLot[loc.Lot]
@@ -639,6 +669,12 @@ func summarizeScoring(items []*RequirementItem) []ScoringSummary {
 			lots = append(lots, loc.Lot)
 		}
 		s.Items++
+		if len(loc.ScoreConflict) > 1 && r.ScoreWeight == 0 {
+			unresolved[loc.Lot] = true
+			s.Warnings = append(s.Warnings, fmt.Sprintf("%s「%s」原件分值冲突：%s，待人工复核，未计入合计",
+				LotLabel(loc.Lot), loc.Group, scoreAlternatives(loc.ScoreConflict)))
+			continue
+		}
 		s.Total += r.ScoreWeight
 		switch r.ScoreGroup {
 		case ScoreGroupTechnical:
@@ -655,6 +691,8 @@ func summarizeScoring(items []*RequirementItem) []ScoringSummary {
 			if g == nil {
 				g = &ScoringGroupSummary{Group: loc.Group, ScoreGroup: r.ScoreGroup}
 				groups[loc.Lot][loc.Group] = g
+			} else if g.ScoreGroup != r.ScoreGroup {
+				g.ScoreGroup = ""
 			}
 			g.Declared = math.Max(g.Declared, loc.GroupWeight)
 			g.Extracted += r.ScoreWeight
@@ -682,7 +720,7 @@ func summarizeScoring(items []*RequirementItem) []ScoringSummary {
 			}
 		}
 		s.Total, s.Technical, s.Commercial, s.Price, s.Other = round1(s.Total), round1(s.Technical), round1(s.Commercial), round1(s.Price), round1(s.Other)
-		if math.Abs(s.Total-100) > 0.05 {
+		if !unresolved[lot] && math.Abs(s.Total-100) > 0.05 {
 			s.Warnings = append(s.Warnings, fmt.Sprintf("%s评分项合计 %.4g 分，不是 100 分，请核对评分表是否完整提取", strings.TrimSpace(LotLabel(lot)+" "), s.Total))
 		}
 		out = append(out, *s)
@@ -701,36 +739,40 @@ func chunkKey(cs *chunkSource) string { return fmt.Sprintf("D%d-%04d", cs.DocID,
 // 没有表头的表格紧跟在评分表之后（中间只有标题级短文本）且列数一致时，视为跨页 / 跨段续表沿用前表列角色。
 func scoringCandidates(order []*chunkSource) ([]reqCandidate, map[int64]bool, map[int64]bool) {
 	type parsed struct {
-		cs    *chunkSource
-		table int
-		items []*ScoredItem
+		cs      *chunkSource
+		table   int
+		items   []*ScoredItem
+		scope   []string
+		special bool
 	}
 	var (
-		all      []parsed
-		chunks   = map[int64]bool{}
-		docs     = map[int64]bool{}
-		docLots  = map[int64]map[string]bool{}
-		declared = map[int64]map[string]map[string]float64{} // 文档 -> 分包 -> 类别 -> 汇总表声明分值
-		lastDoc  = int64(-1)
-		lot      string
-		carry    *scoreCarry
+		all          []parsed
+		formulas     []parsed
+		chunks       = map[int64]bool{}
+		docs         = map[int64]bool{}
+		docLots      = map[int64]map[string]bool{}
+		declared     = map[int64]map[string]map[string]float64{}
+		lastDoc      = int64(-1)
+		lot          string
+		tail         string
+		scope        []string
+		carry        *scoreCarry
+		complexCarry *complexScoreCarry
 	)
+	documentLots := readDocumentScoreLots(order)
 	for _, cs := range order {
 		if cs.DocID != lastDoc {
-			lastDoc, lot, carry = cs.DocID, "", nil
+			lastDoc, lot, tail, scope, carry, complexCarry = cs.DocID, "", "", nil, nil, nil
 		}
 		if m := lastLotMarker(cs.SectionCode + " " + cs.SectionTitle); m != "" {
 			lot = m
 		}
+		if named := lotsFromScoringCaption(cs.SectionTitle); len(named) > 0 {
+			scope = named
+		}
 		var tables []scoreTable
-		if len(cs.Tables) <= 2 || json.Unmarshal(cs.Tables, &tables) != nil || len(tables) == 0 {
-			if m := lastLotMarker(cs.Content); m != "" {
-				lot = m
-			}
-			if utf8.RuneCountInString(cs.Content) > 80 {
-				carry = nil
-			}
-			continue
+		if len(cs.Tables) > 2 {
+			_ = json.Unmarshal(cs.Tables, &tables)
 		}
 		pos := 0
 		for ti := range tables {
@@ -738,86 +780,203 @@ func scoringCandidates(order []*chunkSource) ([]reqCandidate, map[int64]bool, ma
 			if len(t.Grid) == 0 {
 				continue
 			}
+			between := ""
 			if at := strings.Index(cs.Content[pos:], t.Markdown); t.Markdown != "" && at >= 0 {
-				between := cs.Content[pos : pos+at]
+				between = cs.Content[pos : pos+at]
 				if m := lastLotMarker(between); m != "" {
 					lot = m
 				}
+				if named := lotsFromScoringCaption(between); len(named) > 0 {
+					scope = named
+					carry, complexCarry = nil, nil
+				}
 				if utf8.RuneCountInString(strings.TrimSpace(between)) > 40 {
-					carry = nil
+					carry, complexCarry = nil, nil
 				}
 				pos += at + len(t.Markdown)
 			}
-			items, next, summary := parseScoringTable(t, carry)
-			carry = next
+			caption := separateScoringCaption(between)
+			if caption.group == "" && strings.TrimSpace(between) == "" {
+				caption = separateScoringCaption(tail)
+			}
+			var items []*ScoredItem
+			var handled, special bool
+			var summary map[string]float64
+			items, complexCarry, handled = parseComplexScoringTable(t, complexCarry)
+			if handled {
+				carry = nil
+			} else if items, handled = parseGroupedScoreTable(t); handled {
+				carry = nil
+			} else if items, handled = parseWeightedScoringTable(t); handled {
+				carry = nil
+			} else if parsedItems, next, found := parseSeparateScoringTable(t, caption, cs.SectionTitle+"\n"+between); found {
+				items, carry, handled = parsedItems, next, true
+			} else {
+				items, carry, summary = parseScoringTable(t, carry)
+			}
+			special = handled || carry != nil && carry.schema.groupAsFactor
+			if handled {
+				chunks[cs.ChunkID] = true
+			}
 			if summary != nil {
 				if declared[cs.DocID] == nil {
 					declared[cs.DocID] = map[string]map[string]float64{}
 				}
-				declared[cs.DocID][lot] = summary
+				if declared[cs.DocID][lot] == nil {
+					declared[cs.DocID][lot] = map[string]float64{}
+				}
+				for label, weight := range summary {
+					declared[cs.DocID][lot][label] = weight
+				}
 				continue
 			}
 			if len(items) == 0 {
 				continue
 			}
+			applyScoringCaption(items, caption)
 			for _, it := range items {
 				it.Lot = lot
 			}
-			all = append(all, parsed{cs: cs, table: ti, items: items})
+			all = append(all, parsed{cs: cs, table: ti, items: items, scope: scope, special: special})
 			chunks[cs.ChunkID], docs[cs.DocID] = true, true
 			if docLots[cs.DocID] == nil {
 				docLots[cs.DocID] = map[string]bool{}
 			}
 			docLots[cs.DocID][lot] = true
 		}
-		if m := lastLotMarker(cs.Content[pos:]); m != "" {
+		if formula := separatePriceFormula(cs, tables); formula != nil {
+			formula.Lot = lot
+			formulas = append(formulas, parsed{cs: cs, table: -1, items: []*ScoredItem{formula}, scope: scope, special: true})
+		}
+		text := cs.Content[pos:]
+		if named := lotsFromScoringCaption(text); len(named) > 0 {
+			scope = named
+			carry, complexCarry = nil, nil
+		}
+		if m := lastLotMarker(text); m != "" {
 			lot = m
+		}
+		if len(tables) == 0 && utf8.RuneCountInString(cs.Content) > 80 {
+			carry, complexCarry = nil, nil
+		}
+		tail = text
+	}
+	scopeFor := func(p parsed, it *ScoredItem) []string {
+		doc := documentLots[p.cs.DocID]
+		switch {
+		case doc.cover != "":
+			return []string{doc.cover}
+		case len(p.scope) > 0:
+			return p.scope
+		case p.special && len(doc.all) > 1:
+			return doc.all
+		case len(docLots[p.cs.DocID]) > 1:
+			return []string{it.Lot}
+		default:
+			return []string{""}
+		}
+	}
+	coveredPrice := map[int64]map[string]bool{}
+	for _, p := range all {
+		for _, item := range p.items {
+			if item.ScoreGroup != ScoreGroupPrice {
+				continue
+			}
+			if coveredPrice[p.cs.DocID] == nil {
+				coveredPrice[p.cs.DocID] = map[string]bool{}
+			}
+			for _, lot := range scopeFor(p, item) {
+				coveredPrice[p.cs.DocID][lot] = true
+			}
+		}
+	}
+	for _, p := range formulas {
+		for _, lot := range scopeFor(p, p.items[0]) {
+			if coveredPrice[p.cs.DocID][lot] || coveredPrice[p.cs.DocID][""] {
+				continue
+			}
+			if coveredPrice[p.cs.DocID] == nil {
+				coveredPrice[p.cs.DocID] = map[string]bool{}
+			}
+			coveredPrice[p.cs.DocID][lot] = true
+			p.scope = []string{lot}
+			all = append(all, p)
+			chunks[p.cs.ChunkID], docs[p.cs.DocID] = true, true
 		}
 	}
 	var out []reqCandidate
 	for _, p := range all {
 		docKey := chunkKey(p.cs)
-		for k, it := range p.items {
-			if len(docLots[p.cs.DocID]) <= 1 {
-				it.Lot = ""
-			}
-			if it.GroupWeight == 0 {
-				it.GroupWeight = declared[p.cs.DocID][it.Lot][it.Group]
-			}
-			title := it.Name
-			if it.Lot != "" {
-				title = "【" + LotLabel(it.Lot) + "】" + title
-			}
-			var desc strings.Builder
-			if it.Group != "" {
-				fmt.Fprintf(&desc, "评分类别：%s", it.Group)
-				if it.GroupWeight > 0 {
-					fmt.Fprintf(&desc, "（%.4g 分）", it.GroupWeight)
+		for k, item := range p.items {
+			lots := scopeFor(p, item)
+			for _, lot := range lots {
+				it := *item
+				it.Lot = lot
+				if it.GroupWeight == 0 {
+					it.GroupWeight = declared[p.cs.DocID][lot][it.Group]
 				}
-				desc.WriteString("\n")
+				code := fmt.Sprintf("SC-%s-T%d-%02d", docKey, p.table+1, k+1)
+				if len(lots) > 1 || p.table < 0 && lot != "" {
+					code += "-L" + lot
+				}
+				out = append(out, scoringRequirement(p.cs, p.table, code, &it))
 			}
-			fmt.Fprintf(&desc, "分值：%.4g 分\n", it.Score)
-			if it.Criteria != "" {
-				desc.WriteString("评分标准：" + it.Criteria + "\n")
-			}
-			if it.Note != "" {
-				desc.WriteString("说明：" + it.Note + "\n")
-			}
-			loc := cloneLoc(p.cs.Loc, "table", p.table, "row", it.Rows[0], "rows", it.Rows, "lot", it.Lot, "group", it.Group,
-				"group_weight", it.GroupWeight)
-			if it.Page > 0 {
-				loc["item_page"] = it.Page
-			}
-			fullDesc := strings.TrimSpace(desc.String())
-			tiers, evalKind, scoreMin := ParseScoringTiers(it.Criteria+"\n"+it.Note, it.Score, it.ScoreGroup)
-			proof := ParseProofRules(title+"\n"+it.Criteria+"\n"+it.Note, ReqScoringItem, it.ScoreGroup)
-			out = append(out, reqCandidate{code: fmt.Sprintf("SC-%s-T%d-%02d", docKey, p.table+1, k+1), category: ReqScoringItem,
-				title: firstLine(title, 60), description: fullDesc, mandatory: it.Mandatory, score: it.Score,
-				scoreMin: scoreMin, scoreGroup: it.ScoreGroup, evalKind: evalKind, atomType: AtomScoringItem,
-				scoringTiers: tiers, proofRules: proof, lot: it.Lot, tableItem: true, src: p.cs, loc: loc})
 		}
 	}
 	return out, chunks, docs
+}
+
+func scoringRequirement(cs *chunkSource, table int, code string, it *ScoredItem) reqCandidate {
+	title := it.Name
+	if it.Lot != "" {
+		title = "【" + LotLabel(it.Lot) + "】" + title
+	}
+	var desc strings.Builder
+	if it.Group != "" {
+		fmt.Fprintf(&desc, "评分类别：%s", it.Group)
+		if it.GroupWeight > 0 {
+			fmt.Fprintf(&desc, "（%.4g 分）", it.GroupWeight)
+		}
+		desc.WriteString("\n")
+	}
+	if len(it.ScoreConflict) > 1 {
+		desc.WriteString("分值：原件冲突，待复核（" + scoreAlternatives(it.ScoreConflict) + "）\n")
+	} else {
+		fmt.Fprintf(&desc, "分值：%.4g 分\n", it.Score)
+	}
+	if it.Criteria != "" {
+		desc.WriteString("评分标准：" + it.Criteria + "\n")
+	}
+	if it.Note != "" {
+		desc.WriteString("说明：" + it.Note + "\n")
+	}
+	loc := cloneLoc(cs.Loc, "lot", it.Lot, "group", it.Group, "group_weight", it.GroupWeight)
+	if table >= 0 && len(it.Rows) > 0 {
+		loc["table"], loc["row"], loc["rows"] = table, it.Rows[0], it.Rows
+	}
+	if it.Page > 0 {
+		loc["item_page"] = it.Page
+	}
+	if len(it.ScoreConflict) > 1 {
+		loc["score_conflict"] = it.ScoreConflict
+	}
+	tiers, evalKind, scoreMin := ParseScoringTiers(it.Criteria+"\n"+it.Note, it.Score, it.ScoreGroup)
+	if native := groupedScoreEvalKind(it.Group); native != "" {
+		evalKind = native
+	}
+	proof := ParseProofRules(title+"\n"+it.Criteria+"\n"+it.Note, ReqScoringItem, it.ScoreGroup)
+	return reqCandidate{code: code, category: ReqScoringItem, title: firstLine(title, 60),
+		description: strings.TrimSpace(desc.String()), mandatory: it.Mandatory, score: it.Score,
+		scoreMin: scoreMin, scoreGroup: it.ScoreGroup, evalKind: evalKind, atomType: AtomScoringItem,
+		scoringTiers: tiers, proofRules: proof, lot: it.Lot, tableItem: true, src: cs, loc: loc}
+}
+
+func scoreAlternatives(values []float64) string {
+	text := make([]string, len(values))
+	for i, value := range values {
+		text[i] = fmt.Sprintf("%.4g 分", value)
+	}
+	return strings.Join(text, " / ")
 }
 
 // ---------------------------------------------------------------------------
